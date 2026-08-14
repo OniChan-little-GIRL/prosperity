@@ -117,7 +117,7 @@ static void installMatTrace(smodule &m);
 static void installAllocLock(smodule &m);
 
 bool proc::create(const base::String &path, bool fromVfs) {
-  gpu::SetWriteWatchCallback(&krnl::startWriteWatch);
+  gpu::ps4::SetWriteWatchCallback(&krnl::startWriteWatch);
 
   /*register HLE prx overrides*/
   runtime::vprx_init();

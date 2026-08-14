@@ -80,6 +80,9 @@ constexpr uint32_t kCbBlendStride = 0x1;
 // Pixel-shader system-value VGPR layout (barycentrics, position, face, etc.).
 constexpr uint32_t mmSPI_PS_INPUT_CNTL_0 = 0xA191;  // ..._31 at 0xA1B0
 constexpr uint32_t mmSPI_PS_INPUT_ENA = 0xA1B3;
+// SPI_PS_IN_CONTROL.NUM_INTERP[5:0]: how many of the 32 input-control slots are
+// meaningful. Slots at or above it are don't-care, so their zero says nothing.
+constexpr uint32_t mmSPI_PS_IN_CONTROL = 0xA1B6;
 // Overall color-buffer mode (ROP3 / blend disable). MODE field is [4:6].
 constexpr uint32_t mmCB_COLOR_CONTROL = 0xA202;
 // Primitive type for the draw (VGT_PRIMITIVE_TYPE is a uconfig reg on gen2).
@@ -153,6 +156,11 @@ struct Regs {
   uint32_t operator[](uint32_t off) const {
     return off < kRegFileSize ? data[off] : 0;
   }
+
+  // The register run starting at `off`, for the blocks read as arrays: the
+  // 16-dword user-data SGPRs a shader's descriptors hang off, and the float
+  // registers (viewport, clear values) copied out by value.
+  const uint32_t* At(uint32_t off) const { return &data[off]; }
 
   // 48-bit GPU address from a LO/HI register pair (HI holds the top bits << 0,
   // i.e. addr = ((u64)HI << 32 | LO) << 8 for shader program pointers).

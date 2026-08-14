@@ -19,6 +19,7 @@
  * headless).
  */
 
+#include <cstddef>
 #include <cstdint>
 
 // Spelled from the delta root, the one include convention the layering check
@@ -80,6 +81,14 @@ void NoteMemoryFill(Renderer& renderer,
                     uint64_t base,
                     uint64_t bytes,
                     uint32_t value);
+
+// Does `addr` fall inside a compute staging range -- guest memory the renderer
+// snapshots and copies back? A guest fault on memory the guest alone should own
+// wants that answered on the spot: the crash handler asks, so a corrupted heap
+// word can be attributed to (or cleared of) the compute writeback without a
+// second run. Returns false if no range covers it; otherwise fills `out` with
+// the range's base, size and staging state.
+bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size);
 
 // The process-wide renderer instance the command processors drive. The
 // composition root (main/dapi) Init()s it once; the HLE submit paths reach it

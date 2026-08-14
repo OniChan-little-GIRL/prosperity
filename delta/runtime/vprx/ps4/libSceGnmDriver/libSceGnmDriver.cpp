@@ -7,7 +7,7 @@
  * path hands them to a GPU command processor backed by hardware we don't have, so
  * we HLE just the submit/flip/done entry points (the graphics exception to the
  * keep-PRX-LLE rule). Each submit feeds the dcb/ccb to our GCN->Vulkan command
- * processor (gpu::SubmitDcb/submitCcb -> PM4 decode -> recompiled shaders -> the
+ * processor (gpu::ps4::SubmitDcb/submitCcb -> PM4 decode -> recompiled shaders -> the
  * headless Vulkan renderer); the *AndFlip variants additionally end the frame and
  * drive the flip (present + flip event) through the VideoOut HLE.
  *
@@ -109,14 +109,14 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
       continue;
     }
     if (hdr == 0xC0023300u)
-      gpu::SubmitCcb(reinterpret_cast<const void *>(addr), bytes);
+      gpu::ps4::SubmitCcb(reinterpret_cast<const void *>(addr), bytes);
     else if (hdr == 0xC0023F00u)
-      gpu::SubmitDcb(reinterpret_cast<const void *>(addr), bytes);
+      gpu::ps4::SubmitDcb(reinterpret_cast<const void *>(addr), bytes);
   }
 }
 
 extern "C" void prosperity_gc_submit_acb(const void *commands, uint32_t bytes) {
-  gpu::SubmitDcb(commands, bytes);
+  gpu::ps4::SubmitDcb(commands, bytes);
 }
 
 // LLE flip bridge: /dev/dce owns display-buffer registration and supplies the
@@ -130,7 +130,7 @@ extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
   // Draining them inside the DingDong handler instead charges a whole backlog
   // to whichever frame rang the doorbell.
   prosperity_gc_drain_acb(kGcAcbFrame);
-  gpu::EndFrame(scanoutBase);
+  gpu::ps4::EndFrame(scanoutBase);
   if (displayBufferIndex >= 0)
     prosperity_videoout_set_flip(displayBufferIndex, flipArg);
 }
@@ -145,8 +145,8 @@ void processDcbs(void **dcbGpuAddrs, uint32_t *dcbSizes, void **ccbGpuAddrs,
     return;
   for (uint32_t i = 0; i < count; i++) {
     if (ccbGpuAddrs && ccbSizes && ccbGpuAddrs[i] && ccbSizes[i])
-      gpu::SubmitCcb(ccbGpuAddrs[i], ccbSizes[i]);
-    gpu::SubmitDcb(dcbGpuAddrs[i], dcbSizes[i]);
+      gpu::ps4::SubmitCcb(ccbGpuAddrs[i], ccbSizes[i]);
+    gpu::ps4::SubmitDcb(dcbGpuAddrs[i], dcbSizes[i]);
   }
 }
 }  // namespace
@@ -250,7 +250,7 @@ int PS4ABI sceGnmSubmitAndFlipCommandBuffers(uint32_t count, void **dcbGpuAddrs,
   dumpPm4(dcbGpuAddrs, dcbSizes, count);
   processDcbs(dcbGpuAddrs, dcbSizes, ccbGpuAddrs, ccbSizes, count);
   // Present the render target that this flip displays (the guest scanout buffer).
-  gpu::EndFrame(prosperity_videoout_buffer(static_cast<int>(displayBufferIndex)));
+  gpu::ps4::EndFrame(prosperity_videoout_buffer(static_cast<int>(displayBufferIndex)));
   prosperity_videoout_set_flip(static_cast<int>(displayBufferIndex), flipArg);
   return 0;
 }
@@ -263,7 +263,7 @@ int PS4ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
   // (and end the frame on the flip) exactly like the non-workload variant.
   dumpPm4(dcbGpuAddrs, dcbSizes, count);
   processDcbs(dcbGpuAddrs, dcbSizes, ccbGpuAddrs, ccbSizes, count);
-  gpu::EndFrame(prosperity_videoout_buffer(static_cast<int>(displayBufferIndex)));
+  gpu::ps4::EndFrame(prosperity_videoout_buffer(static_cast<int>(displayBufferIndex)));
   prosperity_videoout_set_flip(static_cast<int>(displayBufferIndex), flipArg);
   return 0;
 }

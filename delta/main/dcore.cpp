@@ -610,7 +610,7 @@ void deltaCore::boot(const base::String &xdir) {
   const bool mounted = isPkg || isFfpkg || isAppDir;
   const bool isPs5 = isFfpkg || isPs5AppDir;
   krnl::ps4::setTitleAttributes(isPs5 ? 0 : ps4Attributes);
-  gpu::SetPs4NeoMode(!isPs5 && krnl::ps4::isNeoMode());
+  gpu::ps4::SetPs4NeoMode(!isPs5 && krnl::ps4::isNeoMode());
   // Name the window after the booted game, since the renderer and the videoout
   // HLE both bring it up with a generic title depending on who gets there first.
   {

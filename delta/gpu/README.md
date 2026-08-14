@@ -78,6 +78,37 @@ The heuristic quad path in `vk_draw` predates the recompiler and is still the
 fallback for draws `vk_draw_recomp` declines; `DELTA_GPU_DECLINES=1` reports why
 draws are still landing there.
 
+## ps4/
+
+The same one-unit-per-decision split, from the packet stream inwards:
+
+| unit | hides |
+|---|---|
+| `pm4` | PM4 packet framing (shared with `ps5/`, whose AGC streams are PM4-framed) |
+| `liverpool` | the Liverpool register file and the offsets worth naming |
+| `guest_address` | which addresses a packet may be believed when it points at one |
+| `cmd_processor` | the DE/CE walks, the state they latch, and the fence labels they write |
+| `draw_state` | how register state plus tracked shader resources become one `rhi::DrawInfo` |
+| `compute_dispatch` | how COMPUTE_* registers plus a CS's descriptors become one `rhi::ComputeInfo` |
+| `shader_cache` | which recompiled module a given piece of guest state needs |
+| `cmd_trace` | the `DELTA_GPU_*` instrumentation of the command stream |
+
+`cmd_processor.h` is the only header of these the rest of the emulator may
+include; the walk hands each packet to the unit that owns the decision it
+carries and holds no decoding of its own beyond the framing.
+
+`cmd_trace` is deliberately a wide, shallow surface (one function per knob,
+each taking exactly what it reports on). Keeping it out of the decode path is
+what lets the units above read as the decisions they make rather than as the
+probes that were needed to find them; the frame debugger below is the better
+tool for anything that fits in one frame.
+
+Its output goes through `BASE_LOGI` on a channel named after the tag the probe
+has always printed (`[drawpkt]`, `[csres]`), so lines grep as before,
+`base::SetChannelMinLevel` can silence one probe, and delivery is the async
+sink `utl::routeBaseLogging` installs at startup. Tracing on the submit thread
+with `fprintf` distorted the frame timings the traces exist to explain.
+
 ## Debugging a frame
 
 `DEBUGGER.md` documents the built-in frame debugger: `DELTA_GPU_CAPTURE=<frame>`

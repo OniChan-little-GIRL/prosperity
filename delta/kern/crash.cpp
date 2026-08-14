@@ -34,7 +34,7 @@
 #include "proc.h"
 #include "vfs.h"
 #include "cpu/cpu_backend.h"
-#include "gpu/ps4/cmd_processor.h"
+#include "gpu/rhi/renderer.h"
 #include <logger/logger.h>
 #include <utl/options.h>
 
@@ -197,7 +197,7 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
       // copies back? If it is, the compute writeback is reverting the
       // allocator's own stores and this is our corruption, not the title's.
       char csr[256];
-      if (gpu::DescribeCsRangeCovering(field, csr, sizeof(csr)))
+      if (gpu::rhi::DescribeCsRangeCovering(field, csr, sizeof(csr)))
         std::fprintf(stderr, "  [freetree] the field IS inside a compute "
                             "staging range: %s\n", csr);
       else
@@ -227,14 +227,14 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
                    "still points at %#llx, which is no longer a free chunk\n",
                    (unsigned long long)field, (unsigned long long)cur);
       char csr1[256];
-      if (gpu::DescribeCsRangeCovering(field, csr1, sizeof(csr1)))
+      if (gpu::rhi::DescribeCsRangeCovering(field, csr1, sizeof(csr1)))
         std::fprintf(stderr, "  [freetree]   the STALE LINK is inside a compute "
                             "staging range: %s\n", csr1);
       else
         std::fprintf(stderr, "  [freetree]   no compute staging range covers "
                             "the stale link at %#llx\n",
                      (unsigned long long)field);
-      if (gpu::DescribeCsRangeCovering(cur, csr1, sizeof(csr1)))
+      if (gpu::rhi::DescribeCsRangeCovering(cur, csr1, sizeof(csr1)))
         std::fprintf(stderr, "  [freetree]   the reused CHUNK is inside a "
                             "compute staging range: %s\n", csr1);
       const uint64_t win2 = (field & ~0x1full) - 0x20;

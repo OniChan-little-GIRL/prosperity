@@ -3,20 +3,21 @@
 /*
  * PS4Delta : PS4 emulation and research project
  *
- * GPU command processor: consumes a PM4 draw command buffer (dcb), tracks the
- * Liverpool register state, and drives the Vulkan renderer on each draw. Entry
- * point for the Gnm HLE submit path.
+ * The PS4 GPU command processor: consumes the PM4 command buffers the Gnm HLE
+ * submits, tracks the Liverpool register state they program, and drives the
+ * renderer. This header is its whole surface; the decode itself is split by
+ * decision across ps4/ (draw_state, compute_dispatch, shader_cache, cmd_trace),
+ * none of which is reachable from outside gpu/.
+ *
+ * Submission is synchronous: a submit returns once the whole buffer has been
+ * walked, so every fence label the packets ask the GPU to write is complete by
+ * the time the walk passes it.
  */
 
 #include <cstddef>
 #include <cstdint>
 
-namespace gpu {
-
-// Wall time spent walking command buffers (the whole PM4 walk, not just the
-// parts the renderer times), and the number of submissions, since the last FPS
-// report reset them. Separates "the guest is busy" from "we are busy running
-// its command stream".
+namespace gpu::ps4 {
 
 // Select the PS4 shader hardware profile for subsequent submissions. The
 // composition root calls this after combining configured Neo hardware with the
@@ -28,14 +29,6 @@ void SetPs4NeoMode(bool enabled);
 // follow a dynamically allocated shader root when its command pool is reused.
 using WriteWatchCallback = void (*)(uintptr_t, size_t, unsigned, bool, bool);
 void SetWriteWatchCallback(WriteWatchCallback callback);
-
-// Does `addr` fall inside a compute staging range -- i.e. guest memory the GPU
-// module snapshots and copies back? A guest fault on memory the guest alone
-// should own wants that answered on the spot: the crash handler asks, so a
-// corrupted heap word can be attributed to (or cleared of) the compute
-// writeback without a second run. Returns false if no range covers it;
-// otherwise fills `out` with the range's base, size and staging state.
-bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size);
 
 // Process one PM4 draw command buffer (guest GPU address, identity-mapped to a
 // host pointer; size in bytes). Walks the packet stream, updating register
@@ -54,4 +47,4 @@ void SubmitCcb(const void* ccb, uint32_t size_bytes);
 // videoout flip buffer). Called by the Gnm submit-and-flip HLE.
 void EndFrame(uint64_t scanout_base);
 
-}  // namespace gpu
+}  // namespace gpu::ps4

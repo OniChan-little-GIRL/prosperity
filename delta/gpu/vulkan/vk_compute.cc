@@ -1762,8 +1762,8 @@ bool PreserveCsDepthBeforeClear(uint64_t base) {
 
 }  // namespace gpu::vk
 
-namespace gpu {
-// Declared in ps4/cmd_processor.h for the kernel's crash handler.
+namespace gpu::rhi {
+// Declared in rhi/renderer.h for the kernel's crash handler.
 bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size) {
   using namespace gpu::vk;
   for (const auto& kv : g_cs_ranges) {
@@ -1785,7 +1785,7 @@ bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size) {
   }
   return false;
 }
-}  // namespace gpu
+}  // namespace gpu::rhi
 
 namespace gpu::rhi {
 using namespace gpu::vk;
