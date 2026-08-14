@@ -23,6 +23,7 @@
 #include <vector>
 
 #define VK_USE_PLATFORM_ANDROID_KHR
+#include <base/logging.h>
 #include <android/native_window.h>
 #include <vulkan/vulkan.h>
 
@@ -36,8 +37,7 @@ namespace {
   do {                                                                         \
     VkResult _r = (expr);                                                      \
     if (_r != VK_SUCCESS) {                                                    \
-      std::fprintf(stderr, "[gfx-android] %s failed: VkResult=%d\n", #expr,    \
-                   _r);                                                        \
+      BASE_LOGI("gfx-android", "{} failed: VkResult={}", #expr, (int)_r);     \
       return false;                                                            \
     }                                                                          \
   } while (0)
@@ -93,8 +93,7 @@ std::atomic_bool g_presentStopRequested{false};
 constexpr uint64_t kPresentWaitSliceNs = 50'000'000;
 
 void stopPresenting(const char *operation, VkResult result) {
-  std::fprintf(stderr, "[gfx-android] %s failed: VkResult=%d\n", operation,
-               result);
+  BASE_LOGI("gfx-android", "{} failed: VkResult={}", operation, (int)result);
   g_presentFailed.store(true, std::memory_order_release);
 }
 
@@ -381,9 +380,9 @@ bool createSwapchain() {
       (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
           : caps.currentTransform;
-  std::printf(
-      "[gfx-android] surface transform=%#x supported=%#x -> using %#x\n",
-      caps.currentTransform, caps.supportedTransforms, g.preTransform);
+  BASE_LOGI("gfx-android", "surface transform={:#x} supported={:#x} -> using {:#x}",
+            (uint32_t)caps.currentTransform, (uint32_t)caps.supportedTransforms,
+            (uint32_t)g.preTransform);
 
   VkExtent2D ext = caps.currentExtent;
   if (ext.width == 0xFFFFFFFF) {
@@ -442,9 +441,8 @@ bool createSwapchain() {
       vkCreateSwapchainKHR(g.device, &sc, nullptr, &newSwap);
   if (createResult != VK_SUCCESS) {
     discardRetiredSwapchain();
-    std::fprintf(stderr,
-                 "[gfx-android] vkCreateSwapchainKHR failed: VkResult=%d\n",
-                 createResult);
+    BASE_LOGI("gfx-android", "vkCreateSwapchainKHR failed: VkResult={}",
+              (int)createResult);
     return false;
   }
 
@@ -571,7 +569,7 @@ bool bringUp() {
   uint32_t nphys = 0;
   vkEnumeratePhysicalDevices(g.instance, &nphys, nullptr);
   if (!nphys) {
-    std::fprintf(stderr, "[gfx-android] no Vulkan physical devices\n");
+    BASE_LOGI("gfx-android", "no Vulkan physical devices");
     return false;
   }
   std::vector<VkPhysicalDevice> phs(nphys);
@@ -596,13 +594,13 @@ bool bringUp() {
       break;
   }
   if (!found) {
-    std::fprintf(stderr, "[gfx-android] no graphics+present queue\n");
+    BASE_LOGI("gfx-android", "no graphics+present queue");
     return false;
   }
   {
     VkPhysicalDeviceProperties pp;
     vkGetPhysicalDeviceProperties(g.phys, &pp);
-    std::printf("[gfx-android] device: %s\n", pp.deviceName);
+    BASE_LOGI("gfx-android", "device: {}", pp.deviceName);
   }
 
   float prio = 1.0f;
@@ -646,8 +644,8 @@ bool bringUp() {
 
   if (!createSwapchain())
     return false;
-  std::printf("[gfx-android] swapchain %ux%u, %u images\n", g.swapExtent.width,
-              g.swapExtent.height, (uint32_t)g.swapImages.size());
+  BASE_LOGI("gfx-android", "swapchain {}x{}, {} images", g.swapExtent.width,
+            g.swapExtent.height, (uint32_t)g.swapImages.size());
   g.ready = true;
   return true;
 }

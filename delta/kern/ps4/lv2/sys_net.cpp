@@ -1,6 +1,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,8 +31,8 @@ int PS4ABI sys_netcontrol(uint32_t fd, uint32_t op, void* buffer,
         uint32_t size) {
 
     if (kNetTrace)
-      std::fprintf(stderr, "[netctl] fd=%d op=%#x buf=%p size=%u\n", (int)fd,
-                   op, buffer, size);
+      BASE_LOGI("netctl", "fd={} op={:#x} buf={:p} size={}", (int)fd, op,
+                buffer, size);
 
     if (size > 160)
     return -SysError::eINVAL;
@@ -50,8 +51,8 @@ int PS4ABI sys_netcontrol(uint32_t fd, uint32_t op, void* buffer,
 int PS4ABI sys_socketex(const char* name, int32_t domain, int32_t type,
     int32_t protocol) {
   if (kNetTrace)
-    std::fprintf(stderr, "[net] socketex name='%s' domain=%d type=%d proto=%d\n",
-                 name ? name : "", domain, type, protocol);
+    BASE_LOGI("net", "socketex name='{}' domain={} type={} proto={}",
+              name ? name : "", domain, type, protocol);
   return sys_socket(domain, type, protocol);
 }
 
@@ -69,13 +70,13 @@ int PS4ABI sys_socket(int32_t domain, int32_t type, int32_t protocol) {
     int fd = ::socket(hostDomain, SOCK_DGRAM, 0);
     if (fd >= 0) {
       auto *dev = new socketDevice(proc::getActive(), fd, domain);
-      std::printf("[net] socket(domain=%d type=%d) -> fd=%u (host %d)\n", domain,
-                  type, dev->handle(), fd);
+      BASE_LOGI("net", "socket(domain={} type={}) -> fd={} (host {})", domain,
+                type, dev->handle(), fd);
       return static_cast<int>(dev->handle());
     }
   }
-  std::printf("[net] socket(domain=%d type=%d proto=%d) -> EAFNOSUPPORT\n",
-              domain, type, protocol);
+  BASE_LOGI("net", "socket(domain={} type={} proto={}) -> EAFNOSUPPORT", domain,
+            type, protocol);
   return -SysError::eAFNOSUPPORT;
 }
 

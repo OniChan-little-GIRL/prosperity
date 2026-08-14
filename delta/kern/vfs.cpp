@@ -18,6 +18,7 @@
 #include <sys/types.h>
 
 #include <base/containers/vector.h>
+#include <base/logging.h>
 
 #include "vfs.h"
 #include <utl/options.h>
@@ -165,9 +166,9 @@ struct PfsFileStream final : utl::fileBase {
     // which is exactly the FIOS2-op-failure trigger, regardless of zeroPad. Cheap:
     // only fires on the anomaly, not on full reads.
     if (static_cast<uint64_t>(n) < size && kShortRead)
-      std::fprintf(stderr, "[shortread] pos=%llu req=%zu got=%lld%s\n",
-                   (unsigned long long)pos, size, (long long)n,
-                   kPreadZeropad ? " (zeropadded->full)" : "");
+      BASE_LOGI("shortread", "pos={} req={} got={}{}",
+                (unsigned long long)pos, size, (long long)n,
+                kPreadZeropad ? " (zeropadded->full)" : "");
     uint64_t reported = kPreadZeropad ? size : static_cast<uint64_t>(n);
     pos += reported;
     return reported;
@@ -281,7 +282,7 @@ utl::File openRead(const char *path) {
     return utl::File();
 
   if (kOpenTrace)
-    std::fprintf(stderr, "[open] %s\n", path);
+    BASE_LOGI("open", "{}", path);
 
   // DELTA_VFS_HIDE=<substr>[,<substr>]: report a matching path as missing, to
   // test whether an optional asset (an intro movie, a DLC list) is what a boot
@@ -303,7 +304,7 @@ utl::File openRead(const char *path) {
     utl::File f(ov);
     if (f.IsOpen()) {
       if (kOpenTrace)
-        std::fprintf(stderr, "[open]   -> overlay %s\n", ov.c_str());
+        BASE_LOGI("open", "  -> overlay {}", ov.c_str());
       return f;
     }
   }
@@ -323,8 +324,8 @@ utl::File openRead(const char *path) {
     // but reports size 0 (e.g. a >4 GiB member whose size truncated) makes the
     // resource loader hang forever with {payload=0, err=0} (SotC world container).
     if (kOpenTrace)
-      std::fprintf(stderr, "[opensz] %s -> size=%llu (provider)\n", path,
-                   (unsigned long long)out.GetSize());
+      BASE_LOGI("opensz", "{} -> size={} (provider)", path,
+                (unsigned long long)out.GetSize());
     return out;
   }
 
@@ -340,8 +341,8 @@ utl::File openRead(const char *path) {
   if (!f.Exists() || !f.IsOpen())
     return utl::File();
   if (kOpenTrace)
-    std::fprintf(stderr, "[opensz] %s -> size=%llu (host)\n", path,
-                 (unsigned long long)f.GetSize());
+    BASE_LOGI("opensz", "{} -> size={} (host)", path,
+              (unsigned long long)f.GetSize());
   return f;
 }
 
@@ -406,8 +407,8 @@ bool stat(const char *path, int64_t &size, bool &isDir) {
   if (m.provider) {
     bool ok = m.provider->stat(rest, size);
     if (kOpenTrace)
-      std::fprintf(stderr, "[stat] %s -> %s size=%lld\n", path,
-                   ok ? "ok" : "MISS", (long long)size);
+      BASE_LOGI("stat", "{} -> {} size={}", path, ok ? "ok" : "MISS",
+                (long long)size);
     return ok;
   }
 

@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 
 #include "wait_probe.h"
 #include <chrono>
@@ -108,8 +109,8 @@ static semaphore *fromId(int id) {
 
 int PS4ABI sys_osem_create(const char *name, uint32_t attr, int init, int max) {
   auto *s = new semaphore(proc::getActive(), name, init, max);
-  std::printf("[osem] create '%s' attr=%#x init=%d max=%d -> id=%u\n",
-              name ? name : "", attr, init, max, s->handle());
+  BASE_LOGI("osem", "create '{}' attr={:#x} init={} max={} -> id={}",
+            name ? name : "", attr, init, max, s->handle());
   return s->handle();
 }
 
@@ -123,8 +124,8 @@ int PS4ABI sys_osem_open(const char *name) {
   // Auto-create unknown named semaphores (a system service makes them on real
   // hw); creating on first open gives producer+consumer a shared one.
   auto *s = new semaphore(proc::getActive(), name, 0, 0x7fffffff);
-  std::printf("[osem] open '%s' (auto-created) -> id=%u\n", name ? name : "",
-              s->handle());
+  BASE_LOGI("osem", "open '{}' (auto-created) -> id={}", name ? name : "",
+            s->handle());
   return s->handle();
 }
 

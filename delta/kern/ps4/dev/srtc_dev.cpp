@@ -1,4 +1,5 @@
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 
@@ -9,7 +10,7 @@ namespace krnl {
 srtcDevice::srtcDevice(proc *p) : device(p) {}
 
 int32_t srtcDevice::ioctl(uint32_t cmd, void *data) {
-  std::printf("[srtc] UNHANDLED ioctl(%#x)\n", cmd);
+  BASE_LOGI("srtc", "UNHANDLED ioctl({:#x})", cmd);
   if (data && (cmd & 0x40000000u)) {
     const uint32_t len = (cmd >> 16) & 0x1fff;
     if (len)

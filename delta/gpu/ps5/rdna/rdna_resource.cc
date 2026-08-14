@@ -16,6 +16,8 @@
 #include <numeric>
 #include <unordered_map>
 #include <utility>
+
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -369,9 +371,9 @@ struct ScalarEval {
           if (kDbg) {
             static int n = 0;
             if (n++ < 20)
-              std::fprintf(stderr,
-                           "[restrace] cselect pc=%#x clears s%u (scc unknown)\n",
-                           inst.pc, sdst);
+              BASE_LOGI("restrace",
+                        "cselect pc={:#x} clears s{} (scc unknown)",
+                        inst.pc, sdst);
           }
           ClearDest(sdst, 0);
           if (inst.opcode == 0x0B)
@@ -387,10 +389,10 @@ struct ScalarEval {
           if (kDbg) {
             static int n = 0;
             if (n++ < 20)
-              std::fprintf(stderr,
-                           "[restrace] cselect pc=%#x s%u <- src%u UNKNOWN "
-                           "(scc=%d)\n",
-                           inst.pc, sdst, source, (int)scc);
+              BASE_LOGI("restrace",
+                        "cselect pc={:#x} s{} <- src{} UNKNOWN "
+                        "(scc={})",
+                        inst.pc, sdst, source, (int)scc);
           }
           ClearDest(sdst, 0);
         }
@@ -817,15 +819,15 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   if (kGpuSwcensus) {
     static uint32_t seen[64] = {};
     if (sw_mode < 64 && seen[sw_mode]++ == 0)
-      std::fprintf(stderr, "[swcensus] sw_mode=%u first seen (%ux%u gfmt=%u)\n",
-                   sw_mode, t.width, t.height, gfmt);
+      BASE_LOGI("swcensus", "sw_mode={} first seen ({}x{} gfmt={})",
+                sw_mode, t.width, t.height, gfmt);
     static uint32_t seen_sel[4096] = {};
     const uint32_t packed = (t.dst_sel[0]) | (t.dst_sel[1] << 3) |
                             (t.dst_sel[2] << 6) | (t.dst_sel[3] << 9);
     if (packed < 4096 && seen_sel[packed]++ == 0)
-      std::fprintf(
-          stderr,
-          "[swcensus] dst_sel = %u,%u,%u,%u (word3=%08x) on %ux%u gfmt=%u\n",
+      BASE_LOGI(
+          "swcensus",
+          "dst_sel = {},{},{},{} (word3={:08x}) on {}x{} gfmt={}",
           t.dst_sel[0], t.dst_sel[1], t.dst_sel[2], t.dst_sel[3], d[3], t.width,
           t.height, gfmt);
   }
@@ -869,11 +871,11 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
       }
     if (is_new && n_seen < 32) {
       seen[n_seen++] = key;
-      std::fprintf(stderr,
-                   "[agc] T# base=%#lx %ux%u gfmt=%u sw=%u type=%u mips=%u -> "
-                   "dfmt=%u nfmt=%u tiling=%u pitch=%u\n",
-                   (unsigned long)t.base, t.width, t.height, gfmt, sw_mode,
-                   t.type, t.mip_levels, t.dfmt, t.nfmt, t.tiling_idx, t.pitch);
+      BASE_LOGI("agc",
+                "T# base={:#x} {}x{} gfmt={} sw={} type={} mips={} -> "
+                "dfmt={} nfmt={} tiling={} pitch={}",
+                (unsigned long)t.base, t.width, t.height, gfmt, sw_mode,
+                t.type, t.mip_levels, t.dfmt, t.nfmt, t.tiling_idx, t.pitch);
     }
   }
   // gfx10 mip chains pack their small levels into a shared "mip tail" block
@@ -930,11 +932,11 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
     const bool r128 = (w0 >> 15) & 1;
     const uint32_t resource_dwords = r128 ? 4 : 8;
     if (kGpuTexresolve && !eval.AllKnown(srsrc, resource_dwords)) {
-      std::fprintf(stderr,
-                   "[texres]   mimg pc=%04x w0=%08x w1=%08x op=%#x nsa=%u "
-                   "srsrc_field=%u ssamp_field=%u vaddr=%u vdata=%u\n",
-                   in.pc, w0, w1, op, (w0 >> 1) & 3, (w1 >> 16) & 0x1F,
-                   (w1 >> 21) & 0x1F, w1 & 0xFF, (w1 >> 8) & 0xFF);
+      BASE_LOGI("texres",
+                "  mimg pc={:04x} w0={:08x} w1={:08x} op={:#x} nsa={} "
+                "srsrc_field={} ssamp_field={} vaddr={} vdata={}",
+                in.pc, w0, w1, op, (w0 >> 1) & 3, (w1 >> 16) & 0x1F,
+                (w1 >> 21) & 0x1F, w1 & 0xFF, (w1 >> 8) & 0xFF);
       // An "inline" descriptor that user data never programmed has to come from
       // somewhere else in the shader: list every scalar write to its registers.
       for (const Inst& w : prog) {
@@ -952,15 +954,15 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
           continue;
         if (d0 + cnt <= srsrc || d0 >= srsrc + resource_dwords)
           continue;
-        std::fprintf(
-            stderr,
-            "[texres]   writer pc=%04x enc=%d op=%#x -> s%u..%u (%08x %08x)\n",
+        BASE_LOGI(
+            "texres",
+            "  writer pc={:04x} enc={} op={:#x} -> s{}..{} ({:08x} {:08x})",
             w.pc, (int)w.enc, w.opcode, d0, d0 + cnt - 1, w.raw[0], w.raw[1]);
       }
     }
     if (kGpuTexresolve)
-      std::fprintf(stderr, "[texres] binding=%u srsrc=s%u known=%d\n", b, srsrc,
-                   eval.AllKnown(srsrc, resource_dwords));
+      BASE_LOGI("texres", "binding={} srsrc=s{} known={:d}", b, srsrc,
+                eval.AllKnown(srsrc, resource_dwords));
     if (eval.AllKnown(srsrc, resource_dwords)) {
       out[b] = DecodeTImage(&eval.sgpr[srsrc], r128);
       out[b].arrayed = MimgArrayed((w0 >> 3) & 0x7);
@@ -1016,14 +1018,14 @@ std::unordered_map<uint32_t, BufferResource> ResolveBuffers(
       if (kDbg) {
         static int n = 0;
         if (n++ < 40)
-          std::fprintf(stderr,
-                       "[restrace] fetch pc=%#x srsrc=s%u known=%d%d%d%d "
-                       "clearedby=%#x/%#x/%#x/%#x\n",
-                       inst.pc, srsrc, (int)eval.known[srsrc],
-                       (int)eval.known[srsrc + 1], (int)eval.known[srsrc + 2],
-                       (int)eval.known[srsrc + 3], eval.clear_pc[srsrc],
-                       eval.clear_pc[srsrc + 1], eval.clear_pc[srsrc + 2],
-                       eval.clear_pc[srsrc + 3]);
+          BASE_LOGI("restrace",
+                    "fetch pc={:#x} srsrc=s{} known={}{}{}{} "
+                    "clearedby={:#x}/{:#x}/{:#x}/{:#x}",
+                    inst.pc, srsrc, (int)eval.known[srsrc],
+                    (int)eval.known[srsrc + 1], (int)eval.known[srsrc + 2],
+                    (int)eval.known[srsrc + 3], eval.clear_pc[srsrc],
+                    eval.clear_pc[srsrc + 1], eval.clear_pc[srsrc + 2],
+                    eval.clear_pc[srsrc + 3]);
       }
       if (eval.AllKnown(srsrc, 4)) {
         BufferResource resource;

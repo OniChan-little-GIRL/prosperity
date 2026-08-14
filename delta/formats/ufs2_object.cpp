@@ -17,6 +17,7 @@
 #include <cstring>
 #include <unordered_map>
 
+#include <base/logging.h>
 #include <utl/file.h>
 #include <utl/options.h>
 
@@ -104,9 +105,8 @@ struct Ufs2Impl {
       return false;
     nindir = bsize / 8;
     if (dbg())
-      std::fprintf(stderr,
-                   "[ufs2] bsize=%u fsize=%u iblkno=%u ipg=%u fpg=%u\n", bsize,
-                   fsize, iblkno, ipg, fpg);
+      BASE_LOGI("ufs2", "bsize={} fsize={} iblkno={} ipg={} fpg={}", bsize,
+                fsize, iblkno, ipg, fpg);
     return true;
   }
 

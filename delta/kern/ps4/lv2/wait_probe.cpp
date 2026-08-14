@@ -18,6 +18,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include <base/logging.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <utl/options.h>
@@ -78,15 +79,14 @@ void startReporter() {
           if (secs < 2)
             continue;
           if (!any) {
-            std::fprintf(stderr, "[waitprobe] threads parked > 2s:\n");
+            BASE_LOGI("waitprobe", "threads parked > 2s:");
             any = true;
           }
           char comm[32];
           threadComm(tid, comm, sizeof(comm));
-          std::fprintf(stderr,
-                       "[waitprobe]   tid=%ld (%-15s) %-16s %llds a0=%#lx a1=%#lx\n",
-                       tid, comm, p.what, static_cast<long long>(secs), p.a0,
-                       p.a1);
+          BASE_LOGI("waitprobe",
+                    "  tid={} ({:<15}) {:<16} {}s a0={:#x} a1={:#x}", tid, comm,
+                    p.what, static_cast<long long>(secs), p.a0, p.a1);
           // Once per wait, not once per thread: a thread that gets past one
           // wait and parks in the next one has a different story to tell.
           if (!p.traced) {

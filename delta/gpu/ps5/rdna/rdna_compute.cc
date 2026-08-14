@@ -37,6 +37,7 @@ gpu::gcn::RecompiledCs RecompileCompute(const uint32_t*,
 #include "gpu/ps5/rdna/rdna_decode.h"
 #include "gpu/ps5/rdna/rdna_emit.h"
 #include "gpu/ps5/rdna/rdna_resource.h"
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -224,9 +225,8 @@ void ReportDecline(const uint32_t* cs_code, size_t insts) {
   const uint64_t address = reinterpret_cast<uintptr_t>(cs_code);
   if (!reported.insert(address).second)
     return;
-  std::fprintf(stderr,
-               "[rdnacs] declined CS @%#lx (%zu insts); dispatch skipped\n",
-               static_cast<unsigned long>(address), insts);
+  BASE_LOGI("rdnacs", "declined CS @{:#x} ({} insts); dispatch skipped",
+            static_cast<unsigned long>(address), insts);
 }
 
 bool TranslateCs(const Program& program,
@@ -428,8 +428,8 @@ gpu::gcn::RecompiledCs RecompileCompute(const uint32_t* cs_code,
   // bug (wrong codegen, not a guest gap): always loud.
   std::string err;
   if (!gpu::gcn::spirv::Validate(spv_bin, &err)) {
-    std::fprintf(stderr, "[rdnacs] CS invalid @%p: %s\n",
-                 static_cast<const void*>(cs_code), err.c_str());
+    BASE_LOGI("rdnacs", "CS invalid @{:p}: {}",
+              static_cast<const void*>(cs_code), err.c_str());
     return r;
   }
   tmp.spirv = NoOpt() ? spv_bin : gpu::gcn::spirv::Optimize(spv_bin);

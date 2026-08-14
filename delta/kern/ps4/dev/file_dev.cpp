@@ -6,6 +6,8 @@
  * in the root of the source tree.
  */
 
+#include <base/logging.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -104,8 +106,8 @@ int64_t fileDevice::read(void *buf, size_t n) {
     // TAFS manifest? dump the entry_count at +0x0c the game will read back.
     if (b[0] == 'T' && b[1] == 'A' && b[2] == 'F' && b[3] == 'S') {
       uint32_t cc = b[0x0c] | (b[0x0d] << 8) | (b[0x0e] << 16) | (b[0x0f] << 24);
-      std::fprintf(stderr, "[fread TAFS] n=%zu -> %lld  entry_count@0xc=%u\n",
-                   n, (long long)r, cc);
+      BASE_LOGI("fread TAFS", "n={} -> {}  entry_count@0xc={}", n,
+                (long long)r, cc);
     }
   }
   return r;
@@ -130,15 +132,15 @@ int64_t fileDevice::lseek(int64_t off, int whence) {
     int64_t sz = static_cast<int64_t>(file_.GetSize());
     if (off < 0 || off > sz) {
       if (kOpenTrace)
-        std::fprintf(stderr, "[lseek] whence=%d off=%lld sz=%lld -> ENXIO\n",
-                     whence, (long long)off, (long long)sz);
+        BASE_LOGI("lseek", "whence={} off={} sz={} -> ENXIO", whence,
+                  (long long)off, (long long)sz);
       return -SysError::eNXIO;
     }
     int64_t r = (whence == 3) ? off : sz;  // SEEK_DATA: off; SEEK_HOLE: EOF
     file_.Seek(r, utl::seekMode::seek_set);
     if (kOpenTrace)
-      std::fprintf(stderr, "[lseek] whence=%d off=%lld sz=%lld -> %lld\n", whence,
-                   (long long)off, (long long)sz, (long long)r);
+      BASE_LOGI("lseek", "whence={} off={} sz={} -> {}", whence,
+                (long long)off, (long long)sz, (long long)r);
     return r;
   }
   utl::seekMode mode = utl::seekMode::seek_set;
@@ -149,8 +151,8 @@ int64_t fileDevice::lseek(int64_t off, int whence) {
   file_.Seek(off, mode);
   int64_t pos = static_cast<int64_t>(file_.Tell());
   if (kRdall) {
-    std::fprintf(stderr, "[lseek] off=%lld whence=%d -> pos=%lld\n", (long long)off,
-                 whence, (long long)pos);
+    BASE_LOGI("lseek", "off={} whence={} -> pos={}", (long long)off, whence,
+              (long long)pos);
     // Non-trivial seek: scan the host stack (guest runs natively) for TRAS .text
     // return addresses to find who computed this offset.
     if (off > 0x10) {
@@ -161,8 +163,8 @@ int64_t fileDevice::lseek(int64_t off, int whence) {
       for (int i = 0; i < 1024 && shown < 8; i++) {
         uint64_t v = sp[i];
         if (v >= 0x401000 && v < 0x1500000) {
-          std::fprintf(stderr, "  lseek-caller TRAS+%#llx\n",
-                       (unsigned long long)(v - 0x400000));
+          BASE_LOGI("lseek", "  lseek-caller TRAS+{:#x}",
+                    (unsigned long long)(v - 0x400000));
           shown++;
         }
       }
@@ -191,8 +193,8 @@ int64_t fileDevice::readAt(void *buf, size_t n, int64_t off) {
     auto *b = static_cast<const uint8_t *>(buf);
     if (b[0] == 'T' && b[1] == 'A' && b[2] == 'F' && b[3] == 'S') {
       uint32_t cc = b[0x0c] | (b[0x0d] << 8) | (b[0x0e] << 16) | (b[0x0f] << 24);
-      std::fprintf(stderr, "[preadAt TAFS] off=%lld n=%zu -> %lld count@0xc=%u\n",
-                   (long long)off, n, (long long)r, cc);
+      BASE_LOGI("preadAt TAFS", "off={} n={} -> {} count@0xc={}",
+                (long long)off, n, (long long)r, cc);
     }
   }
   return r;

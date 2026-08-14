@@ -7,6 +7,9 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -87,7 +90,7 @@ static void watchSocket(uint32_t fd) {
   bool expected = false;
   if (!g_watchStarted.compare_exchange_strong(expected, true))
     return;
-  std::printf("[kevent] socket read-poll started\n");
+  BASE_LOGI("kevent", "socket read-poll started");
   std::thread([] {
     for (;;) {
       fd_set rd;
@@ -121,7 +124,7 @@ static void startVblankPump() {
   bool expected = false;
   if (!g_vblankStarted.compare_exchange_strong(expected, true))
     return;
-  std::printf("[vblank] pump started (60 Hz, EVFILT_DISPLAY/VIDEOOUT)\n");
+  BASE_LOGI("vblank", "pump started (60 Hz, EVFILT_DISPLAY/VIDEOOUT)");
   std::thread([] {
     uint64_t count = 0;
     for (;;) {
@@ -195,10 +198,11 @@ int equeue::kevent(const kevent_t *changes, int nchanges, kevent_t *out,
   // 1) apply the changelist.
   for (int i = 0; i < nchanges; i++) {
     const auto &c = changes[i];
-    std::printf("[kevent] change ident=%#llx filter=%d flags=%#x fflags=%#x "
-                "data=%#llx udata=%p\n",
-                (unsigned long long)c.ident, c.filter, c.flags, c.fflags,
-                (unsigned long long)c.data, c.udata);
+    BASE_LOGI("kevent",
+              "change ident={:#x} filter={} flags={:#x} fflags={:#x} "
+              "data={:#x} udata={:p}",
+              (unsigned long long)c.ident, c.filter, c.flags, c.fflags,
+              (unsigned long long)c.data, c.udata);
     if (c.flags & kEV_DELETE) {
       for (size_t j = 0; j < notes.size(); j++)
         if (notes[j].ev.ident == c.ident && notes[j].ev.filter == c.filter) {
@@ -262,9 +266,10 @@ int equeue::kevent(const kevent_t *changes, int nchanges, kevent_t *out,
   int got = collect();
   if (got > 0) {
     if (kEventTrace)
-      std::printf("[kevent] return immediate n=%d filter=%d ident=%#llx data=%#llx\n",
-                  got, out[0].filter, (unsigned long long)out[0].ident,
-                  (unsigned long long)out[0].data);
+      BASE_LOGI("kevent",
+                "return immediate n={} filter={} ident={:#x} data={:#x}", got,
+                out[0].filter, (unsigned long long)out[0].ident,
+                (unsigned long long)out[0].data);
     return got;
   }
 
@@ -282,9 +287,9 @@ int equeue::kevent(const kevent_t *changes, int nchanges, kevent_t *out,
   // otherwise looks like the title hanging on its own.
   if (!to && notes.empty() && !warnedEmptyWait) {
     warnedEmptyWait = true;
-    std::printf("[kevent] tid=%ld waits forever on '%s' (fd=%u): no knotes\n",
-                (long)gettid(), name.empty() ? "(unnamed)" : name.c_str(),
-                handle());
+    BASE_LOGI("kevent", "tid={} waits forever on '{}' (fd={}): no knotes",
+              (long)gettid(), name.empty() ? "(unnamed)" : name.c_str(),
+              handle());
   }
   if (!to) {
     cv.wait(lk, pred);
@@ -296,14 +301,14 @@ int equeue::kevent(const kevent_t *changes, int nchanges, kevent_t *out,
   }
   if (!ready) {
     if (kEventTrace)
-      std::printf("[kevent] timeout nout=%d\n", nout);
+      BASE_LOGI("kevent", "timeout nout={}", nout);
     return 0;
   }
   got = collect();
   if (kEventTrace && got > 0)
-    std::printf("[kevent] return wait n=%d filter=%d ident=%#llx data=%#llx\n",
-                got, out[0].filter, (unsigned long long)out[0].ident,
-                (unsigned long long)out[0].data);
+    BASE_LOGI("kevent", "return wait n={} filter={} ident={:#x} data={:#x}",
+              got, out[0].filter, (unsigned long long)out[0].ident,
+              (unsigned long long)out[0].data);
   return got;
 }
 
@@ -359,14 +364,14 @@ void triggerAllEqueues(int64_t ident, int16_t filter, int64_t data) {
 
 int PS4ABI sys_kqueue() {
   auto *eq = new equeue(proc::getActive(), nullptr);
-  std::printf("[kqueue] -> fd=%u\n", eq->handle());
+  BASE_LOGI("kqueue", "-> fd={}", eq->handle());
   return eq->handle();
 }
 
 int PS4ABI sys_kqueueex(const char *name, int flags) {
   auto *eq = new equeue(proc::getActive(), name);
-  std::printf("[kqueueex] name=%s flags=%#x -> fd=%u\n", name ? name : "(null)",
-              flags, eq->handle());
+  BASE_LOGI("kqueueex", "name={} flags={:#x} -> fd={}",
+            name ? name : "(null)", flags, eq->handle());
   return eq->handle();
 }
 
@@ -374,18 +379,19 @@ int PS4ABI sys_kevent(int kq, const kevent_t *changelist, int nchanges,
                       kevent_t *eventlist, int nevents, const ktimespec *to) {
   auto *obj = proc::getActive()->getObjTable().get(kq);
   if (!obj || obj->type() != kObject::oType::equeue) {
-    std::printf("[kevent] bad kq fd=%d\n", kq);
+    BASE_LOGI("kevent", "bad kq fd={}", kq);
     return -SysError::eBADF;
   }
   int r = static_cast<equeue *>(obj)->kevent(changelist, nchanges, eventlist,
                                              nevents, to);
   if (kKeventTrace) {
-    std::printf("[kevent] kq=%d nchanges=%d -> %d", kq, nchanges, r);
+    base::String line;
+    base::FormatTo(line, "kq={} nchanges={} -> {}", kq, nchanges, r);
     for (int i = 0; i < nchanges && changelist && i < 4; i++)
-      std::printf(" chg[ident=%#llx filter=%d flags=%#x]",
-                  (unsigned long long)changelist[i].ident,
-                  (int)changelist[i].filter, (unsigned)changelist[i].flags);
-    std::printf("\n");
+      base::FormatTo(line, " chg[ident={:#x} filter={} flags={:#x}]",
+                     (unsigned long long)changelist[i].ident,
+                     (int)changelist[i].filter, (unsigned)changelist[i].flags);
+    BASE_LOGI("kevent", "{}", line.c_str());
   }
   return r;
 }

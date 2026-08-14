@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
 
@@ -107,9 +108,9 @@ uint8_t *dmaDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t f
     g_dmemVaLen[reinterpret_cast<uint64_t>(p)] = len;
   }
   if (kDmemTrace)
-    std::fprintf(stderr,
-                 "[dmem] devmap off=%#zx len=%#zx want=%p fixed=%d -> %p (shared)\n",
-                 offset, len, addr, (int)fixed, p);
+    BASE_LOGI("dmem",
+              "devmap off={:#x} len={:#x} want={:p} fixed={} -> {:p} (shared)",
+              offset, len, addr, (int)fixed, p);
   return reinterpret_cast<uint8_t *>(p);
 }
 }  // namespace krnl

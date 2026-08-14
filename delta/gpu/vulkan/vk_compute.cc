@@ -37,6 +37,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/options.h>
 
 namespace {
@@ -145,11 +149,11 @@ uint32_t FindComputeMemoryType(uint32_t type_bits) {
   if (!logged && best != UINT32_MAX) {
     logged = true;
     const VkMemoryPropertyFlags f = properties.memoryTypes[best].propertyFlags;
-    std::fprintf(stderr, "[gpuvk] cs staging memory type %u:%s%s%s%s\n", best,
-                 (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? " DEVICE_LOCAL" : "",
-                 (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? " HOST_VISIBLE" : "",
-                 (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ? " HOST_COHERENT" : "",
-                 (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? " HOST_CACHED" : "");
+    BASE_LOGI("gpuvk", "cs staging memory type {}:{}{}{}{}", best,
+              (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? " DEVICE_LOCAL" : "",
+              (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? " HOST_VISIBLE" : "",
+              (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ? " HOST_COHERENT" : "",
+              (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? " HOST_CACHED" : "");
   }
   return best == UINT32_MAX
              ? FindMemoryType(type_bits,
@@ -202,7 +206,7 @@ CsPipe* GetCsPipe(const ComputeInfo& ci) {
   SavePipelineCache();  // persist the driver's compiled pipeline
   vkDestroyShaderModule(g_dev.device, cs, nullptr);
   if (r != VK_SUCCESS) {
-    std::fprintf(stderr, "[gpuvk] compute pipeline failed: %d\n", (int)r);
+    BASE_LOGI("gpuvk", "compute pipeline failed: {}", (int)r);
     vkDestroyPipelineLayout(g_dev.device, cp.layout, nullptr);
     vkDestroyDescriptorSetLayout(g_dev.device, cp.set_layout, nullptr);
     return nullptr;
@@ -357,9 +361,9 @@ bool StageCsImage(const ComputeInfo::Res& res, void* dst) {
                             dst_level.stored_height * res.stage_elem_bytes,
                         f);
             std::fclose(f);
-            std::fprintf(stderr, "[detiledump] %#lx pitch=%u h=%u elem=%u\n",
-                         (unsigned long)res.base, dst_level.pitch,
-                         dst_level.stored_height, res.stage_elem_bytes);
+            BASE_LOGI("detiledump", "{:#x} pitch={} h={} elem={}",
+                      (unsigned long)res.base, dst_level.pitch,
+                      dst_level.stored_height, res.stage_elem_bytes);
           }
         }
         continue;
@@ -418,17 +422,17 @@ bool WritebackCsImage(const ComputeInfo::Res& res, const void* src) {
         const bool lok = gcn::BuildTextureLayout32(
             l2, res.width, res.height, res.pitch, res.layers, res.mip_levels,
             stage_tiling, res.pow2_pad, res.stage_elem_bytes);
-        std::fprintf(stderr,
-                     "[cswb] image layout REJECT base=%#llx %ux%u layers=%u "
-                     "mips=%u tiling=%u elem=%u/%u tiledOk=%d(%llu vs guest "
-                     "%llu) linearOk=%d(%llu vs size %llu)\n",
-                     (unsigned long long)res.base, res.width, res.height,
-                     res.layers, res.mip_levels, res.tiling_idx, res.elem_bytes,
-                     res.stage_elem_bytes, (int)tok,
-                     (unsigned long long)(tok ? t2.size : 0),
-                     (unsigned long long)res.guest_size, (int)lok,
-                     (unsigned long long)(lok ? l2.size : 0),
-                     (unsigned long long)res.size);
+        BASE_LOGI("cswb",
+                  "image layout REJECT base={:#x} {}x{} layers={} mips={} "
+                  "tiling={} elem={}/{} tiledOk={}({} vs guest {}) "
+                  "linearOk={}({} vs size {})",
+                  (unsigned long long)res.base, res.width, res.height,
+                  res.layers, res.mip_levels, res.tiling_idx, res.elem_bytes,
+                  res.stage_elem_bytes, (int)tok,
+                  (unsigned long long)(tok ? t2.size : 0),
+                  (unsigned long long)res.guest_size, (int)lok,
+                  (unsigned long long)(lok ? l2.size : 0),
+                  (unsigned long long)res.size);
       }
     }
     return false;
@@ -453,11 +457,10 @@ bool WritebackCsImage(const ComputeInfo::Res& res, const void* src) {
           if (kCsWbAudit) {
             static int n = 0;
             if (n++ < 16)
-              std::fprintf(stderr,
-                           "[cswb] image retile REJECT base=%#llx mip=%u "
-                           "layer=%u tiling=%u\n",
-                           (unsigned long long)res.base, mip, layer,
-                           res.tiling_idx);
+              BASE_LOGI("cswb", "image retile REJECT base={:#x} mip={} "
+                                "layer={} tiling={}",
+                        (unsigned long long)res.base, mip, layer,
+                        res.tiling_idx);
           }
           return false;
         }
@@ -734,15 +737,15 @@ bool AliasedShapeMatches(const CsAliasedImage& img,
   static int warned = 0;
   if (warned < 8) {
     warned++;
-    std::fprintf(stderr,
-                 "[gpuvk] cs %s live %s target %#llx shape mismatch: image "
-                 "%ux%u %uB vs cs %ux%u pitch=%u mips=%u dfmt=%u elem=%u/%uB "
-                 "tiling=%u -> falling back to guest memory\n",
-                  dir, img.is_depth ? "depth" : img.is_stencil ? "stencil"
-                                                              : "color",
-                 (unsigned long long)res.base, img.w, img.h, img.elem_bytes,
-                 res.width, res.height, res.pitch, res.mip_levels, res.dfmt,
-                 res.elem_bytes, res.stage_elem_bytes, res.tiling_idx);
+    BASE_LOGI("gpuvk",
+              "cs {} live {} target {:#x} shape mismatch: image {}x{} {}B vs "
+              "cs {}x{} pitch={} mips={} dfmt={} elem={}/{}B tiling={} -> "
+              "falling back to guest memory",
+              dir, img.is_depth ? "depth" : img.is_stencil ? "stencil"
+                                                          : "color",
+              (unsigned long long)res.base, img.w, img.h, img.elem_bytes,
+              res.width, res.height, res.pitch, res.mip_levels, res.dfmt,
+              res.elem_bytes, res.stage_elem_bytes, res.tiling_idx);
   }
   return false;
 }
@@ -862,9 +865,9 @@ bool RunAliasedCopy(const CsAliasedImage& img,
   g_out_rt_submits++;
   vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
   if (r != VK_SUCCESS) {
-    std::fprintf(stderr, "[gpuvk] cs %s bridge copy failed: %d (base=%#llx)\n",
-                 to_image ? "upload" : "staging", (int)r,
-                 (unsigned long long)res.base);
+    BASE_LOGI("gpuvk", "cs {} bridge copy failed: {} (base={:#x})",
+              to_image ? "upload" : "staging", (int)r,
+              (unsigned long long)res.base);
     return false;
   }
   if (img.is_stencil) {
@@ -916,9 +919,8 @@ bool UploadCsRangeToRt(uint64_t base, CsRange& e) {
       // guest memory, which draws never write -- i.e. the target silently reads
       // black from then on. Worth seeing.
       if (kCsRtTrace)
-        std::fprintf(stderr,
-                     "[csrt] shape mismatch on %#lx -> ever_rendered=false\n",
-                     (unsigned long)base);
+        BASE_LOGI("csrt", "shape mismatch on {:#x} -> ever_rendered=false",
+                  (unsigned long)base);
       g_rts[base].ever_rendered = false;
     }
     return true;
@@ -1311,11 +1313,10 @@ bool CsBatchFlush(CsSyncWhy why = kSyncWriteback) {
                             UINT64_MAX)
           : submit_result;
   if (wait_result != VK_SUCCESS) {
-    std::fprintf(stderr,
-                 "[gpuvk] cs batch DEVICE FAULT: end=%d submit=%d wait=%d "
-                 "n=%u\n",
-                 (int)end_result, (int)submit_result, (int)wait_result,
-                 g_cs_batch_count);
+    BASE_LOGI("gpuvk",
+              "cs batch DEVICE FAULT: end={} submit={} wait={} n={}",
+              (int)end_result, (int)submit_result, (int)wait_result,
+              g_cs_batch_count);
     ReportDeviceFault(g_dev);
     g_cs_failed = true;
     g_ns_cs_gpu += NowNs() - t0;
@@ -1380,13 +1381,12 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
     img_n += e.image_staging;
     img_dirty_n += e.gpu_dirty && e.image_staging;
     if ((n % 20000) == 0)
-      std::fprintf(stderr,
-                   "[cswb] flushes=%llu dirty=%llu image=%llu image+dirty=%llu "
-                   "staged_as_image=%llu\n",
-                   (unsigned long long)n, (unsigned long long)dirty_n,
-                   (unsigned long long)img_n,
-                   (unsigned long long)img_dirty_n,
-                   (unsigned long long)g_cs_image_staged);
+      BASE_LOGI("cswb",
+                "flushes={} dirty={} image={} image+dirty={} "
+                "staged_as_image={}",
+                (unsigned long long)n, (unsigned long long)dirty_n,
+                (unsigned long long)img_n, (unsigned long long)img_dirty_n,
+                (unsigned long long)g_cs_image_staged);
   }
   if (!e.gpu_dirty)
     return true;
@@ -1421,12 +1421,12 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
     // the one surface that stays empty is never among them.
     static std::unordered_set<uint64_t> seen;
     if (seen.size() < 4096 && seen.insert(base).second)
-      std::fprintf(stderr,
-                   "[cswb] image base=%#llx %ux%u layers=%u tiling=%u staged "
-                   "%llu/%llu non-zero\n",
-                   (unsigned long long)base, e.res.width, e.res.height,
-                   e.res.layers, e.res.tiling_idx, (unsigned long long)nz,
-                   (unsigned long long)e.res.size);
+      BASE_LOGI("cswb",
+                "image base={:#x} {}x{} layers={} tiling={} staged {}/{} "
+                "non-zero",
+                (unsigned long long)base, e.res.width, e.res.height,
+                e.res.layers, e.res.tiling_idx, (unsigned long long)nz,
+                (unsigned long long)e.res.size);
   }
   const uint64_t _t_wb = NowNs();
   if (e.image_staging) {
@@ -1436,14 +1436,13 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
       // and those need opposite responses.
       static uint64_t failed = 0;
       if (failed++ < 8 || (failed % 4096) == 0)
-        std::fprintf(stderr,
-                     "[gpuvk] cs image writeback #%llu failed base=%#llx "
-                     "%ux%u mips=%u layers=%u tiling=%u elem=%u/%u "
-                     "(range stays stale)\n",
-                     (unsigned long long)failed, (unsigned long long)base,
-                     e.res.width, e.res.height, e.res.mip_levels, e.res.layers,
-                     e.res.tiling_idx, e.res.elem_bytes,
-                     e.res.stage_elem_bytes);
+        BASE_LOGI("gpuvk",
+                  "cs image writeback #{} failed base={:#x} {}x{} mips={} "
+                  "layers={} tiling={} elem={}/{} (range stays stale)",
+                  (unsigned long long)failed, (unsigned long long)base,
+                  e.res.width, e.res.height, e.res.mip_levels, e.res.layers,
+                  e.res.tiling_idx, e.res.elem_bytes,
+                  e.res.stage_elem_bytes);
       return false;
     }
   } else {
@@ -1457,10 +1456,10 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
     if (!gpu::IsReadableRange(base, n)) {
       static int logged = 0;
       if (logged++ < 8)
-        std::fprintf(stderr,
-                     "[gpuvk] cs writeback out of guest memory base=%#llx "
-                     "+%#llx (dropped)\n",
-                     (unsigned long long)base, (unsigned long long)n);
+        BASE_LOGI("gpuvk",
+                  "cs writeback out of guest memory base={:#x} +{:#x} "
+                  "(dropped)",
+                  (unsigned long long)base, (unsigned long long)n);
       return false;
     }
     // Write back only what the DISPATCH changed. A staged range is the shader's
@@ -1516,12 +1515,12 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
       if (kCsWbAudit && wrote != n) {
         static int logged = 0;
         if (logged++ < 32)
-          std::fprintf(stderr,
-                       "[cswb] base=%#llx +%#llx: shader wrote %llu of %llu "
-                       "bytes; the other %llu would have been reverted\n",
-                       (unsigned long long)base, (unsigned long long)n,
-                       (unsigned long long)wrote, (unsigned long long)n,
-                       (unsigned long long)(n - wrote));
+          BASE_LOGI("cswb",
+                    "base={:#x} +{:#x}: shader wrote {} of {} bytes; the other "
+                    "{} would have been reverted",
+                    (unsigned long long)base, (unsigned long long)n,
+                    (unsigned long long)wrote, (unsigned long long)n,
+                    (unsigned long long)(n - wrote));
       }
     } else {
       // Full-range writeback (the pre-merge behaviour, kept for A/B). Still
@@ -1541,12 +1540,12 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
         if (kCsWbAudit && wrote != n) {
           static int logged = 0;
           if (logged++ < 32)
-            std::fprintf(stderr,
-                         "[cswb] base=%#llx +%#llx: shader wrote %llu of %llu "
-                         "bytes; the other %llu ARE being reverted\n",
-                         (unsigned long long)base, (unsigned long long)n,
-                         (unsigned long long)wrote, (unsigned long long)n,
-                         (unsigned long long)(n - wrote));
+            BASE_LOGI("cswb",
+                      "base={:#x} +{:#x}: shader wrote {} of {} bytes; the "
+                      "other {} ARE being reverted",
+                      (unsigned long long)base, (unsigned long long)n,
+                      (unsigned long long)wrote, (unsigned long long)n,
+                      (unsigned long long)(n - wrote));
         }
       }
       std::memcpy(reinterpret_cast<void*>(base), e.map, n);
@@ -1644,41 +1643,41 @@ void CsSyncReport(double frames) {
       g_cs_sync_n[i] = g_cs_sync_ns[i] = 0;
     return;
   }
-  std::fprintf(stderr,
-               "[csin] hash=%.1fms x%.1f detile=%.1fms rt-bridge=%.1fms x%.1f "
-               "copy=%.1fms\n",
-               g_in_hash_ns / frames / 1e6, g_in_hash_n / frames,
-               g_in_detile_ns / frames / 1e6, g_in_rt_ns / frames / 1e6,
-               g_in_rt_n / frames, g_in_copy_ns / frames / 1e6);
+  BASE_LOGI("csin",
+            "hash={:.1f}ms x{:.1f} detile={:.1f}ms rt-bridge={:.1f}ms x{:.1f} "
+            "copy={:.1f}ms",
+            g_in_hash_ns / frames / 1e6, g_in_hash_n / frames,
+            g_in_detile_ns / frames / 1e6, g_in_rt_ns / frames / 1e6,
+            g_in_rt_n / frames, g_in_copy_ns / frames / 1e6);
   g_in_hash_ns = g_in_detile_ns = g_in_rt_ns = g_in_copy_ns = 0;
   g_in_hash_n = g_in_rt_n = 0;
-  std::fprintf(stderr,
-               "[csstage] per frame ro=%.1fMB rw=%.1fMB img=%.1fMB "
-               "(cpu-detile %.1fMB x%.1f)\n",
-               g_stage_ro_bytes / frames / 1e6, g_stage_rw_bytes / frames / 1e6,
-               g_stage_img_bytes / frames / 1e6,
-               g_stage_cpu_detile_bytes / frames / 1e6,
-               g_stage_cpu_detile_n / frames);
+  BASE_LOGI("csstage",
+            "per frame ro={:.1f}MB rw={:.1f}MB img={:.1f}MB (cpu-detile "
+            "{:.1f}MB x{:.1f})",
+            g_stage_ro_bytes / frames / 1e6, g_stage_rw_bytes / frames / 1e6,
+            g_stage_img_bytes / frames / 1e6,
+            g_stage_cpu_detile_bytes / frames / 1e6,
+            g_stage_cpu_detile_n / frames);
   g_stage_ro_bytes = g_stage_rw_bytes = g_stage_img_bytes = 0;
   g_stage_cpu_detile_bytes = g_stage_cpu_detile_n = 0;
-  std::fprintf(stderr,
-               "[csout] retile=%.1fms x%.1f rt-upload=%.1fms x%.1f "
-               "tail=%.1fms\n",
-               g_out_retile_ns / frames / 1e6, g_out_retile_n / frames,
-               g_out_rt_ns / frames / 1e6, g_out_rt_submits / frames,
-               g_out_tail_ns / frames / 1e6);
+  BASE_LOGI("csout",
+            "retile={:.1f}ms x{:.1f} rt-upload={:.1f}ms x{:.1f} tail={:.1f}ms",
+            g_out_retile_ns / frames / 1e6, g_out_retile_n / frames,
+            g_out_rt_ns / frames / 1e6, g_out_rt_submits / frames,
+            g_out_tail_ns / frames / 1e6);
   g_out_retile_ns = g_out_rt_ns = g_out_tail_ns = 0;
   g_out_retile_n = g_out_rt_submits = 0;
-  std::fprintf(stderr, "[cssync] %.1f syncs/frame:", total / frames);
+  base::String syncs;
+  base::FormatTo(syncs, "{:.1f} syncs/frame:", total / frames);
   for (int i = 0; i < kSyncCount; i++) {
     if (!g_cs_sync_n[i])
       continue;
-    std::fprintf(stderr, " %s=%.1f(%.1fms)", kCsSyncName[i],
-                 g_cs_sync_n[i] / frames, g_cs_sync_ns[i] / frames / 1e6);
+    base::FormatTo(syncs, " {}={:.1f}({:.1f}ms)", kCsSyncName[i],
+                   g_cs_sync_n[i] / frames, g_cs_sync_ns[i] / frames / 1e6);
     g_cs_sync_n[i] = 0;
     g_cs_sync_ns[i] = 0;
   }
-  std::fprintf(stderr, "\n");
+  BASE_LOGI("cssync", "{}", syncs.c_str());
 }
 
 bool PreserveCsDepthBeforeClear(uint64_t base) {
@@ -1754,8 +1753,8 @@ bool PreserveCsDepthBeforeClear(uint64_t base) {
   if (kCsRtTrace) {
     static int logged = 0;
     if (logged++ < 16)
-      std::fprintf(stderr, "[csrt] f%d preserved depth %#lx before clear\n",
-                   g_frame.num, (unsigned long)base);
+      BASE_LOGI("csrt", "f{} preserved depth {:#x} before clear", g_frame.num,
+                (unsigned long)base);
   }
   return true;
 }
@@ -1884,8 +1883,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
                         UINT64_MAX);
         total += (NowNs() - t0) / 1e6;
       }
-      std::fprintf(stderr, "[csbench] empty submit+wait: %.3f ms\n",
-                   total / 100.0);
+      BASE_LOGI("csbench", "empty submit+wait: {:.3f} ms", total / 100.0);
     }
   }
 
@@ -1910,11 +1908,10 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
     if (std::chrono::duration_cast<std::chrono::seconds>(now - last).count() >=
         kCsHist) {
       last = now;
-      std::fprintf(stderr, "[cshist] %zu written ranges\n", tbl.size());
+      BASE_LOGI("cshist", "{} written ranges", tbl.size());
       for (const auto& kv : tbl)
-        std::fprintf(stderr, "[cshist] %#lx size=%#lx x%lu\n",
-                     (unsigned long)kv.first, (unsigned long)kv.second.size,
-                     (unsigned long)kv.second.n);
+        BASE_LOGI("cshist", "{:#x} size={:#x} x{}", (unsigned long)kv.first,
+                  (unsigned long)kv.second.size, (unsigned long)kv.second.n);
       std::fflush(stderr);
     }
   }
@@ -1922,14 +1919,13 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
   if (kCsList && g_frame.num > 25 && cs_listed < 200) {
     cs_listed++;
     for (uint32_t i = 0; i < ci.num_res; i++)
-      std::fprintf(stderr,
-                   "[cslist] cs=%#llx bind=%u base=%#lx size=%#lx %s%s\n",
-                   (unsigned long long)ci.cs_addr, ci.res[i].binding,
-                   (unsigned long)ci.res[i].base, (unsigned long)ci.res[i].size,
-                   ci.res[i].image_staging ? "img"
-                   : ci.res[i].zero_fill   ? "zero"
-                                           : "buf",
-                   ci.res[i].written ? " written" : "");
+      BASE_LOGI("cslist", "cs={:#x} bind={} base={:#x} size={:#x} {}{}",
+                (unsigned long long)ci.cs_addr, ci.res[i].binding,
+                (unsigned long)ci.res[i].base, (unsigned long)ci.res[i].size,
+                ci.res[i].image_staging ? "img"
+                : ci.res[i].zero_fill   ? "zero"
+                                        : "buf",
+                ci.res[i].written ? " written" : "");
   }
 
   // Bind each resource: zero-fill scratch per binding slot; everything else
@@ -2060,10 +2056,9 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
         static int rt_trace_logged = 0;
         if (kCsRtTrace && rt_trace_logged < 200) {
           rt_trace_logged++;
-          std::fprintf(stderr, "[csrt] f%d base=%#lx %ux%u -> %s\n",
-                       (int)g_frame.num, (unsigned long)base, ci.res[i].width,
-                       ci.res[i].height,
-                       e.rt_sourced ? "staged-from-RT" : "guest-fallback");
+          BASE_LOGI("csrt", "f{} base={:#x} {}x{} -> {}", (int)g_frame.num,
+                    (unsigned long)base, ci.res[i].width, ci.res[i].height,
+                    e.rt_sourced ? "staged-from-RT" : "guest-fallback");
         }
       }
       if (!rt_attempt || !e.rt_sourced) {
@@ -2297,10 +2292,9 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
                step = ci.res[i].size > 65536 ? ci.res[i].size / 65536 : 1;
       for (uint64_t k = 0; k < ci.res[i].size; k += step)
         nz += b[k] != 0;
-      std::fprintf(stderr,
-                   "[csgpu] gpu wrote base=%#lx size=%lu nonzero=%lu/%lu\n",
-                   (unsigned long)ci.res[i].base, (unsigned long)ci.res[i].size,
-                   (unsigned long)nz, (unsigned long)(ci.res[i].size / step));
+      BASE_LOGI("csgpu", "gpu wrote base={:#x} size={} nonzero={}/{}",
+                (unsigned long)ci.res[i].base, (unsigned long)ci.res[i].size,
+                (unsigned long)nz, (unsigned long)(ci.res[i].size / step));
     }
   }
   g_ns_cs_out += NowNs() - _t_out0;
@@ -2374,25 +2368,28 @@ bool FlushCsWritesRange(Renderer& renderer, uint64_t base, uint64_t bytes) {
     static int n = 0;
     if (n++ < 12) {
       const auto ranges = DirtyRangesOverlapping(base, bytes);
-      std::fprintf(stderr, "[csflush] base=%#lx bytes=%#lx dirty=%zu",
-                   (unsigned long)base, (unsigned long)bytes, ranges.size());
+      base::String line;
+      base::FormatTo(line, "base={:#x} bytes={:#x} dirty={}",
+                     (unsigned long)base, (unsigned long)bytes, ranges.size());
       for (uint64_t r : ranges) {
         auto f = g_cs_ranges.find(r);
-        std::fprintf(stderr, " [%#lx img=%d gpu_dirty=%d sz=%#lx]",
-                     (unsigned long)r,
-                     f != g_cs_ranges.end() ? (int)f->second.image_staging : -1,
-                     f != g_cs_ranges.end() ? (int)f->second.gpu_dirty : -1,
-                     f != g_cs_ranges.end() ? (unsigned long)f->second.size : 0);
+        base::FormatTo(line, " [{:#x} img={} gpu_dirty={} sz={:#x}]",
+                       (unsigned long)r,
+                       f != g_cs_ranges.end() ? (int)f->second.image_staging
+                                              : -1,
+                       f != g_cs_ranges.end() ? (int)f->second.gpu_dirty : -1,
+                       f != g_cs_ranges.end() ? (unsigned long)f->second.size
+                                              : 0);
       }
       // ...and every CS range that overlaps the target at all, found or not.
       for (auto& kv : g_cs_ranges) {
         const uint64_t e0 = kv.first, e1 = e0 + kv.second.guest_bytes;
         if (e0 < base + bytes && base < e1)
-          std::fprintf(stderr, " OVERLAP[%#lx+%#lx img=%d dirty=%d]",
-                       (unsigned long)e0, (unsigned long)kv.second.guest_bytes,
-                       (int)kv.second.image_staging, (int)kv.second.gpu_dirty);
+          base::FormatTo(line, " OVERLAP[{:#x}+{:#x} img={} dirty={}]",
+                         (unsigned long)e0, (unsigned long)kv.second.guest_bytes,
+                         (int)kv.second.image_staging, (int)kv.second.gpu_dirty);
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("csflush", "{}", line.c_str());
     }
   }
   const auto overlapping = DirtyRangesOverlapping(base, bytes);

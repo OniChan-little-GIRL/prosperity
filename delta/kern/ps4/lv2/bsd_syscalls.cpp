@@ -10,6 +10,7 @@
 #include "../../proc.h"
 #include "error_table.h"
 #include <base.h>
+#include <base/logging.h>
 #include <logger/logger.h>
 #include <cstring>
 #include <cstdlib>
@@ -145,8 +146,8 @@ int PS4ABI sys_regmgr_call(uint32_t op, uint32_t id, void *result, void *value,
     // the output anyway: a caller that reads it despite the error would
     // otherwise get stack garbage.
     int_value->value = 0;
-    printf("[regmgr] op25 get-int unknown encoded_id=%#llx\n",
-           (unsigned long long)int_value->encoded_id);
+    BASE_LOGI("regmgr", "op25 get-int unknown encoded_id={:#x}",
+              (unsigned long long)int_value->encoded_id);
     return 0x800D0203;
   }
 
@@ -169,8 +170,8 @@ int PS4ABI sys_regmgr_call(uint32_t op, uint32_t id, void *result, void *value,
 
   // SCOUT: soft-fail unknown regmgr ops with the same "not available" error the
   // op-25 unknown-key path returns (the guest copes with it) instead of trapping.
-  printf("[regmgr] UNHANDLED op=%u id=%#x type=%#llx result=%p value=%p\n", op,
-         id, (unsigned long long)type, result, value);
+  BASE_LOGI("regmgr", "UNHANDLED op={} id={:#x} type={:#x} result={:p} value={:p}",
+            op, id, (unsigned long long)type, result, value);
   return 0x800D0203;
 }
 

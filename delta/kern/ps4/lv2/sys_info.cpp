@@ -8,7 +8,10 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
 #include <base/strings/string_ref.h>
+#include <base/strings/xstring.h>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -64,8 +67,8 @@ static uint64_t guestTscFreq() {
       return uint64_t(1600000000);
     uint64_t f = static_cast<uint64_t>(static_cast<double>(dc) * 1e9 /
                                        static_cast<double>(dt) + 0.5);
-    std::fprintf(stderr, "[tsc] calibrated host TSC = %llu Hz (rdtsc==tsc_freq)\n",
-                 (unsigned long long)f);
+    BASE_LOGI("tsc", "calibrated host TSC = {} Hz (rdtsc==tsc_freq)",
+              (unsigned long long)f);
     return f;
   }();
   return hz;
@@ -223,7 +226,8 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   else if (name[0] == 1 && name[1] == 33 && namelen == 2) {
     auto &info = proc::getActive()->getEnv();
     *static_cast<void **>(oldp) = info.userStack + info.userStackSize;
-    std::printf("userstack -> base %p, end %p\n", info.userStack, oldp);
+    BASE_LOGI("sysctl", "userstack -> base {:p}, end {:p}", info.userStack,
+              oldp);
     return 0;
   }
 
@@ -412,8 +416,8 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   if (name[0] == 0 && name[1] == 3 && namelen == 2) {
     auto name = base::StringRef(static_cast<const char *>(newp), newlen);
     if (kSysctlCaller)
-      std::printf("[sysctl] name2oid '%.*s'\n", (int)newlen,
-                  static_cast<const char *>(newp));
+      BASE_LOGI("sysctl", "name2oid '{}'",
+                base::String(static_cast<const char *>(newp), newlen).c_str());
 
     // PS5 system-info oids the network/system-service init resolves. Left
     // unhandled they returned ENOENT and the KAGE net thread spun (sizing its
@@ -504,21 +508,22 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
       return 0;
     }
 
-    std::printf("[sysctl] UNHANDLED name2oid: '%.*s'\n", (int)newlen,
-                static_cast<const char *>(newp));
+    BASE_LOGI("sysctl", "UNHANDLED name2oid: '{}'",
+              base::String(static_cast<const char *>(newp), newlen).c_str());
     return -SysError::eNOENT;
   }
 
   /*for sceKernelGetLibkernelTextLocation*/
 
-  std::printf("sysctl referenced by %p\n", _ReturnAddress());
+  BASE_LOGI("sysctl", "sysctl referenced by {:p}", _ReturnAddress());
   called_in(_ReturnAddress());
   // SCOUT: log the unhandled mib and soft-fail (ENOENT) instead of trapping so
   // the guest can decide how to cope, and we can see what it queries next.
-  std::printf("[sysctl] UNHANDLED mib namelen=%u:", namelen);
+  base::String mib;
+  base::FormatTo(mib, "UNHANDLED mib namelen={}:", namelen);
   for (uint32_t i = 0; i < namelen && i < 8; i++)
-    std::printf(" %d", name[i]);
-  std::printf("\n");
+    base::FormatTo(mib, " {}", name[i]);
+  BASE_LOGI("sysctl", "{}", mib.c_str());
   // The out buffer is usually a caller stack local, so scanning up from it finds
   // the guest frames that wanted this oid.
   if (kSysctlCaller && oldp) {
@@ -528,7 +533,7 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
       char sym[256];
       symbolize(sp[i], sym, sizeof(sym));
       if (std::strstr(sym, "(.text)")) {
-        std::printf("[sysctl]   caller %s\n", sym);
+        BASE_LOGI("sysctl", "  caller {}", sym);
         shown++;
       }
     }

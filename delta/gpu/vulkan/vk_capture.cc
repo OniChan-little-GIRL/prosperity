@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -49,7 +50,7 @@ void DumpPpm(const uint8_t* bgra, uint32_t w, uint32_t h) {
   std::snprintf(path, sizeof(path), "%s/gpu_frame_%d.ppm", DumpDir(),
                 g_dumped_frames++);
   WritePpm(path, bgra, w, h);
-  std::fprintf(stderr, "[gpuvk] dumped %s\n", path);
+  BASE_LOGI("gpuvk", "dumped {}", path);
 }
 
 }  // namespace gpu::vk

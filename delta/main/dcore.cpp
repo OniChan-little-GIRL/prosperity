@@ -7,6 +7,7 @@
  */
 
 #include <base/environment_variables.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -189,8 +190,8 @@ public:
       for (const auto &p : all)
         if (sub[0] == '1' || p.find(sub) != std::string::npos) {
           const auto *n = fs_.find(p.c_str());
-          std::fprintf(stderr, "[pkg] %12lld  %s\n",
-                       n ? (long long)n->size : -1LL, p.c_str());
+          BASE_LOGI("pkg", "{:12}  {}", n ? (long long)n->size : -1LL,
+                    p.c_str());
         }
     }
     if (const char *wantEnv = kPkgDump) {
@@ -213,11 +214,11 @@ public:
           if (FILE *f = std::fopen(out.c_str(), "wb")) {
             std::fwrite(buf.data(), 1, n > 0 ? n : 0, f);
             std::fclose(f);
-            std::fprintf(stderr, "[pkg] dumped %s -> %s (%lld bytes)\n",
-                         want.c_str(), out.c_str(), (long long)n);
+            BASE_LOGI("pkg", "dumped {} -> {} ({} bytes)", want.c_str(),
+                      out.c_str(), (long long)n);
           }
         } else {
-          std::fprintf(stderr, "[pkg] DUMP: %s not found\n", want.c_str());
+          BASE_LOGI("pkg", "DUMP: {} not found", want.c_str());
         }
       }
     }
@@ -303,8 +304,8 @@ public:
       if (FILE *f = std::fopen(out.c_str(), "wb")) {
         std::fwrite(buf.data(), 1, n > 0 ? n : 0, f);
         std::fclose(f);
-        std::fprintf(stderr, "[pkg] dumped %s -> %s (%lld bytes)\n", want,
-                     out.c_str(), (long long)n);
+        BASE_LOGI("pkg", "dumped {} -> {} ({} bytes)", want, out.c_str(),
+                  (long long)n);
       }
     }
   }

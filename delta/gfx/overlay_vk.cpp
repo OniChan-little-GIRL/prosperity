@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <base/logging.h>
+
 #include "imgui.h"
 #include "overlay.h"
 #include "overlay_vk_shaders.h"
@@ -409,7 +411,7 @@ bool overlayVkInit(VkPhysicalDevice phys, VkDevice device, VkQueue queue,
   v.format = swapFormat;
   overlayEnsureImGui();
   if (!createPipeline() || !uploadFont()) {
-    std::fprintf(stderr, "[overlay] Vulkan backend init failed\n");
+    BASE_LOGI("overlay", "Vulkan backend init failed");
     return false;
   }
   v.ready = true;

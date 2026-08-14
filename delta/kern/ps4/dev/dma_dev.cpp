@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -274,9 +275,9 @@ int32_t dmaDevice::ioctl(uint32_t cmd, void *data) {
     // The result too: an allocation whose window is exhausted is invisible in
     // the arguments, and the title's own heap map is built from what it got.
     auto *q = static_cast<uint64_t *>(data);
-    std::fprintf(stderr, "[dmem-ioctl]   -> ret=%d out=[%#llx %#llx]\n", r,
-                 q ? (unsigned long long)q[0] : 0ull,
-                 q ? (unsigned long long)q[1] : 0ull);
+    BASE_LOGI("dmem-ioctl", "  -> ret={} out=[{:#x} {:#x}]", r,
+              q ? (unsigned long long)q[0] : 0ull,
+              q ? (unsigned long long)q[1] : 0ull);
   }
   return r;
 }
@@ -284,16 +285,16 @@ int32_t dmaDevice::ioctl(uint32_t cmd, void *data) {
 int32_t dmaDevice::ioctlImpl(uint32_t cmd, void *data) {
   if (kDmemTrace) {
     auto *q = static_cast<uint64_t *>(data);
-    std::fprintf(stderr,
-                 "[dmem-ioctl] cmd=%#x data=%p [%#llx %#llx %#llx %#llx %#llx %#llx %#llx %#llx]\n",
-                 cmd, data, q ? (unsigned long long)q[0] : 0ull,
-                 q ? (unsigned long long)q[1] : 0ull,
-                 q ? (unsigned long long)q[2] : 0ull,
-                 q ? (unsigned long long)q[3] : 0ull,
-                 q ? (unsigned long long)q[4] : 0ull,
-                 q ? (unsigned long long)q[5] : 0ull,
-                 q ? (unsigned long long)q[6] : 0ull,
-                 q ? (unsigned long long)q[7] : 0ull);
+    BASE_LOGI("dmem-ioctl",
+              "cmd={:#x} data={:p} [{:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}]",
+              cmd, data, q ? (unsigned long long)q[0] : 0ull,
+              q ? (unsigned long long)q[1] : 0ull,
+              q ? (unsigned long long)q[2] : 0ull,
+              q ? (unsigned long long)q[3] : 0ull,
+              q ? (unsigned long long)q[4] : 0ull,
+              q ? (unsigned long long)q[5] : 0ull,
+              q ? (unsigned long long)q[6] : 0ull,
+              q ? (unsigned long long)q[7] : 0ull);
   }
   switch (cmd) {
   case 0x4008800A: {
@@ -315,9 +316,10 @@ int32_t dmaDevice::ioctlImpl(uint32_t cmd, void *data) {
     // so scan it for return addresses in a loaded module's .text to pin which
     // guest code reserved this pool (e.g. the CPU heap's len constant).
     if (kDmemCaller) {
-      std::printf("[dmem-alloc] len=%#llx memType=%#llx align=%#llx caller-chain:\n",
-                  (unsigned long long)len, (unsigned long long)a[4],
-                  (unsigned long long)align);
+      BASE_LOGI("dmem-alloc",
+                "len={:#x} memType={:#x} align={:#x} caller-chain:",
+                (unsigned long long)len, (unsigned long long)a[4],
+                (unsigned long long)align);
       auto *sp = reinterpret_cast<uintptr_t *>(__builtin_frame_address(0));
       auto *pr = proc::getActive();
       int shown = 0;
@@ -328,8 +330,8 @@ int32_t dmaDevice::ioctlImpl(uint32_t cmd, void *data) {
           auto &mi = m->getInfo();
           auto *t = mi.textSeg.addr;
           if (t && v >= (uintptr_t)t && v < (uintptr_t)t + mi.textSeg.size) {
-            std::printf("  sp+%-4x %s+%#lx\n", i * 8, mi.name.c_str(),
-                        v - (uintptr_t)t);
+            BASE_LOGI("dmem-alloc", "  sp+{:<4x} {}+{:#x}", i * 8,
+                      mi.name.c_str(), v - (uintptr_t)t);
             shown++;
             break;
           }
@@ -340,10 +342,10 @@ int32_t dmaDevice::ioctlImpl(uint32_t cmd, void *data) {
     int r = dmemAllocate(a[0], a[1], len, align, static_cast<uint32_t>(a[4]),
                          &off);
     if (r < 0) {
-      std::fprintf(stderr,
-                   "[dmem] alloc FAILED window=[%#llx,%#llx) len=%#llx -> %d\n",
-                   (unsigned long long)a[0], (unsigned long long)a[1],
-                   (unsigned long long)len, r);
+      BASE_LOGI("dmem",
+                "alloc FAILED window=[{:#x},{:#x}) len={:#x} -> {}",
+                (unsigned long long)a[0], (unsigned long long)a[1],
+                (unsigned long long)len, r);
       return r;
     }
     a[0] = off;  // physical offset out
@@ -435,9 +437,8 @@ int32_t dmaDevice::ioctlImpl(uint32_t cmd, void *data) {
 uint8_t *dmaDevice::map(void *addr, size_t len, uint32_t, uint32_t flags,
                         size_t offset) {
   if (kDmemTrace)
-    std::fprintf(stderr,
-                 "[dmem] devmap off=%#zx len=%#zx want=%p fixed=%d -> anon\n",
-                 offset, len, addr, (flags & mFlags::fixed) ? 1 : 0);
+    BASE_LOGI("dmem", "devmap off={:#x} len={:#x} want={:p} fixed={} -> anon",
+              offset, len, addr, (flags & mFlags::fixed) ? 1 : 0);
   return reinterpret_cast<uint8_t *>(-1);
 }
 } // namespace krnl

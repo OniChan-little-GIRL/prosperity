@@ -15,6 +15,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+
+#include <base/logging.h>
+
 #include <utl/options.h>
 
 namespace {
@@ -77,8 +80,8 @@ int PS4ABI sceNpTrophyCreateContext(int32_t *context, int32_t userId,
       g_ctxReg[i] = false;
       *context = i + 1;
       if (kTrophyTrace)
-        std::printf("[trophy] CreateContext user=%d label=%#x -> ctx=%d\n",
-                    userId, serviceLabel, i + 1);
+        BASE_LOGI("trophy", "CreateContext user={} label={:#x} -> ctx={}",
+                  userId, serviceLabel, i + 1);
       return OK;
     }
   }
@@ -94,7 +97,7 @@ int PS4ABI sceNpTrophyCreateHandle(int32_t *handle) {
       g_hndUsed[i] = true;
       *handle = i + 1;
       if (kTrophyTrace)
-        std::printf("[trophy] CreateHandle -> handle=%d\n", i + 1);
+        BASE_LOGI("trophy", "CreateHandle -> handle={}", i + 1);
       return OK;
     }
   }
@@ -136,8 +139,8 @@ int PS4ABI sceNpTrophyRegisterContext(int32_t context, int32_t handle,
     return ERR_INVALID_HANDLE;
   g_ctxReg[context - 1] = true;
   if (kTrophyTrace)
-    std::printf("[trophy] RegisterContext ctx=%d handle=%d -> OK\n", context,
-                handle);
+    BASE_LOGI("trophy", "RegisterContext ctx={} handle={} -> OK", context,
+              handle);
   return OK;
 }
 
@@ -170,7 +173,7 @@ int PS4ABI sceNpTrophyGetTrophyUnlockState(int32_t context, int32_t handle,
   std::memset(flags, 0, 16);  // OrbisNpTrophyFlagArray: 128 bits, none unlocked
   *count = 0;                 // empty trophy set
   if (kTrophyTrace)
-    std::printf("[trophy] GetTrophyUnlockState ctx=%d -> count=0\n", context);
+    BASE_LOGI("trophy", "GetTrophyUnlockState ctx={} -> count=0", context);
   return OK;
 }
 
@@ -188,7 +191,7 @@ int PS4ABI sceNpTrophyGetGameInfo(int32_t context, int32_t handle, void *details
   zeroSized(details);  // OrbisNpTrophyGameDetails (0x4A0): 0 trophies
   zeroSized(data);     // OrbisNpTrophyGameData (0x20): 0 unlocked
   if (kTrophyTrace)
-    std::printf("[trophy] GetGameInfo ctx=%d -> OK\n", context);
+    BASE_LOGI("trophy", "GetGameInfo ctx={} -> OK", context);
   return OK;
 }
 
@@ -223,8 +226,7 @@ int PS4ABI sceNpTrophyGetGroupInfo(int32_t context, int32_t handle,
   zeroSized(details);
   zeroSized(data);
   if (kTrophyTrace)
-    std::printf("[trophy] GetGroupInfo ctx=%d group=%d -> OK\n", context,
-                groupId);
+    BASE_LOGI("trophy", "GetGroupInfo ctx={} group={} -> OK", context, groupId);
   return OK;
 }
 

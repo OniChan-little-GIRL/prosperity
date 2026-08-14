@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -58,7 +59,7 @@ int PS4ABI sys_ksem_init(int *idp, unsigned value) {
   }
   if (idp)
     *idp = id;
-  std::printf("[ksem] init value=%u -> id=%d\n", value, id);
+  BASE_LOGI("ksem", "init value={} -> id={}", value, id);
   return 0;
 }
 
@@ -73,8 +74,8 @@ int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, uint16_t mode,
       return -SysError::eEXIST;
     if (idp)
       *idp = it->second;
-    std::printf("[ksem] open '%s' (existing) -> id=%d\n", key.c_str(),
-                it->second);
+    BASE_LOGI("ksem", "open '{}' (existing) -> id={}", key.c_str(),
+              it->second);
     return 0;
   }
   // Not found: without O_CREAT this is an error.
@@ -86,8 +87,8 @@ int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, uint16_t mode,
   g_ksemByName[key] = id;
   if (idp)
     *idp = id;
-  std::printf("[ksem] open '%s' (created) value=%u mode=%#x -> id=%d\n",
-              key.c_str(), value, mode, id);
+  BASE_LOGI("ksem", "open '{}' (created) value={} mode={:#x} -> id={}",
+            key.c_str(), value, mode, id);
   return 0;
 }
 

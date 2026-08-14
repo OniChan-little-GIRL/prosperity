@@ -15,6 +15,9 @@
 #include <unordered_map>
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/mem.h>
 
 #include "ipmi.h"
@@ -162,13 +165,12 @@ void histogram(uint32_t op, const InvokeRequest *req) {
         std::this_thread::sleep_for(std::chrono::seconds(15));
         for (uint32_t i = 0; i < 2048; i++)
           if (uint64_t c = g_opHist[i].load(std::memory_order_relaxed))
-            std::fprintf(stderr, "[ipmihist] op=%u %llu\n", i,
-                         (unsigned long long)c);
+            BASE_LOGI("ipmihist", "op={} {}", i, (unsigned long long)c);
         for (uint32_t i = 0; i < 64; i++)
           if (uint64_t c = g_methodHist[i].load(std::memory_order_relaxed))
-            std::fprintf(stderr, "[ipmihist] method=%#x %llu\n",
-                         g_methodId[i].load(std::memory_order_relaxed),
-                         (unsigned long long)c);
+            BASE_LOGI("ipmihist", "method={:#x} {}",
+                      g_methodId[i].load(std::memory_order_relaxed),
+                      (unsigned long long)c);
       }
     }).detach();
     return true;
@@ -180,9 +182,9 @@ void traceInvoke(uint32_t kid, const char *svc, const InvokeRequest *req,
                  bool handled) {
   if (!traceOn())
     return;
-  std::fprintf(stderr, "[ipmi] %s kid=%u method=%#x in=%u out=%u%s\n",
-               svc && *svc ? svc : "?", kid, req->methodId, req->numIn,
-               req->numOut, handled ? "" : " (default)");
+  BASE_LOGI("ipmi", "{} kid={} method={:#x} in={} out={}{}",
+            svc && *svc ? svc : "?", kid, req->methodId, req->numIn,
+            req->numOut, handled ? "" : " (default)");
 }
 
 // DELTA_IPMI_DUMP=<method>: dump one unknown method's descriptors and the guest
@@ -196,28 +198,29 @@ void dumpInvoke(uint32_t kid, const char *svc, const InvokeRequest *req) {
   if (seen.fetch_add(1) >= 2)
     return;
 
-  std::fprintf(stderr, "[ipmidump] %s kid=%u method=%#x in=%u out=%u\n",
-               svc && *svc ? svc : "?", kid, req->methodId, req->numIn,
-               req->numOut);
+  BASE_LOGI("ipmidump", "{} kid={} method={:#x} in={} out={}",
+            svc && *svc ? svc : "?", kid, req->methodId, req->numIn,
+            req->numOut);
   auto descriptors = [](const char *tag, const uint64_t *d, uint32_t n,
                         uint32_t stride) {
     if (!utl::isMemoryRangeMapped(d, n * stride * 8))
       return;
     for (uint32_t i = 0; i < n; i++) {
-      std::fprintf(stderr, "[ipmidump]   %s[%u] data=%#llx size=%#llx", tag, i,
-                   (unsigned long long)d[i * stride],
-                   (unsigned long long)d[i * stride + 1]);
+      base::String line;
+      base::FormatTo(line, "  {}[{}] data={:#x} size={:#x}", tag, i,
+                     (unsigned long long)d[i * stride],
+                     (unsigned long long)d[i * stride + 1]);
       if (stride > 2) // the unidentified third word; see outSlot()
-        std::fprintf(stderr, " w2=%#llx",
-                     (unsigned long long)d[i * stride + 2]);
+        base::FormatTo(line, " w2={:#x}",
+                       (unsigned long long)d[i * stride + 2]);
       auto *p = reinterpret_cast<const uint8_t *>(d[i * stride]);
       const uint64_t sz = d[i * stride + 1];
       if (readable(p, sz) && sz <= 64) {
-        std::fprintf(stderr, " :");
+        base::FormatTo(line, " :");
         for (uint64_t k = 0; k < sz; k++)
-          std::fprintf(stderr, " %02x", p[k]);
+          base::FormatTo(line, " {:02x}", p[k]);
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("ipmidump", "{}", line.c_str());
     }
   };
   descriptors("in", req->inDesc, req->numIn, kInDescWords);
@@ -229,7 +232,7 @@ void dumpInvoke(uint32_t kid, const char *svc, const InvokeRequest *req) {
     char sym[256];
     symbolize(sp[i], sym, sizeof(sym));
     if (std::strstr(sym, "(.text)")) {
-      std::fprintf(stderr, "[ipmidump]   caller %s\n", sym);
+      BASE_LOGI("ipmidump", "  caller {}", sym);
       shown++;
     }
   }
@@ -248,16 +251,17 @@ void dumpManagerOp(uint32_t op, uint32_t kid, void *out, void *in,
   if (seen.fetch_add(1) >= 3)
     return;
 
-  std::fprintf(stderr, "[ipmiop] op=%u kid=%u out=%p in=%p insize=%#llx\n", op,
-               kid, out, in, (unsigned long long)insize);
+  BASE_LOGI("ipmiop", "op={} kid={} out={:p} in={:p} insize={:#x}", op, kid,
+            out, in, (unsigned long long)insize);
   auto hexdump = [](const char *tag, const void *p, uint64_t n) {
     if (!p || !readable(p, n))
       return;
     const auto *b = static_cast<const uint8_t *>(p);
-    std::fprintf(stderr, "[ipmiop]   %s:", tag);
+    base::String bytes;
+    base::FormatTo(bytes, "  {}:", tag);
     for (uint64_t i = 0; i < n && i < 96; i++)
-      std::fprintf(stderr, " %02x", b[i]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(bytes, " {:02x}", b[i]);
+    BASE_LOGI("ipmiop", "{}", bytes.c_str());
     // Any 8-byte field that looks like a guest pointer is worth following:
     // these blocks are mostly pointers to status words the caller polls.
     for (uint64_t i = 0; i + 8 <= n && i < 96; i += 8) {
@@ -265,11 +269,12 @@ void dumpManagerOp(uint32_t op, uint32_t kid, void *out, void *in,
       std::memcpy(&v, b + i, sizeof(v));
       const auto *t = reinterpret_cast<const uint8_t *>(v);
       if (v >= 0x1000 && readable(t, 8)) {
-        std::fprintf(stderr, "[ipmiop]     +%#llx -> %#llx :",
-                     (unsigned long long)i, (unsigned long long)v);
+        base::String line;
+        base::FormatTo(line, "    +{:#x} -> {:#x} :", (unsigned long long)i,
+                       (unsigned long long)v);
         for (int k = 0; k < 8; k++)
-          std::fprintf(stderr, " %02x", t[k]);
-        std::fprintf(stderr, "\n");
+          base::FormatTo(line, " {:02x}", t[k]);
+        BASE_LOGI("ipmiop", "{}", line.c_str());
       }
     }
   };
@@ -282,7 +287,7 @@ void dumpManagerOp(uint32_t op, uint32_t kid, void *out, void *in,
     char sym[256];
     symbolize(sp[i], sym, sizeof(sym));
     if (std::strstr(sym, "(.text)")) {
-      std::fprintf(stderr, "[ipmiop]   caller %s\n", sym);
+      BASE_LOGI("ipmiop", "  caller {}", sym);
       shown++;
     }
   }
@@ -395,8 +400,8 @@ int managerCall(uint32_t op, uint32_t kid, void *out, void *in,
     c.service = svc ? svc : "";
     c.impl = findService(svc);
     if (traceOn())
-      std::fprintf(stderr, "[ipmi] create kid=%u service=\"%s\"%s\n", newKid,
-                   c.service.c_str(), c.impl ? "" : " (no handler)");
+      BASE_LOGI("ipmi", "create kid={} service=\"{}\"{}", newKid,
+                c.service.c_str(), c.impl ? "" : " (no handler)");
     {
       std::lock_guard<std::mutex> lk(g_clientsMtx);
       g_clients[newKid] = std::move(c);
@@ -507,8 +512,7 @@ int managerCall(uint32_t op, uint32_t kid, void *out, void *in,
   // data, and the next unknown op will need the same distinction drawn.
   default:
     if (traceOn())
-      std::fprintf(stderr, "[ipmi] op=%u kid=%u (unhandled, empty success)\n",
-                   op, kid);
+      BASE_LOGI("ipmi", "op={} kid={} (unhandled, empty success)", op, kid);
     dumpManagerOp(op, kid, out, in, insize);
     {
       if (kIpmiFailOp && op == kIpmiFailOp)

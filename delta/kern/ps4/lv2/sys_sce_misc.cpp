@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 
 #include <atomic>
 #include <cstdio>
@@ -33,7 +34,7 @@ extern int sys_budget_get_ptype();
 // fakery would silently break if a title actually exercised the subsystem.
 static void logOnce(std::atomic<bool> &flag, const char *msg) {
   if (!flag.exchange(true))
-    std::printf("[sce] %s\n", msg);
+    BASE_LOGI("sce", "{}", msg);
 }
 
 // The JIT shm object the guest later mmaps to hold generated code. The real
@@ -252,16 +253,20 @@ int PS4ABI sys_blockpool_unmap() { return 0; }
 int64_t PS4ABI sys_blockpool_batch(uint64_t a0, uint64_t a1, uint64_t a2,
                                    uint64_t a3, uint64_t a4, uint64_t a5) {
   if (kBlockpoolTrace) {
-    std::fprintf(stderr, "[blockpool_batch] a0=%#llx a1=%#llx a2=%#llx a3=%#llx a4=%#llx a5=%#llx\n",
-                 (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2,
-                 (unsigned long long)a3, (unsigned long long)a4, (unsigned long long)a5);
+    BASE_LOGI("blockpool_batch",
+              "a0={:#x} a1={:#x} a2={:#x} a3={:#x} a4={:#x} a5={:#x}",
+              (unsigned long long)a0, (unsigned long long)a1,
+              (unsigned long long)a2, (unsigned long long)a3,
+              (unsigned long long)a4, (unsigned long long)a5);
     // a1 commonly points at the command array; dump a few 64-bit words.
     if (a1 > 0x10000) {
       auto *w = reinterpret_cast<uint64_t *>(a1);
-      std::fprintf(stderr, "  cmd[0..7]: %#llx %#llx %#llx %#llx %#llx %#llx %#llx %#llx\n",
-                   (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2],
-                   (unsigned long long)w[3], (unsigned long long)w[4], (unsigned long long)w[5],
-                   (unsigned long long)w[6], (unsigned long long)w[7]);
+      BASE_LOGI("blockpool_batch",
+                "  cmd[0..7]: {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
+                (unsigned long long)w[0], (unsigned long long)w[1],
+                (unsigned long long)w[2], (unsigned long long)w[3],
+                (unsigned long long)w[4], (unsigned long long)w[5],
+                (unsigned long long)w[6], (unsigned long long)w[7]);
     }
   }
   return 0;
@@ -280,7 +285,7 @@ int PS4ABI sys_aio_unsupported() {
   static std::atomic<int> n{0};
   int c = ++n;
   if (kAioTrace && c <= 200)
-    std::fprintf(stderr, "[aio] unsupported call #%d\n", c);
+    BASE_LOGI("aio", "unsupported call #{}", c);
   else {
     static std::atomic<bool> once{false};
     logOnce(once, "aio unsupported; guest should fall back to sync IO");
@@ -367,7 +372,7 @@ int PS4ABI sys_sigqueue() { return 0; }
 int PS4ABI sys_abort2(const char *msg, int nargs, void **args) {
   (void)nargs;
   (void)args;
-  std::printf("[abort2] %s\n", msg ? msg : "(null)");
+  BASE_LOGI("abort2", "{}", msg ? msg : "(null)");
   return 0;
 }
 

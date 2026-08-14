@@ -7,6 +7,9 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <cstdlib>
 #include <cstring>
 #include "ajm_dev.h"
@@ -28,12 +31,13 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
   if (kAjmTrace) {
     // ioctl size is encoded in bits [29:16] of the command.
     uint32_t sz = (cmd >> 16) & 0x3FFF;
-    std::fprintf(stderr, "[ajm] ioctl(%#x) sz=%u data=%p in:", cmd, sz, data);
+    base::String bytes;
+    base::FormatTo(bytes, "ioctl({:#x}) sz={} data={:p} in:", cmd, sz, data);
     if (data && sz && sz <= 256) {
       const uint8_t *b = static_cast<const uint8_t *>(data);
-      for (uint32_t i = 0; i < sz; i++) std::fprintf(stderr, " %02x", b[i]);
+      for (uint32_t i = 0; i < sz; i++) base::FormatTo(bytes, " {:02x}", b[i]);
     }
-    std::fprintf(stderr, "\n");
+    BASE_LOGI("ajm", "{}", bytes.c_str());
   }
   // Most AJM control ioctls pass a struct whose first dword(s) are an
   // out-parameter (instance/module id or a result code). Leave a zeroed result
@@ -50,16 +54,17 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
     };
     auto *b = static_cast<AjmBatch *>(data);
     if (kAjmTrace) {
-      std::fprintf(stderr,
-                   "[ajm] batch ctx=%#x inSize=%u count=%u outSize=%u in=%#lx out=%#lx\n",
-                   b->ctx, b->inSize, b->count, b->outSize,
-                   (unsigned long)b->inPtr, (unsigned long)b->outPtr);
+      BASE_LOGI("ajm",
+                "batch ctx={:#x} inSize={} count={} outSize={} in={:#x} out={:#x}",
+                b->ctx, b->inSize, b->count, b->outSize,
+                (unsigned long)b->inPtr, (unsigned long)b->outPtr);
       auto hexdump = [](const char *tag, uint64_t p, uint32_t n) {
         if (!p) return;
-        std::fprintf(stderr, "[ajm]   %s:", tag);
+        base::String bytes;
+        base::FormatTo(bytes, "  {}:", tag);
         const uint8_t *q = reinterpret_cast<const uint8_t *>(p);
-        for (uint32_t i = 0; i < n; i++) std::fprintf(stderr, " %02x", q[i]);
-        std::fprintf(stderr, "\n");
+        for (uint32_t i = 0; i < n; i++) base::FormatTo(bytes, " {:02x}", q[i]);
+        BASE_LOGI("ajm", "{}", bytes.c_str());
       };
       hexdump("inbatch", b->inPtr, 64);
       hexdump("out(pre)", b->outPtr, b->outSize <= 128 ? b->outSize : 128);

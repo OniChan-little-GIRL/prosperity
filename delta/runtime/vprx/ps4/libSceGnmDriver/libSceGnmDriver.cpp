@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <base/logging.h>
+
 #include "gpu/ps4/cmd_processor.h"
 #include <utl/options.h>
 
@@ -63,8 +65,8 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
       !utl::isMemoryRangeMapped(descArray, descCount * 16ull)) {
     static int warned = 0;
     if (warned++ < 8)
-      std::fprintf(stderr, "[gc] DROPPED bad submit descArray=%p count=%u\n",
-                   descArray, descCount);
+      BASE_LOGI("gc", "DROPPED bad submit descArray={:p} count={}", descArray,
+                descCount);
     return;
   }
   // Guest bug shields: submits arrive with guest-controlled pointers. A stray
@@ -75,8 +77,8 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
       !utl::isMemoryRangeMapped(descArray, descCount * 16ull)) {
     static int warned = 0;
     if (warned++ < 8)
-      std::fprintf(stderr, "[gc] DROPPED bad submit descArray=%p count=%u\n",
-                   descArray, descCount);
+      BASE_LOGI("gc", "DROPPED bad submit descArray={:p} count={}", descArray,
+                descCount);
     return;
   }
   // A dozen lines answers "what does a submit look like"; comparing the set of
@@ -87,25 +89,24 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
       kGcSubmit && (kGcSubmitMax == 0 ? submitDumps++ < 12
                                       : submitDumps++ < (int)kGcSubmitMax);
   if (dumpThis)
-    std::fprintf(stderr, "[gc] submit descArray=%p count=%u\n", descArray,
-                 descCount);
+    BASE_LOGI("gc", "submit descArray={:p} count={}", descArray, descCount);
   for (uint32_t i = 0; i < descCount; i++) {
     const uint32_t *e = d + i * 4;
     uint32_t hdr = e[0];
     uint64_t addr = (static_cast<uint64_t>(e[2] & 0xFF) << 32) | e[1];
     uint32_t bytes = (e[3] & 0xFFFFF) * 4;  // ib_size is in dwords
     if (dumpThis)
-      std::fprintf(stderr,
-                   "[gc]   desc[%u]: %08x %08x %08x %08x -> addr=%#lx bytes=%u\n",
-                   i, e[0], e[1], e[2], e[3], (unsigned long)addr, bytes);
+      BASE_LOGI("gc",
+                "  desc[{}]: {:08x} {:08x} {:08x} {:08x} -> addr={:#x} bytes={}",
+                i, e[0], e[1], e[2], e[3], (unsigned long)addr, bytes);
     if (!addr || !bytes)
       continue;
     if (!utl::isMemoryRangeMapped(reinterpret_cast<const void *>(addr),
                                   bytes)) {
       static int warned = 0;
       if (warned++ < 8)
-        std::fprintf(stderr, "[gc] DROPPED bad IB addr=%#lx bytes=%u\n",
-                     (unsigned long)addr, bytes);
+        BASE_LOGI("gc", "DROPPED bad IB addr={:#x} bytes={}",
+                  (unsigned long)addr, bytes);
       continue;
     }
     if (hdr == 0xC0023300u)
@@ -190,7 +191,7 @@ void dumpPm4(void **dcbGpuAddrs, uint32_t *dcbSizes, uint32_t count) {
   for (uint32_t b = 0; b < count; b++) {
     auto *p = static_cast<uint32_t *>(dcbGpuAddrs[b]);
     uint32_t words = dcbSizes[b] / 4;
-    std::fprintf(stderr, "[pm4] dcb[%u] @%p words=%u\n", b, (void *)p, words);
+    BASE_LOGI("pm4", "dcb[{}] @{:p} words={}", b, p, words);
     if (!p) continue;
     uint32_t i = 0, draws = 0;
     while (i < words) {
@@ -199,7 +200,7 @@ void dumpPm4(void **dcbGpuAddrs, uint32_t *dcbSizes, uint32_t count) {
       uint32_t cnt = ((hdr >> 16) & 0x3FFF) + 1;  // dword count after header
       if (type == 3) {
         uint32_t op = (hdr >> 8) & 0xFF;
-        std::fprintf(stderr, "[pm4]   T3 %-20s op=%#04x cnt=%u\n", itName(op), op, cnt);
+        BASE_LOGI("pm4", "  T3 {:<20} op={:#04x} cnt={}", itName(op), op, cnt);
         if (op == 0x2D || op == 0x27 || op == 0x2F || op == 0x4C) draws++;
         i += 1 + cnt;
       } else if (type == 2) {
@@ -210,7 +211,7 @@ void dumpPm4(void **dcbGpuAddrs, uint32_t *dcbSizes, uint32_t count) {
         break;  // type 1 / desync
       }
     }
-    std::fprintf(stderr, "[pm4]   -> %u draw/dispatch packets\n", draws);
+    BASE_LOGI("pm4", "  -> {} draw/dispatch packets", draws);
   }
 }
 }  // namespace
@@ -275,7 +276,7 @@ int PS4ABI sceGnmAreSubmitsAllowed() { return 1; }
 int PS4ABI sceGnmDingDong(uint32_t ringId, uint32_t offset) {
   static int n = 0;
   if (kDingDong && n++ < 20)
-    std::fprintf(stderr, "[gnm] sceGnmDingDong ring=%u offset=%#x\n", ringId, offset);
+    BASE_LOGI("gnm", "sceGnmDingDong ring={} offset={:#x}", ringId, offset);
   return 0;
 }
 

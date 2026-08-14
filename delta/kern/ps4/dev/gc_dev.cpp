@@ -2,6 +2,9 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <mutex>
 #include <cstdio>
 #include <cstdlib>
@@ -76,9 +79,9 @@ static void completeFlipLabels(uint64_t flipPtr) {
     if (addr) {
       *reinterpret_cast<uint64_t *>(addr) = value;
       if (kGcFlip)
-        std::printf("[gc]   flip label [%#lx] = %#lx\n",
-                    static_cast<unsigned long>(addr),
-                    static_cast<unsigned long>(value));
+        BASE_LOGI("gc", "  flip label [{:#x}] = {:#x}",
+                  static_cast<unsigned long>(addr),
+                  static_cast<unsigned long>(value));
     }
   }
 }
@@ -104,8 +107,8 @@ static void printGuestCaller() {
       auto &mi = m->getInfo();
       auto base = (uintptr_t)mi.textSeg.addr;
       if (base && v >= base && v < base + mi.textSeg.size) {
-        std::printf("[gc]   caller[%d] %s+%#lx\n", printed, mi.name.c_str(),
-                    v - base);
+        BASE_LOGI("gc", "  caller[{}] {}+{:#x}", printed, mi.name.c_str(),
+                  v - base);
         last = v;
         printed++;
         break;
@@ -166,13 +169,13 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     static int flipDumps = 0;
     if (kGcFlip && flipDumps < 8) {
       flipDumps++;
-      printf("[gc] flip pid=%x count=%u descPtr=%lx eopVal=%lx wait=%x\n",
-             a->pid, a->count, (unsigned long)a->descPtr,
-             (unsigned long)a->eopVal, a->wait);
+      BASE_LOGI("gc", "flip pid={:x} count={} descPtr={:x} eopVal={:x} wait={:x}",
+                a->pid, a->count, (unsigned long)a->descPtr,
+                (unsigned long)a->eopVal, a->wait);
       if (a->descPtr && a->count) {
         auto *d = reinterpret_cast<const uint32_t *>(a->descPtr);
-        printf("[gc]   desc[0..7]: %x %x %x %x %x %x %x %x\n", d[0], d[1], d[2],
-               d[3], d[4], d[5], d[6], d[7]);
+        BASE_LOGI("gc", "  desc[0..7]: {:x} {:x} {:x} {:x} {:x} {:x} {:x} {:x}",
+                  d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
       }
     }
     prosperity_gc_submit(reinterpret_cast<const void *>(a->descPtr), a->count);
@@ -273,7 +276,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
       traceInfo = allocLowGuest(0x100);  // zero-filled; [+0] = trace flag (off)
     auto args = static_cast<uint64_t *>(data);
     *args = reinterpret_cast<uint64_t>(traceInfo);
-    printf("gc ioctl(%x): trace-info -> %p\n", cmd, (void *)traceInfo);
+    BASE_LOGI("gc", "ioctl({:x}): trace-info -> {:p}", cmd, traceInfo);
     return 0;
   }
   case 0xC030810D:   // sceGnmMapComputeQueue
@@ -293,10 +296,11 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     const auto* args = static_cast<const Args*>(data);
     if (kGcTrace) {
       const auto* words = static_cast<const uint32_t*>(data);
-      std::fprintf(stderr, "[gc] map compute queue ioctl=%#x:", cmd);
+      base::String wordsOut;
+      base::FormatTo(wordsOut, "map compute queue ioctl={:#x}:", cmd);
       for (uint32_t i = 0; i < 12; i++)
-        std::fprintf(stderr, " %08x", words[i]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(wordsOut, " {:08x}", words[i]);
+      BASE_LOGI("gc", "{}", wordsOut.c_str());
     }
     if (kGcAcb && args && args->ringSizeLog2Dw < 31) {
       const uint32_t ring_size_dw = 1u << args->ringSizeLog2Dw;
@@ -370,8 +374,8 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
       static uint32_t traced = 0;
       if (traced++ < 100) {
         const auto* words = static_cast<const uint32_t*>(data);
-        std::fprintf(stderr, "[gc] DingDong: %08x %08x %08x %08x\n", words[0],
-                     words[1], words[2], words[3]);
+        BASE_LOGI("gc", "DingDong: {:08x} {:08x} {:08x} {:08x}", words[0],
+                  words[1], words[2], words[3]);
       }
     }
     if (kGcAcb && data) {
@@ -391,13 +395,13 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
               continue;
             const auto *ring = reinterpret_cast<const uint32_t *>(q.ringBase);
             const bool readable = utl::isMemoryRangeMapped(ring, 16);
-            std::fprintf(stderr,
-                         "[acbcensus] %u/%u/%u read=%#x ring=%08x %08x %08x "
-                         "%08x%s\n",
-                         q.me, q.pipe, q.queue, q.readOffsetDw,
-                         readable ? ring[0] : 0, readable ? ring[1] : 0,
-                         readable ? ring[2] : 0, readable ? ring[3] : 0,
-                         readable ? "" : " (ring unmapped)");
+            BASE_LOGI("acbcensus",
+                      "{}/{}/{} read={:#x} ring={:08x} {:08x} {:08x} "
+                      "{:08x}{}",
+                      q.me, q.pipe, q.queue, q.readOffsetDw,
+                      readable ? ring[0] : 0, readable ? ring[1] : 0,
+                      readable ? ring[2] : 0, readable ? ring[3] : 0,
+                      readable ? "" : " (ring unmapped)");
           }
           std::fflush(stderr);
         }
@@ -424,11 +428,12 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
             // set of ring IBs (DELTA_GC_TRACE_MAX=0 keeps the old 100).
             static uint32_t traced_commands = 0;
             if (traced_commands++ < (kGcTraceMax ? kGcTraceMax : 100u)) {
-              std::fprintf(stderr, "[gc] ACB %u/%u/%u %#x..%#x:", entry.me,
-                           entry.pipe, entry.queue, entry.readOffsetDw, next);
+              base::String acbWords;
+              base::FormatTo(acbWords, "ACB {}/{}/{} {:#x}..{:#x}:", entry.me,
+                             entry.pipe, entry.queue, entry.readOffsetDw, next);
               for (uint32_t word : commands)
-                std::fprintf(stderr, " %08x", word);
-              std::fprintf(stderr, "\n");
+                base::FormatTo(acbWords, " {:08x}", word);
+              BASE_LOGI("gc", "{}", acbWords.c_str());
             }
           }
           prosperity_gc_submit_acb(commands.data(), available * 4);
@@ -446,7 +451,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // 0x208e/0x208f) and dumps the user debug registers.
                       // Debug-only, never writes back; log the tag and succeed.
     if (kGcTrace && data)
-      printf("[gc] coredump reason=%#x\n", *static_cast<uint32_t *>(data));
+      BASE_LOGI("gc", "coredump reason={:#x}", *static_cast<uint32_t *>(data));
     return 0;
   }
   case 0xC0848119: {
@@ -459,9 +464,9 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
       uint32_t unknown_80;
     };
     auto args = static_cast<argl *>(data);
-    printf("gc ioctl(%x): %x, %x, %x, %x, %x\n", cmd, args->unknown_00,
-           args->unknown_04, args->unknown_08, args->unknown_0C,
-           args->unknown_80);
+    BASE_LOGI("gc", "ioctl({:x}): {:x}, {:x}, {:x}, {:x}, {:x}", cmd,
+              args->unknown_00, args->unknown_04, args->unknown_08,
+              args->unknown_0C, args->unknown_80);
     return 0;
   }
   }
@@ -473,7 +478,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   static int unhandledLogged = 0;
   if (kGcTrace || unhandledLogged < 32) {
     unhandledLogged++;
-    printf("[gc] UNHANDLED ioctl(%x) data=%p\n", cmd, data);
+    BASE_LOGI("gc", "UNHANDLED ioctl({:x}) data={:p}", cmd, data);
   }
   // Zero the output buffer of an unhandled OUT/INOUT ioctl. The driver reads the
   // buffer back as a query result (capability counts, status words, etc.); left
@@ -540,8 +545,8 @@ void gcDevice::drainQueues(uint32_t budget_dw) {
                                    sizeof(uint32_t)))
         *reinterpret_cast<uint32_t *>(q.readPtr) = off;
       if (kGcTrace)
-        std::fprintf(stderr, "[acbscan] %u/%u/%u drained %u dwords -> %#x\n",
-                     q.me, q.pipe, q.queue, consumed, off);
+        BASE_LOGI("acbscan", "{}/{}/{} drained {} dwords -> {:#x}", q.me,
+                  q.pipe, q.queue, consumed, off);
     }
   }
 }

@@ -18,6 +18,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/options.h>
 
 namespace {
@@ -233,8 +237,8 @@ bool CreateRtImage(RTarget& t,
   // RT address on the PS5 path) would otherwise feed the driver an invalid
   // image and hard-crash it.
   if (w > 8192 || h > 8192 || fmt == VK_FORMAT_UNDEFINED) {
-    std::fprintf(stderr, "[gpuvk] skip bad RT %#lx %ux%u fmt=%d\n",
-                 (unsigned long)base, w, h, (int)fmt);
+    BASE_LOGI("gpuvk", "skip bad RT {:#x} {}x{} fmt={}", (unsigned long)base,
+              w, h, (int)fmt);
     return false;
   }
   t.w = w;
@@ -298,8 +302,8 @@ bool CreateRtImage(RTarget& t,
     }
   }
   ClearNewRt(t);
-  std::fprintf(stderr, "[gpuvk] new RT %#lx %ux%u fmt=%d\n",
-               (unsigned long)base, w, h, (int)fmt);
+  BASE_LOGI("gpuvk", "new RT {:#x} {}x{} fmt={}", (unsigned long)base, w, h,
+            (int)fmt);
   NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)t.image, "rt %#lx %ux%u fmt=%d",
              (unsigned long)base, w, h, (int)fmt);
   return true;
@@ -337,11 +341,11 @@ RTarget* ActivateRtVariant(RTarget& live,
     RTarget t;
     if (!CreateRtImage(t, base, w, h, fmt))
       return nullptr;
-    std::fprintf(stderr,
-                 "[gpuvk] RT alias %#lx: have %ux%u fmt=%d, requested %ux%u "
-                 "fmt=%d -> own image\n",
-                 (unsigned long)base, live.w, live.h, (int)live.fmt, w, h,
-                 (int)fmt);
+    BASE_LOGI("gpuvk",
+              "RT alias {:#x}: have {}x{} fmt={}, requested {}x{} fmt={} -> "
+              "own image",
+              (unsigned long)base, live.w, live.h, (int)live.fmt, w, h,
+              (int)fmt);
     parked.push_back(t);
     alt = &parked.back();
     RegisterRtPages(base, w, h, fmt);
@@ -381,18 +385,18 @@ RTarget* GetRT(uint64_t base, uint32_t w, uint32_t h, VkFormat fmt) {
   if (g_rts.size() >= 64) {
     static int n = 0;
     if (n++ < 4)
-      std::fprintf(stderr,
-                   "[gpuvk] RT table full (64) -- dropping %#lx %ux%u fmt=%d "
-                   "and every draw that targets it\n",
-                   (unsigned long)base, w, h, (int)fmt);
+      BASE_LOGI("gpuvk",
+                "RT table full (64) -- dropping {:#x} {}x{} fmt={} and every "
+                "draw that targets it",
+                (unsigned long)base, w, h, (int)fmt);
     return nullptr;
   }
   RTarget t;
   if (!CreateRtImage(t, base, w, h, fmt)) {
     static int n = 0;
     if (n++ < 8)
-      std::fprintf(stderr, "[gpuvk] RT image create FAILED %#lx %ux%u fmt=%d\n",
-                   (unsigned long)base, w, h, (int)fmt);
+      BASE_LOGI("gpuvk", "RT image create FAILED {:#x} {}x{} fmt={}",
+                (unsigned long)base, w, h, (int)fmt);
     return nullptr;
   }
   g_rts[base] = t;
@@ -558,8 +562,7 @@ bool CreateDepthImage(DepthTarget& t,
       vkUpdateDescriptorSets(g_dev.device, 1, &wr, 0, nullptr);
     }
   }
-  std::fprintf(stderr, "[gpuvk] new depth %#lx %ux%u\n", (unsigned long)base, w,
-               h);
+  BASE_LOGI("gpuvk", "new depth {:#x} {}x{}", (unsigned long)base, w, h);
   NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)t.image, "depth %#lx %ux%u",
              (unsigned long)base, w, h);
   return true;
@@ -603,10 +606,9 @@ DepthTarget* ActivateDepthVariant(DepthTarget& live,
     DepthTarget t;
     if (!CreateDepthImage(t, base, w, h, stencil_base))
       return covers(&live);
-    std::fprintf(stderr,
-                 "[gpuvk] depth alias %#lx: have %ux%u, requested %ux%u -> "
-                 "own image\n",
-                 (unsigned long)base, live.w, live.h, w, h);
+    BASE_LOGI("gpuvk",
+              "depth alias {:#x}: have {}x{}, requested {}x{} -> own image",
+              (unsigned long)base, live.w, live.h, w, h);
     parked.push_back(t);
     alt = &parked.back();
   }
@@ -765,14 +767,14 @@ uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h) {
   if (kResolveTrace && ties) {
     static std::atomic<uint64_t> n{0};
     if (n.fetch_add(1) < 40)
-      std::fprintf(stderr,
-                   "[resolve] AMBIGUOUS %#lx %ux%u: %u candidates, %u tied at "
-                   "score %ld -- chose %#lx over %#lx\n",
-                   (unsigned long)addr, w, h, candidates, ties, best_score,
-                   (unsigned long)best, (unsigned long)tie_with);
+      BASE_LOGI("resolve",
+                "AMBIGUOUS {:#x} {}x{}: {} candidates, {} tied at score {} -- "
+                "chose {:#x} over {:#x}",
+                (unsigned long)addr, w, h, candidates, ties, best_score,
+                (unsigned long)best, (unsigned long)tie_with);
     else if ((n.load() % 20000) == 0)
-      std::fprintf(stderr, "[resolve] %llu ambiguous resolves so far\n",
-                   (unsigned long long)n.load());
+      BASE_LOGI("resolve", "{} ambiguous resolves so far",
+                (unsigned long long)n.load());
   }
   return best;
 }
@@ -852,14 +854,14 @@ uint64_t ResolveSampledDepth(uint64_t addr, uint32_t w, uint32_t h) {
   if (kDepthResolveTrace && addr == (uint64_t)kDepthResolveTrace) {
     static int n = 0;
     if (n++ < 6) {
-      std::fprintf(stderr, "[dres] addr=%#lx %ux%u req=%lu -> %#lx; depths:",
-                   (unsigned long)addr, w, h, (unsigned long)req_size,
-                   (unsigned long)best);
+      base::String depths;
       for (const auto& [base, depth] : g_depths)
-        std::fprintf(stderr, " [%#lx %ux%u guest=%ux%u lf=%d]",
-                     (unsigned long)base, depth.w, depth.h, depth.guest_w,
-                     depth.guest_h, depth.last_frame);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(depths, " [{:#x} {}x{} guest={}x{} lf={}]",
+                       (unsigned long)base, depth.w, depth.h, depth.guest_w,
+                       depth.guest_h, depth.last_frame);
+      BASE_LOGI("dres", "addr={:#x} {}x{} req={} -> {:#x}; depths:{}",
+                (unsigned long)addr, w, h, (unsigned long)req_size,
+                (unsigned long)best, depths.c_str());
     }
   }
   return best;
@@ -979,16 +981,14 @@ bool BeginRegion(const uint64_t* mrt_base,
           (rt.clear_pending || !rt.ever_rendered)) {
         static int n = 0;
         if (n++ < kClearTrace)
-          std::fprintf(
-              stderr,
-              "[clear] f%d draw#%u RT %#lx %ux%u loadOp=CLEAR "
-              "value=(%g %g %g %g) pending=%d(%s) ever=%d\n",
-              g_frame.num, g_frame.draws, (unsigned long)mrt_base[i], rt.w,
-              rt.h,
-              rt.clear_value.float32[0],
-              rt.clear_value.float32[1], rt.clear_value.float32[2],
-              rt.clear_value.float32[3], (int)rt.clear_pending, rt.clear_src,
-              (int)rt.ever_rendered);
+          BASE_LOGI("clear",
+                    "f{} draw#{} RT {:#x} {}x{} loadOp=CLEAR value=({} {} {} "
+                    "{}) pending={}({}) ever={}",
+                    g_frame.num, g_frame.draws, (unsigned long)mrt_base[i],
+                    rt.w, rt.h, rt.clear_value.float32[0],
+                    rt.clear_value.float32[1], rt.clear_value.float32[2],
+                    rt.clear_value.float32[3], (int)rt.clear_pending,
+                    rt.clear_src, (int)rt.ever_rendered);
       }
       color.loadOp = (rt.clear_pending || !rt.ever_rendered)
                          ? VK_ATTACHMENT_LOAD_OP_CLEAR
@@ -1037,10 +1037,10 @@ bool BeginRegion(const uint64_t* mrt_base,
   if (!dt && depth_base && kRegTrace) {
     static int n = 0;
     if (n++ < 8)
-      std::fprintf(stderr,
-                   "[region] depth %#lx REQUESTED BUT NOT BOUND -- every depth "
-                   "write in this region is dropped\n",
-                   (unsigned long)depth_base);
+      BASE_LOGI("region",
+                "depth {:#x} REQUESTED BUT NOT BOUND -- every depth write in "
+                "this region is dropped",
+                (unsigned long)depth_base);
   }
   if (dt) {
     const bool clear_depth = dt->clear_pending || !dt->used_this_frame;
@@ -1080,14 +1080,13 @@ bool BeginRegion(const uint64_t* mrt_base,
     if (kRegTrace) {
       static int n = 0;
       if (n++ < 200)
-        std::fprintf(stderr,
-                     "[region] depth %#lx %ux%u load=%s store=%s clear=%g "
-                     "read_only=%d layout=%d rt=%#lx\n",
-                     (unsigned long)depth_base, dt->w, dt->h,
-                     clear_depth ? "CLEAR" : "LOAD",
-                     read_only ? "NONE" : "STORE",
-                     depth_att.clearValue.depthStencil.depth, (int)read_only,
-                     (int)depth_layout, (unsigned long)base);
+        BASE_LOGI("region",
+                  "depth {:#x} {}x{} load={} store={} clear={} read_only={} "
+                  "layout={} rt={:#x}",
+                  (unsigned long)depth_base, dt->w, dt->h,
+                  clear_depth ? "CLEAR" : "LOAD", read_only ? "NONE" : "STORE",
+                  depth_att.clearValue.depthStencil.depth, (int)read_only,
+                  (int)depth_layout, (unsigned long)base);
     }
     dt->clear_pending = false;
     dt->used_this_frame = true;
@@ -1168,10 +1167,10 @@ bool BeginRegion(const uint64_t* mrt_base,
   }
   g_region.cur_rt = base;
   if (kRegTrace && w < 1280)
-    std::fprintf(stderr, "[reg] f%d begin RT %#lx %ux%u mrt=%u clear=%d\n",
-                 g_frame.num, (unsigned long)base, w, h, g_region.cur_mrt_count,
-                 g_region.cur_mrt_count &&
-                     colors[0].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    BASE_LOGI("reg", "f{} begin RT {:#x} {}x{} mrt={} clear={}", g_frame.num,
+              (unsigned long)base, w, h, g_region.cur_mrt_count,
+              g_region.cur_mrt_count &&
+                  colors[0].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
   return true;
 }
 
@@ -1207,11 +1206,11 @@ void NoteMemoryFill(Renderer& renderer,
     rt.clear_value.float32[3] = ((value >> 24) & 0xFF) * inv;
     static int n = 0;
     if (kGpuFilltrace && n++ < kGpuFilltrace)
-      std::fprintf(stderr,
-                   "[fill] f%d draw#%u RT %#lx cleared by fill %08x "
-                   "(base=%#lx %lu bytes)\n",
-                   g_frame.num, g_frame.draws, (unsigned long)rt_base,
-                   value, (unsigned long)base, (unsigned long)bytes);
+      BASE_LOGI("fill",
+                "f{} draw#{} RT {:#x} cleared by fill {:08x} (base={:#x} {} "
+                "bytes)",
+                g_frame.num, g_frame.draws, (unsigned long)rt_base, value,
+                (unsigned long)base, (unsigned long)bytes);
   };
   for (auto& kv : g_rts) {
     note(kv.second, kv.first);

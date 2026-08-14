@@ -25,6 +25,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -791,12 +795,12 @@ void PackTexPixels(uint8_t* linear,
                     df);
         std::fclose(df);
       }
-      std::fprintf(stderr,
-                   "[texdumpbase] %#lx mip0 %ux%u texel=%ux%u elem=%u "
-                   "tiling=%u mips=%u -> %s\n",
-                   (unsigned long)base, layout.mips[0].width,
-                   layout.mips[0].height, texel_w, texel_h, elem,
-                   layout.tiling_idx, layout.mip_levels, dp);
+      BASE_LOGI("texdumpbase",
+                "{:#x} mip0 {}x{} texel={}x{} elem={} "
+                "tiling={} mips={} -> {}",
+                (unsigned long)base, layout.mips[0].width,
+                layout.mips[0].height, texel_w, texel_h, elem,
+                layout.tiling_idx, layout.mip_levels, dp);
     }
   }
   // DELTA_GPU_TEXDUMP_UPLOAD: dump the post-detile pixels that Vulkan
@@ -810,13 +814,14 @@ void PackTexPixels(uint8_t* linear,
   if (kDumpUpload && dump_small_count < 24 && elem == 4 && texel_w <= 32 &&
       texel_h <= 32 && texel_w >= kDumpMin && texel_h >= kDumpMin) {
     dump_small_count++;
-    std::fprintf(stderr,
-                 "[texsmall] base=%#lx %ux%u layers=%u tiling=%u pitch=%u "
-                 "stored_h=%u raw:",
-                 (unsigned long)base, texel_w, texel_h, layout.layers,
-                 layout.tiling_idx, layout.mips[0].pitch,
-                 layout.mips[0].stored_height);
-    std::fprintf(stderr, "\n");
+    base::String line;
+    base::FormatTo(line,
+                   "base={:#x} {}x{} layers={} tiling={} pitch={} "
+                   "stored_h={} raw:",
+                   (unsigned long)base, texel_w, texel_h, layout.layers,
+                   layout.tiling_idx, layout.mips[0].pitch,
+                   layout.mips[0].stored_height);
+    base::FormatTo(line, "\n");
     char rp[256];
     std::snprintf(rp, sizeof(rp), "%s/rawblk_%02d_%ux%u.bin", DumpDir(),
                   dump_small_count - 1, texel_w, texel_h);
@@ -828,13 +833,15 @@ void PackTexPixels(uint8_t* linear,
       std::fclose(rf);
     }
     for (uint32_t y = 0; y < texel_h; y++) {
-      std::fprintf(stderr, "[texsmall]  ");
+      base::FormatTo(line, "  ");
       for (uint32_t x = 0; x < texel_w; x++) {
         const uint8_t* p = linear + (static_cast<uint64_t>(y) * texel_w + x) * 4;
-        std::fprintf(stderr, "%02x%02x%02x%02x ", p[0], p[1], p[2], p[3]);
+        base::FormatTo(line, "{:02x}{:02x}{:02x}{:02x} ", p[0], p[1], p[2],
+                       p[3]);
       }
-      std::fprintf(stderr, "\n");
+      base::FormatTo(line, "\n");
     }
+    BASE_LOGI("texsmall", "{}", line.c_str());
   }
   static int dump_upload_count = 0;
   if (kDumpUpload && dump_upload_count < 32 && elem == 4 && texel_w >= 128 &&
@@ -893,11 +900,11 @@ void PackTexPixels(uint8_t* linear,
         std::fclose(alpha);
       }
     }
-    std::fprintf(stderr,
-                 "[texupload] %d base=%#lx %ux%u rgb=%lu alpha=%lu/%lu -> %s\n",
-                 dump_upload_count, (unsigned long)base, texel_w, texel_h,
-                 (unsigned long)rgb_nonzero, (unsigned long)alpha_nonzero,
-                 (unsigned long)pixels, path);
+    BASE_LOGI("texupload",
+              "{} base={:#x} {}x{} rgb={} alpha={}/{} -> {}",
+              dump_upload_count, (unsigned long)base, texel_w, texel_h,
+              (unsigned long)rgb_nonzero, (unsigned long)alpha_nonzero,
+              (unsigned long)pixels, path);
     dump_upload_count++;
   }
 }
@@ -991,12 +998,12 @@ bool UploadTexPixelsImmediate(VkImage img,
           : up_submit;
   if (end_result != VK_SUCCESS || up_submit != VK_SUCCESS ||
       up_wait != VK_SUCCESS) {
-    std::fprintf(stderr,
-                 "[gpuvk] tex upload DEVICE FAULT: submit=%d wait=%d "
-                 "base=%#lx %ux%u mips=%u layers=%u bytes=%llu\n",
-                 (int)up_submit, (int)up_wait, (unsigned long)base,
-                 layout.mips[0].width, layout.mips[0].height, layout.mip_levels,
-                 layout.layers, (unsigned long long)sz);
+    BASE_LOGI("gpuvk",
+              "tex upload DEVICE FAULT: submit={} wait={} "
+              "base={:#x} {}x{} mips={} layers={} bytes={}",
+              (int)up_submit, (int)up_wait, (unsigned long)base,
+              layout.mips[0].width, layout.mips[0].height, layout.mip_levels,
+              layout.layers, (unsigned long long)sz);
     ReportDeviceFault(g_dev);
   }
   uint64_t _tex_dt = NowNs() - _t0;
@@ -1148,13 +1155,14 @@ VkDescriptorSet GetTexture(uint64_t base,
             first_nz = i;
             break;
           }
-      std::fprintf(stderr, "[texwatch] f%d %#lx %ux%ux%u span=%lu first_nz=%ld:",
-                   g_frame.num, (unsigned long)base, w, h, depth,
-                   (unsigned long)span,
-                   first_nz == span ? -1L : (long)first_nz);
+      base::String line;
+      base::FormatTo(line, "f{} {:#x} {}x{}x{} span={} first_nz={}:",
+                     g_frame.num, (unsigned long)base, w, h, depth,
+                     (unsigned long)span,
+                     first_nz == span ? -1L : (long)first_nz);
       for (uint32_t i = 0; i < 32; i++)
-        std::fprintf(stderr, " %02x", p[i]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(line, " {:02x}", p[i]);
+      BASE_LOGI("texwatch", "{}", line.c_str());
     }
   }
   if (!w || !h || w > 8192 || h > 8192)
@@ -1175,9 +1183,8 @@ VkDescriptorSet GetTexture(uint64_t base,
       if (kTexFail) {
         static int n = 0;
         if (n++ < 12)
-          std::fprintf(stderr,
-                       "[texfail] volume %#lx %ux%ux%u (device max %u)\n",
-                       (unsigned long)base, w, h, depth, max_3d);
+          BASE_LOGI("texfail", "volume {:#x} {}x{}x{} (device max {})",
+                    (unsigned long)base, w, h, depth, max_3d);
       }
       return VK_NULL_HANDLE;
     }
@@ -1189,8 +1196,8 @@ VkDescriptorSet GetTexture(uint64_t base,
     if (kTexFail) {
       static int n = 0;
       if (n++ < 12)
-        std::fprintf(stderr, "[texfail] layers %#lx layers=%u base_array=%u\n",
-                     (unsigned long)base, layers, base_array);
+        BASE_LOGI("texfail", "layers {:#x} layers={} base_array={}",
+                  (unsigned long)base, layers, base_array);
     }
     return VK_NULL_HANDLE;
   }
@@ -1231,10 +1238,10 @@ VkDescriptorSet GetTexture(uint64_t base,
     if (kTexFail) {
       static int n = 0;
       if (n++ < 12)
-        std::fprintf(
-            stderr,
-            "[texfail] layout %#lx %ux%u pitch=%u tiling=%u elem=%u mips=%u\n",
-            (unsigned long)base, w, h, lpitch, tiling, elem_bytes, mip_levels);
+        BASE_LOGI("texfail",
+                  "layout {:#x} {}x{} pitch={} tiling={} elem={} mips={}",
+                  (unsigned long)base, w, h, lpitch, tiling, elem_bytes,
+                  mip_levels);
     }
     return VK_NULL_HANDLE;
   }
@@ -1243,10 +1250,9 @@ VkDescriptorSet GetTexture(uint64_t base,
     if (kTexFail) {
       static int n = 0;
       if (n++ < 12)
-        std::fprintf(stderr,
-                     "[texfail] range %#lx %ux%u footprint=%lu (max %lu)\n",
-                     (unsigned long)base, w, h, (unsigned long)footprint,
-                     (unsigned long)kMaxTextureBytes);
+        BASE_LOGI("texfail", "range {:#x} {}x{} footprint={} (max {})",
+                  (unsigned long)base, w, h, (unsigned long)footprint,
+                  (unsigned long)kMaxTextureBytes);
     }
     return VK_NULL_HANDLE;
   }
@@ -1270,7 +1276,7 @@ VkDescriptorSet GetTexture(uint64_t base,
     if (std::chrono::duration_cast<std::chrono::seconds>(now - last).count() >=
         kTexCensus) {
       last = now;
-      std::fprintf(stderr, "[texcensus] %zu surfaces\n", tbl.size());
+      BASE_LOGI("texcensus", "{} surfaces", tbl.size());
       for (const auto& kv : tbl) {
         const auto* p = reinterpret_cast<const uint64_t*>(kv.first);
         uint64_t nz = 0;
@@ -1278,13 +1284,13 @@ VkDescriptorSet GetTexture(uint64_t base,
           for (uint64_t i = 0; i < kv.second.footprint / 8; i++)
             if (p[i])
               nz++;
-        std::fprintf(stderr,
-                     "[texcensus] %#lx %5ux%-5u dfmt=%2u nfmt=%u tile=%2u "
-                     "mips=%2u bytes=%-9lu nzq=%lu binds=%lu\n",
-                     (unsigned long)kv.first, kv.second.w, kv.second.h,
-                     kv.second.dfmt, kv.second.nfmt, kv.second.tiling,
-                     kv.second.mips, (unsigned long)kv.second.footprint,
-                     (unsigned long)nz, (unsigned long)kv.second.binds);
+        BASE_LOGI("texcensus",
+                  "{:#x} {:5}x{:<5} dfmt={:2} nfmt={} tile={:2} "
+                  "mips={:2} bytes={:<9} nzq={} binds={}",
+                  (unsigned long)kv.first, kv.second.w, kv.second.h,
+                  kv.second.dfmt, kv.second.nfmt, kv.second.tiling,
+                  kv.second.mips, (unsigned long)kv.second.footprint,
+                  (unsigned long)nz, (unsigned long)kv.second.binds);
       }
       std::fflush(stderr);
     }
@@ -1307,8 +1313,8 @@ VkDescriptorSet GetTexture(uint64_t base,
       if (FILE* f = std::fopen(p, "wb")) {
         std::fwrite(reinterpret_cast<const void*>(base), 1, footprint, f);
         std::fclose(f);
-        std::fprintf(stderr, "[texraw] %s (%llu bytes)\n", p,
-                     (unsigned long long)footprint);
+        BASE_LOGI("texraw", "{} ({} bytes)", p,
+                  (unsigned long long)footprint);
       }
     }
   }
@@ -1340,8 +1346,8 @@ VkDescriptorSet GetTexture(uint64_t base,
         }
         std::fclose(f);
       }
-      std::fprintf(stderr, "[texdump] %d base=%#lx %ux%u nonzero=%lu/8192\n",
-                   tdn, (unsigned long)base, w, h, (unsigned long)nz);
+      BASE_LOGI("texdump", "{} base={:#x} {}x{} nonzero={}/8192",
+                tdn, (unsigned long)base, w, h, (unsigned long)nz);
       tdn++;
     }
   }
@@ -1361,11 +1367,11 @@ VkDescriptorSet GetTexture(uint64_t base,
       if (kTexFail) {
         static int n = 0;
         if (n++ < 12)
-          std::fprintf(stderr,
-                       "[texfail] unmapped %#lx %ux%ux%u tiling=%u mips=%u "
-                       "footprint=%lu\n",
-                       (unsigned long)base, w, h, is_3d ? depth : layers,
-                       tiling, mip_levels, (unsigned long)footprint);
+          BASE_LOGI("texfail",
+                    "unmapped {:#x} {}x{}x{} tiling={} mips={} "
+                    "footprint={}",
+                    (unsigned long)base, w, h, is_3d ? depth : layers,
+                    tiling, mip_levels, (unsigned long)footprint);
       }
       return VK_NULL_HANDLE;
     }
@@ -1377,9 +1383,9 @@ VkDescriptorSet GetTexture(uint64_t base,
         if (kTexFail) {
           static int n = 0;
           if (n++ < 12)
-            std::fprintf(stderr, "[texfail] refresh %#lx %ux%ux%u tiling=%u\n",
-                         (unsigned long)base, w, h, is_3d ? depth : layers,
-                         tiling);
+            BASE_LOGI("texfail", "refresh {:#x} {}x{}x{} tiling={}",
+                      (unsigned long)base, w, h, is_3d ? depth : layers,
+                      tiling);
         }
         return VK_NULL_HANDLE;
       }
@@ -1431,9 +1437,9 @@ VkDescriptorSet GetTexture(uint64_t base,
       if (kTexFail) {
         static int n = 0;
         if (n++ < 12)
-          std::fprintf(stderr, "[texfail] upload %#lx %ux%ux%u tiling=%u\n",
-                       (unsigned long)base, w, h, is_3d ? depth : layers,
-                       tiling);
+          BASE_LOGI("texfail", "upload {:#x} {}x{}x{} tiling={}",
+                    (unsigned long)base, w, h, is_3d ? depth : layers,
+                    tiling);
       }
       vkDestroyImage(g_dev.device, image_entry.image, nullptr);
       g_image_memory.Free(g_dev, image_entry.allocation);
@@ -1521,12 +1527,12 @@ VkImageView TexViewFor(const DrawInfo::DrawTex& t) {
     if (kTexFail) {
       static int n = 0;
       if (n++ < 16)
-        std::fprintf(stderr,
-                     "[texfail] %s %#lx %ux%ux%u dfmt=%u nfmt=%u tiling=%u "
-                     "mips=%u 3d=%d arr=%d\n",
-                     why, (unsigned long)t.base, t.w, t.h,
-                     t.is_3d ? t.depth : t.layers, t.dfmt, t.nfmt, t.tiling,
-                     t.mip_levels, (int)t.is_3d, (int)t.arrayed);
+        BASE_LOGI("texfail",
+                  "{} {:#x} {}x{}x{} dfmt={} nfmt={} tiling={} "
+                  "mips={} 3d={} arr={}",
+                  why, (unsigned long)t.base, t.w, t.h,
+                  t.is_3d ? t.depth : t.layers, t.dfmt, t.nfmt, t.tiling,
+                  t.mip_levels, (int)t.is_3d, (int)t.arrayed);
     }
     return VK_NULL_HANDLE;
   };
@@ -1690,12 +1696,12 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
         std::snprintf(mem, sizeof(mem), " [%08x %08x %08x %08x]", w[0], w[1],
                       w[2], w[3]);
       }
-      std::fprintf(
-          stderr,
-          "[texmiss] ps=%#lx bind=%u base=%#lx %ux%u dfmt=%u nfmt=%u "
-          "tiling=%u layers=%u mips=%u arrayed=%d src=%#lx%s\n",
+      BASE_LOGI(
+          "texmiss",
+          "ps={:#x} bind={} base={:#x} {}x{} dfmt={} nfmt={} "
+          "tiling={} layers={} mips={} arrayed={} src={:#x}{}",
           (unsigned long)d.ps_addr, i, (unsigned long)t.base, t.w, t.h,
-          t.dfmt, t.nfmt, t.tiling, t.layers, t.mip_levels, t.arrayed,
+          t.dfmt, t.nfmt, t.tiling, t.layers, t.mip_levels, (int)t.arrayed,
           (unsigned long)t.src, mem);
     }
     if (d.texs[i].storage && !v)

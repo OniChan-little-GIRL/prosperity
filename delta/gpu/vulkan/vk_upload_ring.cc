@@ -14,6 +14,8 @@
 #include <cstring>
 #include <limits>
 
+#include <base/logging.h>
+
 namespace gpu::vk {
 
 VkDeviceSize VbRingBytes() {
@@ -69,13 +71,12 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     g_ring.ubo_align = 1;
   if (props.limits.maxDescriptorSetUniformBuffersDynamic < kCbufBindings ||
       props.limits.maxPerStageDescriptorUniformBuffers < kCbufBindings)
-    std::fprintf(stderr,
-                 "[gpuvk] only %u/%u dynamic UBOs available, need %u -- set 1 "
-                 "is an out-of-spec layout on this device and a cbuffer may "
-                 "silently read zero\n",
-                 props.limits.maxDescriptorSetUniformBuffersDynamic,
-                 props.limits.maxPerStageDescriptorUniformBuffers,
-                 kCbufBindings);
+    BASE_LOGI("gpuvk", "only {}/{} dynamic UBOs available, need {} -- set 1 "
+                       "is an out-of-spec layout on this device and a cbuffer "
+                       "may silently read zero",
+              props.limits.maxDescriptorSetUniformBuffersDynamic,
+              props.limits.maxPerStageDescriptorUniformBuffers,
+              kCbufBindings);
   {
     VkBufferCreateInfo ub{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     ub.size = kUboRing;
@@ -167,11 +168,10 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
         std::min<uint32_t>(props.limits.maxDescriptorSetStorageBuffersDynamic,
                            kRawBufBindings);
     if (g_ring.sbo_count < gpu::gcn::kMinGfxBuffers) {
-      std::fprintf(stderr,
-                   "[gpuvk] only %u dynamic storage buffers available, below "
-                   "the %u Vulkan floor: shaders reading raw buffers will "
-                   "decline\n",
-                   g_ring.sbo_count, gpu::gcn::kMinGfxBuffers);
+      BASE_LOGI("gpuvk", "only {} dynamic storage buffers available, below "
+                         "the {} Vulkan floor: shaders reading raw buffers "
+                         "will decline",
+                g_ring.sbo_count, gpu::gcn::kMinGfxBuffers);
       g_ring.sbo_count = gpu::gcn::kMinGfxBuffers;
     }
     gpu::gcn::SetMaxGfxBuffers(g_ring.sbo_count);
@@ -188,10 +188,10 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &sub};
       vkGetPhysicalDeviceProperties2(g_dev.phys, &p2);
       gpu::gcn::SetHostSubgroupSize(sub.subgroupSize);
-      std::fprintf(stderr, "[gpuvk] subgroup: %u lanes%s\n", sub.subgroupSize,
-                   gpu::gcn::WaveSplitsAcrossSubgroups()
-                       ? " (a GCN wave spans several)"
-                       : "");
+      BASE_LOGI("gpuvk", "subgroup: {} lanes{}", sub.subgroupSize,
+                gpu::gcn::WaveSplitsAcrossSubgroups()
+                    ? " (a GCN wave spans several)"
+                    : "");
     }
     g_ring.sbo_stride = (kRawBufWindow + g_ring.sbo_align - 1) &
                         ~(VkDeviceSize)(g_ring.sbo_align - 1);
@@ -266,10 +266,9 @@ bool EnsureRawBufferRing() {
     sw[i].pBufferInfo = &sbinfo[i];
   }
   vkUpdateDescriptorSets(g_dev.device, g_ring.sbo_count, sw, 0, nullptr);
-  std::fprintf(stderr,
-               "[gpuvk] raw-buffer ring: %llu MB, %u KB windows, %u bindings\n",
-               (unsigned long long)(kSboRing >> 20), kRawBufWindow >> 10,
-               g_ring.sbo_count);
+  BASE_LOGI("gpuvk", "raw-buffer ring: {} MB, {} KB windows, {} bindings",
+            (unsigned long long)(kSboRing >> 20), kRawBufWindow >> 10,
+            g_ring.sbo_count);
   return true;
 }
 

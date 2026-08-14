@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -188,7 +189,7 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
   auto *d = fdToDevice(fd);
   if (!d) {
     if (kRdall)
-      std::fprintf(stderr, "[pread] fd=%u off=%lld -> EBADF (no device)\n", fd, (long long)offset);
+      BASE_LOGI("pread", "fd={} off={} -> EBADF (no device)", fd, (long long)offset);
     return -SysError::eBADF;
   }
   struct timespec t0;
@@ -209,18 +210,17 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
   if (kRdall) {
     uint32_t f4 = 0;
     if (buf && r >= 4) f4 = *reinterpret_cast<const uint32_t *>(buf);
-    std::fprintf(stderr, "[pread] t=%ld fd=%u off=%lld nbytes=%#zx -> %lld buf=%p first4=%08x\n",
-                 (long)gettid(), fd, (long long)offset, (size_t)nbytes, (long long)r, buf, f4);
+    BASE_LOGI("pread", "t={} fd={} off={} nbytes={:#x} -> {} buf={:p} first4={:08x}",
+              (long)gettid(), fd, (long long)offset, (size_t)nbytes,
+              (long long)r, buf, f4);
   }
   // DELTA_QARBUF: where does streamed .qar data land? Reports the destination
   // buffer for reads on a *.qar fd, so we can tell whether textures stream into
   // a GPU-mapped region (0x81xx, directly bindable) or a low staging buffer that
   // still needs a copy/commit step the engine never performs.
   if (fd < 8192 && g_qarFd[fd] && kQarBuf) {
-    std::fprintf(stderr,
-                 "[qarbuf] fd=%u off=%lld nbytes=%#zx -> %lld buf=%p %ldus\n",
-                 fd, (long long)offset, (size_t)nbytes, (long long)r, buf,
-                 readUs);
+    BASE_LOGI("qarbuf", "fd={} off={} nbytes={:#x} -> {} buf={:p} {}us", fd,
+              (long long)offset, (size_t)nbytes, (long long)r, buf, readUs);
   }
   // DELTA_IOPROGRESS: throttled per-fd streaming high-water mark. FOX/FIOS2 streams
   // large world archives via pread; this shows whether that streaming is advancing
@@ -249,11 +249,11 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
     if (nowMs - e.lastMs >= 2000) {
       double mb = (e.maxOff - e.lastMax) / 1048576.0;
       double sec = (nowMs - e.lastMs) / 1000.0;
-      std::fprintf(stderr,
-                   "[ioprog] fd=%u off=%lld max=%lld (%.1f MB) +%.2f MB/s  new=%ld reread=%ld same=%ld\n",
-                   fd, (long long)offset, (long long)e.maxOff,
-                   e.maxOff / 1048576.0, sec > 0 ? mb / sec : 0.0,
-                   e.nNew, e.nReread, e.nSame);
+      BASE_LOGI("ioprog",
+                "fd={} off={} max={} ({:.1f} MB) +{:.2f} MB/s  new={} reread={} same={}",
+                fd, (long long)offset, (long long)e.maxOff,
+                e.maxOff / 1048576.0, sec > 0 ? mb / sec : 0.0,
+                e.nNew, e.nReread, e.nSame);
       e.lastMax = e.maxOff;
       e.lastMs = nowMs;
       e.nNew = e.nReread = e.nSame = 0;
@@ -414,13 +414,13 @@ int PS4ABI sys_unlink(const char *path) {
   // that rewrites a file by unlink+create reads back stale content otherwise.
   if (path && vfs::removeFile(path))
     return 0;
-  std::printf("[vfs] unlink('%s') ignored (read-only host)\n",
-              path ? path : "(null)");
+  BASE_LOGI("vfs", "unlink('{}') ignored (read-only host)",
+            path ? path : "(null)");
   return 0;
 }
 int PS4ABI sys_rmdir(const char *path) {
-  std::printf("[vfs] rmdir('%s') ignored (read-only host)\n",
-              path ? path : "(null)");
+  BASE_LOGI("vfs", "rmdir('{}') ignored (read-only host)",
+            path ? path : "(null)");
   return 0;
 }
 int PS4ABI sys_mkdir(const char *path, uint32_t mode) {
@@ -430,7 +430,7 @@ int PS4ABI sys_mkdir(const char *path, uint32_t mode) {
   // exist already does).
   if (path && vfs::makeDir(path)) {
     if (kVfsTrace)
-      std::fprintf(stderr, "[vfs] mkdir('%s') -> host\n", path);
+      BASE_LOGI("vfs", "mkdir('{}') -> host", path);
     return 0;
   }
   return 0;
@@ -440,8 +440,8 @@ int PS4ABI sys_rename(const char *from, const char *to) {
   base::String ht = to ? vfs::resolveWritable(to) : base::String();
   if (!hf.empty() && !ht.empty() && std::rename(hf.c_str(), ht.c_str()) == 0)
     return 0;
-  std::printf("[vfs] rename('%s' -> '%s') ignored (read-only host)\n",
-              from ? from : "(null)", to ? to : "(null)");
+  BASE_LOGI("vfs", "rename('{}' -> '{}') ignored (read-only host)",
+            from ? from : "(null)", to ? to : "(null)");
   return 0;
 }
 
@@ -468,7 +468,7 @@ int64_t PS4ABI sys_getdirentries(uint32_t fd, void *buf, size_t nbytes,
   auto *d = fdToDevice(fd);
   if (!d) {
     if (kVfsTrace)
-      std::fprintf(stderr, "[getdirentries] fd=%u BADF\n", fd);
+      BASE_LOGI("getdirentries", "fd={} BADF", fd);
     return -SysError::eBADF;
   }
   // The kernel validates buflen and returns EINVAL on a negative value.
@@ -483,9 +483,8 @@ int64_t PS4ABI sys_getdirentries(uint32_t fd, void *buf, size_t nbytes,
   if (r >= 0 && basep)
     *basep = r;
   if (kVfsTrace)
-    std::fprintf(stderr, "[getdirentries] fd=%u buf=%p n=%zu -> %lld basep=%lld\n",
-                 fd, buf, nbytes, (long long)r,
-                 basep ? (long long)*basep : -1);
+    BASE_LOGI("getdirentries", "fd={} buf={:p} n={} -> {} basep={}", fd, buf,
+              nbytes, (long long)r, basep ? (long long)*basep : -1);
   return r;
 }
 

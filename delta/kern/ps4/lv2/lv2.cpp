@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -96,7 +97,7 @@ moduleInfo *called_in(void *addr) {
 
     if (addrsafe <= (uintptr_t)(info.base + info.codeSize) &&
         (addrsafe >= (uintptr_t)info.base)) {
-      std::printf("%p called in %s\n", addr, info.name.c_str());
+      BASE_LOGI("nullhandler", "{:p} called in {}", addr, info.name.c_str());
       return &info;
     }
   }
@@ -116,8 +117,8 @@ static int PS4ABI null_handler() {
   static std::atomic<uint64_t> nulls{0};
   const uint64_t n = ++nulls;
   if (n == 1 || (g_scHist && n % 400 == 0)) {
-    std::printf(">>>>>>>>>>>>> NULL HANDLER called %llu times\n",
-                (unsigned long long)n);
+    BASE_LOGI("nullhandler", ">>>>>>>>>>>>> NULL HANDLER called {} times",
+              (unsigned long long)n);
     if (g_scHist)
       dumpSyscallHist();
   }
@@ -132,7 +133,7 @@ static int PS4ABI null_handler_notable() {
 #endif
   called_in(ret);
 
-  std::printf(">>>>>>>>>>>>> NULL HANDLER NULLTABLE CALLED BY %p\n", ret);
+  BASE_LOGI("nullhandler", ">>>>>>>>>>>>> NULL HANDLER NULLTABLE CALLED BY {:p}", ret);
   return 0;
 }
 
@@ -815,12 +816,12 @@ extern "C" uint64_t krnl_kstack_top() {
 }
 
 static void PS4ABI trace_syscall(const char *name, int index, void *addr) {
-  std::fprintf(stderr, "[syscall] %d %s\n", index, name);
+  BASE_LOGI("syscall", "{} {}", index, name);
 }
 
 static void PS4ABI trace_ret(int index, int64_t ret) {
-  std::fprintf(stderr, "[syscall]   -> %d returned %lld (%#llx)\n", index,
-               (long long)ret, (unsigned long long)ret);
+  BASE_LOGI("syscall", "  -> {} returned {} ({:#x})", index, (long long)ret,
+            (unsigned long long)ret);
 }
 
 // DELTA_SCERR_TRACE: emitted (when set) on the trampoline's error path so we can
@@ -829,8 +830,8 @@ static void PS4ABI trace_ret(int index, int64_t ret) {
 // error (0x80020000 | errno), e.g. errno 1 -> 0x80020001.
 static void PS4ABI trace_syscall_err(uint32_t sid, uint32_t err) {
   const char *name = syscall_getname(sid);
-  std::fprintf(stderr, "[syscallerr] %u %s -> errno %u (SCE %#010x)\n", sid,
-               name ? name : "?", err, 0x80020000u | err);
+  BASE_LOGI("syscallerr", "{} {} -> errno {} (SCE {:#010x})", sid,
+            name ? name : "?", err, 0x80020000u | err);
 }
 
 static uintptr_t emit_calltrace(const char *name, uint32_t sid,
@@ -905,13 +906,13 @@ extern "C" uint64_t g_sysHist[1024] = {};
 // emulator is normally SIGKILLed), so it is also dumped from the unimplemented
 // -syscall stub, which is where the question usually comes up.
 void dumpSyscallHist() {
-  std::fprintf(stderr, "[schist] syscall call counts:\n");
+  BASE_LOGI("schist", "syscall call counts:");
   for (int i = 0; i < 1024; i++) {
     if (!g_sysHist[i])
       continue;
     const char *n = syscall_getname(i);
-    std::fprintf(stderr, "[schist] %4d %-24s %llu\n", i, n ? n : "?",
-                 (unsigned long long)g_sysHist[i]);
+    BASE_LOGI("schist", "{:4} {:<24} {}", i, n ? n : "?",
+              (unsigned long long)g_sysHist[i]);
   }
 }
 

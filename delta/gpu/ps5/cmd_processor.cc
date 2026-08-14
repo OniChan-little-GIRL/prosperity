@@ -41,6 +41,10 @@
 #include <unordered_set>
 #include <utl/options.h>
 
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
+
 namespace {
 DELTA_OPTION(uint64_t, kBlkFrom, "DELTA_AGC_REGSTAT_FROM", 0);
 DELTA_OPTION(int, kCbTraceFrom, "DELTA_AGC_CBTRACE", -1);
@@ -217,8 +221,8 @@ static void NoteUdWrite(const char* how, uint32_t reg, uint32_t val) {
   if (kAgcUdtrace && n < 40 && val && reg >= mmSPI_SHADER_USER_DATA_PS_0 + 16 &&
       reg < mmSPI_SHADER_USER_DATA_PS_0 + 32) {
     n++;
-    std::fprintf(stderr, "[agc] PS ud%u <- %08x by %s\n",
-                 reg - mmSPI_SHADER_USER_DATA_PS_0, val, how);
+    BASE_LOGI("agc", "PS ud{} <- {:08x} by {}", reg - mmSPI_SHADER_USER_DATA_PS_0,
+              val, how);
   }
 }
 
@@ -228,7 +232,7 @@ static void NoteUdWrite(const char* how, uint32_t reg, uint32_t val) {
 static void NoteClipWrite(const char* how, uint32_t val) {
   static int n = 0;
   if (kAgcCliptrace && n++ < 12)
-    std::fprintf(stderr, "[agc] CLIP_CNTL <- %#x by %s\n", val, how);
+    BASE_LOGI("agc", "CLIP_CNTL <- {:#x} by {}", val, how);
 }
 
 // Draw accounting. DELTA_GPU_DRAWRT only sees draws that reach the renderer, so
@@ -309,21 +313,20 @@ void LoadRegs(uint32_t base, const uint32_t* body, uint32_t count) {
         if (!first)
           first = j;
       }
-    std::fprintf(
-        stderr,
-        "[agc] IMGCENSUS #%d base=%#x mem=%#lx nonzero=%u/1024 first=%#x "
-        "img[0x318]=%08x img[0x31c]=%08x ranges=%u\n",
-        s_img_n, base, (unsigned long)mem, nz, first, src[0x318], src[0x31c],
-        (count - 2) / 2);
+    BASE_LOGI("agc",
+              "IMGCENSUS #{} base={:#x} mem={:#x} nonzero={}/1024 first={:#x} "
+              "img[0x318]={:08x} img[0x31c]={:08x} ranges={}",
+              s_img_n, base, mem, nz, first, src[0x318], src[0x31c],
+              (count - 2) / 2);
   }
   static int s_img = 0;
   if (kTrace && s_img < 6) {
     s_img++;
-    std::fprintf(stderr, "[agc]   LOADimg base=%#x mem=%#lx:", base,
-                 (unsigned long)mem);
+    base::String line;
     for (int j = 0; j < 16; j++)
-      std::fprintf(stderr, " %08x", src[j]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(line, " {:08x}", src[j]);
+    BASE_LOGI("agc", "  LOADimg base={:#x} mem={:#x}:{}", base, mem,
+              line.c_str());
   }
   // SH-image ground-truth: LOAD_SH_REG could be offset-INDEXED (image[reg_off]
   // = value, a full reg-file shadow) OR CURSOR-based (ranges packed
@@ -339,16 +342,17 @@ void LoadRegs(uint32_t base, const uint32_t* body, uint32_t count) {
     s_shcnt++;
   if (kTrace && base == kShRegBase && (s_shimg < 3 || late_window)) {
     s_shimg++;
-    std::fprintf(stderr, "[agc] (shload #%d)\n", s_shcnt);
-    std::fprintf(stderr, "[agc] SHLOAD mem=%#lx ranges:", (unsigned long)mem);
+    BASE_LOGI("agc", "(shload #{})", s_shcnt);
+    base::String ranges;
     for (uint32_t i = 2; i + 1 < count; i += 2)
-      std::fprintf(stderr, " (off=%#x,num=%u)", body[i] & 0xFFFF,
-                   body[i + 1] & 0xFFFF);
-    std::fprintf(stderr,
-                 "\n[agc]   indexed[0x08..0x0b]=%08x %08x %08x %08x  "
-                 "indexed[0x88..0x8b]=%08x %08x %08x %08x\n",
-                 src[0x08], src[0x09], src[0x0a], src[0x0b], src[0x88],
-                 src[0x89], src[0x8a], src[0x8b]);
+      base::FormatTo(ranges, " (off={:#x},num={})", body[i] & 0xFFFF,
+                     body[i + 1] & 0xFFFF);
+    BASE_LOGI("agc", "SHLOAD mem={:#x} ranges:{}", mem, ranges.c_str());
+    BASE_LOGI("agc",
+              "  indexed[0x08..0x0b]={:08x} {:08x} {:08x} {:08x}  "
+              "indexed[0x88..0x8b]={:08x} {:08x} {:08x} {:08x}",
+              src[0x08], src[0x09], src[0x0a], src[0x0b], src[0x88],
+              src[0x89], src[0x8a], src[0x8b]);
     // cursor walk: read ranges contiguously from mem, show reg_off + first two
     // vals
     uint32_t cur = 0;
@@ -356,8 +360,8 @@ void LoadRegs(uint32_t base, const uint32_t* body, uint32_t count) {
       uint32_t off = body[i] & 0xFFFF, num = body[i + 1] & 0xFFFF;
       if (num > 0x400)
         num = 0x400;
-      std::fprintf(stderr, "[agc]   cursor off=%#x <- img[%u..]: %08x %08x\n",
-                   off, cur, src[cur], num > 1 ? src[cur + 1] : 0);
+      BASE_LOGI("agc", "  cursor off={:#x} <- img[{}..]: {:08x} {:08x}", off,
+                cur, src[cur], num > 1 ? src[cur + 1] : 0);
       cur += num;
     }
     // scan whole image for a PGM-like pointer (val<<8 in the GPU aperture)
@@ -367,8 +371,8 @@ void LoadRegs(uint32_t base, const uint32_t* body, uint32_t count) {
         uint64_t a = (uint64_t)v << 8;
         if (GpuAddr(a) && gpu::IsReadableRange(a, 2 * sizeof(uint32_t))) {
           const uint32_t* w = reinterpret_cast<const uint32_t*>(a);
-          std::fprintf(stderr, "[agc]   img[%#x]=%08x -> %#lx ISA? %08x %08x\n",
-                       j, v, (unsigned long)a, w[0], w[1]);
+          BASE_LOGI("agc", "  img[{:#x}]={:08x} -> {:#x} ISA? {:08x} {:08x}",
+                    j, v, a, w[0], w[1]);
         }
       }
     }
@@ -413,8 +417,8 @@ void LoadRegs(uint32_t base, const uint32_t* body, uint32_t count) {
       static int s_sh = 0;
       if (kTrace && base == kShRegBase && (v >> 24) == 0x80 && s_sh < 20) {
         s_sh++;
-        std::fprintf(stderr, "[agc]   SH pgm? off=%#x val=%#x (addr~%#lx)\n",
-                     off + j, v, (unsigned long)((uint64_t)v << 8));
+        BASE_LOGI("agc", "  SH pgm? off={:#x} val={:#x} (addr~{:#x})", off + j,
+                  v, (uint64_t)v << 8);
       }
     }
   }
@@ -442,16 +446,12 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
     if ((++n % 4000) != 1)
       return;
     for (int k = 0; k < 3; k++)
-      std::fprintf(stderr,
-                   "[regstat] %s calls=%llu short=%llu badaddr=%llu "
-                   "unreadable=%llu nopairs=%llu applied=%llu\n",
-                   k == 0 ? "context" : k == 1 ? "sh" : "uconfig",
-                   (unsigned long long)s_stat[k].calls,
-                   (unsigned long long)s_stat[k].short_pkt,
-                   (unsigned long long)s_stat[k].bad_addr,
-                   (unsigned long long)s_stat[k].unreadable,
-                   (unsigned long long)s_stat[k].no_pairs,
-                   (unsigned long long)s_stat[k].applied);
+      BASE_LOGI("regstat",
+                "{} calls={} short={} badaddr={} unreadable={} nopairs={} "
+                "applied={}",
+                k == 0 ? "context" : k == 1 ? "sh" : "uconfig",
+                s_stat[k].calls, s_stat[k].short_pkt, s_stat[k].bad_addr,
+                s_stat[k].unreadable, s_stat[k].no_pairs, s_stat[k].applied);
   };
   st.calls++;
   report();
@@ -464,8 +464,8 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
   if (!GpuAddr(addr)) {
     st.bad_addr++;
     if (kRegStat && st.bad_addr < 6)
-      std::fprintf(stderr, "[regstat] bad addr %#lx (body %08x %08x)\n",
-                   (unsigned long)addr, body[0], body[1]);
+      BASE_LOGI("regstat", "bad addr {:#x} (body {:08x} {:08x})", addr,
+                body[0], body[1]);
     return;
   }
   // body[3] is the count of (reg_offset, value) register PAIRS, not dwords:
@@ -483,8 +483,7 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
           addr, static_cast<uint64_t>(num_pairs) * 2 * sizeof(uint32_t))) {
     st.unreadable++;
     if (kRegStat && st.unreadable < 6)
-      std::fprintf(stderr, "[regstat] unreadable %#lx pairs=%u\n",
-                   (unsigned long)addr, num_pairs);
+      BASE_LOGI("regstat", "unreadable {:#x} pairs={}", addr, num_pairs);
     return;
   }
   st.applied++;
@@ -504,18 +503,18 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
     const bool digest = kRegStat >= 3;
     static int full = 0;
     if (full++ < (digest ? 400 : 40)) {
-      std::fprintf(stderr,
-                   "[regstat] %s block %#lx pairs=%u mode=%08x draw=%lu\n",
-                   base == kContextRegBase ? "ctx"
-                   : base == kShRegBase    ? "sh"
-                                           : "ucfg",
-                   (unsigned long)addr, num_pairs, body[2],
-                   (unsigned long)g_draws_seen.load(std::memory_order_relaxed));
+      BASE_LOGI("regstat",
+                "{} block {:#x} pairs={} mode={:08x} draw={}",
+                base == kContextRegBase ? "ctx"
+                : base == kShRegBase    ? "sh"
+                                        : "ucfg",
+                addr, num_pairs, body[2],
+                g_draws_seen.load(std::memory_order_relaxed));
       const uint32_t* q = reinterpret_cast<const uint32_t*>(addr);
       for (uint32_t k = 0; k < num_pairs; k++)
         if (!digest || q[k * 2 + 1] || (q[k * 2] & (1u << 28)))
-          std::fprintf(stderr, "[regstat]   %3u: %08x %08x\n", k, q[k * 2],
-                       q[k * 2 + 1]);
+          BASE_LOGI("regstat", "  {:3}: {:08x} {:08x}", k, q[k * 2],
+                    q[k * 2 + 1]);
     }
   }
   const uint32_t* p = reinterpret_cast<const uint32_t*>(addr);
@@ -617,10 +616,9 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
         g_regs[mmCB_TARGET_MASK] |= 0xF;
       static int shown = 0;
       if (kRegStat && shown++ < 8)
-        std::fprintf(
-            stderr,
-            "[regstat] ctx anchor pair=%u rt=%#lx info=%08x fmt=%u %ux%u\n", k,
-            (unsigned long)rt, info, fmt, w, h);
+        BASE_LOGI("regstat", "ctx anchor pair={} rt={:#x} info={:08x} fmt={} "
+                             "{}x{}",
+                  k, rt, info, fmt, w, h);
       break;
     }
   }
@@ -649,11 +647,10 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
     if (cb_trace && cb_n < 60 &&
         (base + off == mmCB_COLOR0_BASE || base + off == mmCB_COLOR0_INFO)) {
       cb_n++;
-      std::fprintf(
-          stderr,
-          "[agc] CB0 %s <- %08x  (pair %u/%u from %#lx, raw off %08x)\n",
-          base + off == mmCB_COLOR0_BASE ? "BASE" : "INFO", p[i * 2 + 1], i,
-          num_pairs, (unsigned long)addr, p[i * 2]);
+      BASE_LOGI("agc",
+                "CB0 {} <- {:08x}  (pair {}/{} from {:#x}, raw off {:08x})",
+                base + off == mmCB_COLOR0_BASE ? "BASE" : "INFO", p[i * 2 + 1],
+                i, num_pairs, addr, p[i * 2]);
     }
   }
   // Report the first few shader binds that actually carry a nonzero PGM (SH off
@@ -665,9 +662,8 @@ void LoadRegPairs(uint32_t base, const uint32_t* body, uint32_t cnt) {
              ps_lo = g_regs[kShRegBase + 0x08];
     if (gs_lo || ps_lo) {
       s_shpgm++;
-      std::fprintf(stderr,
-                   "[agc] SHADER BIND @%#lx: PGM_LO_GS=%08x PGM_LO_PS=%08x\n",
-                   (unsigned long)addr, gs_lo, ps_lo);
+      BASE_LOGI("agc", "SHADER BIND @{:#x}: PGM_LO_GS={:08x} PGM_LO_PS={:08x}",
+                addr, gs_lo, ps_lo);
     }
   }
 }
@@ -810,15 +806,17 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
       n_valid++;
     seen.insert(cs_addr);
     if ((n_total % 2000) == 0) {
-      std::fprintf(stderr, "[cs] dispatches=%lu valid=%lu unique=%zu:",
-                   (unsigned long)n_total, (unsigned long)n_valid, seen.size());
+      base::String line;
       int shown = 0;
       for (uint64_t a : seen) {
         if (shown++ >= 8)
           break;
-        std::fprintf(stderr, " %#lx", (unsigned long)a);
+        base::FormatTo(line, " {:#x}", a);
       }
-      std::fprintf(stderr, " rsrc2=%08x tg=[%u %u %u]\n", rsrc2, tgx, tgy, tgz);
+      BASE_LOGI("cs", "dispatches={} valid={} unique={}:{} rsrc2={:08x} "
+                      "tg=[{} {} {}]",
+                n_total, n_valid, seen.size(), line.c_str(), rsrc2, tgx, tgy,
+                tgz);
     }
   }
   constexpr uint64_t kMaxShaderBytes = 4096 * sizeof(uint32_t);
@@ -826,13 +824,12 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
       gpu::IsReadableRange(cs_addr, kMaxShaderBytes) &&
       dumped_cs.insert(cs_addr).second) {
     const uint32_t* ud = &g_regs[mmCOMPUTE_USER_DATA_0];
-    std::fprintf(
-        stderr, "[cs] addr=%#lx groups=[%u %u %u] tg=[%u %u %u] rsrc2=%08x\n",
-        (unsigned long)cs_addr, dim_x, dim_y, dim_z, tgx, tgy, tgz, rsrc2);
-    std::fprintf(stderr, "[cs]   user_data:");
+    BASE_LOGI("cs", "addr={:#x} groups=[{} {} {}] tg=[{} {} {}] rsrc2={:08x}",
+              cs_addr, dim_x, dim_y, dim_z, tgx, tgy, tgz, rsrc2);
+    base::String ud_words;
     for (int k = 0; k < 16; k++)
-      std::fprintf(stderr, " %08x", ud[k]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(ud_words, " {:08x}", ud[k]);
+    BASE_LOGI("cs", "  user_data:{}", ud_words.c_str());
     // Follow each user-data pointer pair one level: the descriptor tables the
     // CS dereferences say which surfaces it actually reads and writes.
     for (int k = 0; k < 15; k++) {
@@ -840,10 +837,10 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
       if (!GpuAddr(p) || !gpu::IsReadableRange(p, 8 * sizeof(uint32_t)))
         continue;
       const uint32_t* tw = reinterpret_cast<const uint32_t*>(p);
-      std::fprintf(stderr, "[cs]   ud%d -> %#lx:", k, (unsigned long)p);
+      base::String words;
       for (int b = 0; b < 8; b++)
-        std::fprintf(stderr, " %08x", tw[b]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(words, " {:08x}", tw[b]);
+      BASE_LOGI("cs", "  ud{} -> {:#x}:{}", k, p, words.c_str());
     }
     // Encoding census: says which instruction families a compute backend must
     // cover before any of these dispatches can run.
@@ -860,16 +857,17 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
         flat_ops[(in.raw[0] >> 18) & 0x7F]++;
       }
     }
-    std::fprintf(stderr, "[cs]   insts=%zu enc:", prog.size());
+    base::String enc_hist;
     for (uint32_t e = 0; e < 24; e++)
       if (hist[e])
-        std::fprintf(stderr, " %u=%u", e, hist[e]);
-    std::fprintf(stderr, " flatseg: %u/%u/%u/%u ops:", flat_seg[0], flat_seg[1],
-                 flat_seg[2], flat_seg[3]);
+        base::FormatTo(enc_hist, " {}={}", e, hist[e]);
+    base::String flat_hist;
     for (uint32_t o = 0; o < 128; o++)
       if (flat_ops[o])
-        std::fprintf(stderr, " %#x=%u", o, flat_ops[o]);
-    std::fprintf(stderr, "\n");
+        base::FormatTo(flat_hist, " {:#x}={}", o, flat_ops[o]);
+    BASE_LOGI("cs", "  insts={} enc:{} flatseg: {}/{}/{}/{} ops:{}",
+              prog.size(), enc_hist.c_str(), flat_seg[0], flat_seg[1],
+              flat_seg[2], flat_seg[3], flat_hist.c_str());
   }
   if (!InGuest(cs_addr) || !tgx || !tgy || !dim_x || !dim_y)
     return;
@@ -895,11 +893,10 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
                                    lds_dwords))
                  .first;
     if (!cached->second.ok && CsReport())
-      std::fprintf(stderr,
-                   "[csgpu] unsupported CS @%#lx groups=[%u %u %u] tg=[%u %u "
-                   "%u] usgpr=%u -- dispatch skipped\n",
-                   (unsigned long)cs_addr, dim_x, dim_y, dim_z, tgx, tgy, tgz,
-                   user_sgpr);
+      BASE_LOGI("csgpu",
+                "unsupported CS @{:#x} groups=[{} {} {}] tg=[{} {} {}] "
+                "usgpr={} -- dispatch skipped",
+                cs_addr, dim_x, dim_y, dim_z, tgx, tgy, tgz, user_sgpr);
   }
   gcn::RecompiledCs& rc = cached->second;
   if (!rc.ok)
@@ -938,12 +935,11 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
       desc = it->second.descriptor;
     } else {
       if (CsReport())
-        std::fprintf(stderr,
-                     "[csgpu] CS @%#lx bind=%u kind=%u s%u pc=%#x is outside "
-                     "the %u-dword user data and did not replay -- dispatch "
-                     "skipped\n",
-                     (unsigned long)cs_addr, r.binding, r.kind, r.base_sgpr,
-                     r.use_pc, ud_dwords);
+        BASE_LOGI(
+            "csgpu",
+            "CS @{:#x} bind={} kind={} s{} pc={:#x} is outside the "
+            "{}-dword user data and did not replay -- dispatch skipped",
+            cs_addr, r.binding, r.kind, r.base_sgpr, r.use_pc, ud_dwords);
       res_ok = false;
       break;
     }
@@ -981,13 +977,12 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
                                      t.layers, t.mip_levels, t.tiling_idx,
                                      t.pow2_pad, elem_bytes)) {
         if (CsReport())
-          std::fprintf(stderr,
-                       "[csgpu] CS @%#lx bind=%u unsupported image base=%#lx "
-                       "type=%u dfmt=%u nfmt=%u tiling=%#x %ux%u pitch=%u "
-                       "-- dispatch skipped\n",
-                       (unsigned long)cs_addr, r.binding, (unsigned long)t.base,
-                       t.type, t.dfmt, t.nfmt, t.tiling_idx, t.width, t.height,
-                       t.pitch);
+          BASE_LOGI(
+              "csgpu",
+              "CS @{:#x} bind={} unsupported image base={:#x} type={} dfmt={} "
+              "nfmt={} tiling={:#x} {}x{} pitch={} -- dispatch skipped",
+              cs_addr, r.binding, t.base, t.type, t.dfmt, t.nfmt, t.tiling_idx,
+              t.width, t.height, t.pitch);
         res_ok = false;
         break;
       }
@@ -1001,10 +996,10 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
                                        t.layers, t.mip_levels, 8, t.pow2_pad,
                                        stage_elem_bytes)) {
           if (CsReport())
-            std::fprintf(stderr,
-                         "[csgpu] CS @%#lx bind=%u image %ux%u has no linear "
-                         "staging layout -- dispatch skipped\n",
-                         (unsigned long)cs_addr, r.binding, t.width, t.height);
+            BASE_LOGI("csgpu",
+                      "CS @{:#x} bind={} image {}x{} has no linear staging "
+                      "layout -- dispatch skipped",
+                      cs_addr, r.binding, t.width, t.height);
           res_ok = false;
           break;
         }
@@ -1026,33 +1021,29 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
     if (!guest_size && !zero_fill)
       guest_size = size;
     if (kResTrace)
-      std::fprintf(stderr,
-                   "[csres] cs=%#lx bind=%u kind=%u s%u pc=%#x base=%#lx "
-                   "size=%#lx guest=%#lx written=%d zero=%d\n",
-                   (unsigned long)cs_addr, r.binding, r.kind, r.base_sgpr,
-                   r.use_pc, (unsigned long)base, (unsigned long)size,
-                   (unsigned long)guest_size, r.written ? 1 : 0,
-                   zero_fill ? 1 : 0);
+      BASE_LOGI("csres",
+                "cs={:#x} bind={} kind={} s{} pc={:#x} base={:#x} size={:#x} "
+                "guest={:#x} written={} zero={}",
+                cs_addr, r.binding, r.kind, r.base_sgpr, r.use_pc, base, size,
+                guest_size, r.written ? 1 : 0, zero_fill ? 1 : 0);
     // A dispatch writes guest memory, so a range that does not check out skips
     // the whole dispatch rather than binding something wrong.
     if (!zero_fill &&
         (size < r.min_bytes || size > kMaxRes || guest_size > kMaxRes ||
          !GpuAddr(base) || !gpu::IsReadableRange(base, guest_size))) {
       if (CsReport())
-        std::fprintf(stderr,
-                     "[csgpu] CS @%#lx bind=%u kind=%u unusable range "
-                     "base=%#lx size=%#lx -- dispatch skipped\n",
-                     (unsigned long)cs_addr, r.binding, r.kind,
-                     (unsigned long)base, (unsigned long)guest_size);
+        BASE_LOGI("csgpu",
+                  "CS @{:#x} bind={} kind={} unusable range base={:#x} "
+                  "size={:#x} -- dispatch skipped",
+                  cs_addr, r.binding, r.kind, base, guest_size);
       res_ok = false;
       break;
     }
     if (ci.num_res >= rhi::ComputeInfo::kMaxResources) {
       if (CsReport())
-        std::fprintf(stderr,
-                     "[csgpu] CS @%#lx needs more than %u resources -- "
-                     "dispatch skipped\n",
-                     (unsigned long)cs_addr, rhi::ComputeInfo::kMaxResources);
+        BASE_LOGI("csgpu",
+                  "CS @{:#x} needs more than {} resources -- dispatch skipped",
+                  cs_addr, rhi::ComputeInfo::kMaxResources);
       res_ok = false;
       break;
     }
@@ -1083,12 +1074,11 @@ void HandleDispatch(const uint32_t* body, uint32_t count) {
     return;
   const bool dispatched = rhi::Dispatch(rhi::DefaultRenderer(), ci);
   if (!dispatched && CsReport())
-    std::fprintf(stderr, "[csgpu] CS @%#lx dispatch failed (%u resources)\n",
-                 (unsigned long)cs_addr, ci.num_res);
+    BASE_LOGI("csgpu", "CS @{:#x} dispatch failed ({} resources)", cs_addr,
+              ci.num_res);
   if (kResTrace)
-    std::fprintf(stderr, "[csres] cs=%#lx dispatch %s (%u resources)\n",
-                 (unsigned long)cs_addr, dispatched ? "executed" : "failed",
-                 ci.num_res);
+    BASE_LOGI("csres", "cs={:#x} dispatch {} ({} resources)", cs_addr,
+              dispatched ? "executed" : "failed", ci.num_res);
 }
 
 // DELTA_AGC_DUMPSH=<hexaddr>: decode and print one shader by address, once.
@@ -1103,19 +1093,19 @@ void MaybeDumpShader(uint64_t addr) {
   done = true;
   const auto prog =
       rdna::DecodeShader(reinterpret_cast<const uint32_t*>(addr), 4096);
-  std::fprintf(stderr, "[agc] SHADER %#lx: %zu insts\n", (unsigned long)addr,
-               prog.size());
+  BASE_LOGI("agc", "SHADER {:#x}: {} insts", addr, prog.size());
   for (const auto& in : prog) {
-    std::fprintf(stderr, "[agc]  pc=%04x %-6s op=%#05x %08x", in.pc,
-                 kEncName[static_cast<uint32_t>(in.enc) < 19
-                              ? static_cast<uint32_t>(in.enc)
-                              : 0],
-                 in.opcode, in.raw[0]);
+    base::String line;
+    base::FormatTo(line, "  pc={:04x} {:<6} op={:#05x} {:08x}", in.pc,
+                   kEncName[static_cast<uint32_t>(in.enc) < 19
+                                ? static_cast<uint32_t>(in.enc)
+                                : 0],
+                   in.opcode, in.raw[0]);
     if (in.size >= 2)
-      std::fprintf(stderr, " %08x", in.raw[1]);
+      base::FormatTo(line, " {:08x}", in.raw[1]);
     if (in.has_literal)
-      std::fprintf(stderr, " lit=%08x", in.literal);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(line, " lit={:08x}", in.literal);
+    BASE_LOGI("agc", "{}", line.c_str());
   }
 }
 
@@ -1146,13 +1136,10 @@ static void DrawCensus() {
     std::thread([] {
       for (;;) {
         std::this_thread::sleep_for(std::chrono::seconds(15));
-        std::fprintf(stderr,
-                     "[drawcensus] seen=%llu issued=%llu dropped: no-rt=%llu "
-                     "no-shader=%llu\n",
-                     (unsigned long long)g_draws_seen.load(),
-                     (unsigned long long)g_draws_issued.load(),
-                     (unsigned long long)g_drop_no_rt.load(),
-                     (unsigned long long)g_drop_no_shader.load());
+        BASE_LOGI("drawcensus",
+                  "seen={} issued={} dropped: no-rt={} no-shader={}",
+                  g_draws_seen.load(), g_draws_issued.load(),
+                  g_drop_no_rt.load(), g_drop_no_shader.load());
       }
     }).detach();
     return true;
@@ -1189,13 +1176,13 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
     s_uddump++;
     const uint32_t* gs = &g_regs[mmSPI_SHADER_USER_DATA_GS_0];
     const uint32_t* es = &g_regs[mmSPI_SHADER_USER_DATA_ES_0];
-    std::fprintf(stderr, "[agc]   UD GS:");
+    base::String gs_words, es_words;
     for (int j = 0; j < 16; j++)
-      std::fprintf(stderr, " %08x", gs[j]);
-    std::fprintf(stderr, "\n[agc]   UD ES:");
+      base::FormatTo(gs_words, " {:08x}", gs[j]);
     for (int j = 0; j < 16; j++)
-      std::fprintf(stderr, " %08x", es[j]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(es_words, " {:08x}", es[j]);
+    BASE_LOGI("agc", "  UD GS:{}", gs_words.c_str());
+    BASE_LOGI("agc", "  UD ES:{}", es_words.c_str());
   }
 
   // This title programs the shader PGM_LO/HI at non-standard SH offsets (via
@@ -1241,11 +1228,10 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
         gpu::IsReadableRange(a113, 32 * sizeof(uint32_t))) {
       s_hdr++;
       auto* w = reinterpret_cast<const uint32_t*>(a113);
-      std::fprintf(stderr,
-                   "[agc]   reg0x113 -> %#lx dump:", (unsigned long)a113);
+      base::String words;
       for (int j = 0; j < 32; j++)
-        std::fprintf(stderr, " %08x", w[j]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(words, " {:08x}", w[j]);
+      BASE_LOGI("agc", "  reg0x113 -> {:#x} dump:{}", a113, words.c_str());
     }
     if (nf >= 1 && !InGuest(vs_a))
       vs_a = found[0];
@@ -1254,11 +1240,10 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
     static int s_sc = 0;
     if (kTrace && s_sc < 6 && nf) {
       s_sc++;
-      std::fprintf(stderr, "[agc]   shader scan: nf=%d", nf);
+      base::String scan;
       for (int k = 0; k < nf && k < 6; k++)
-        std::fprintf(stderr, " [%#x]=%#lx", found_reg[k],
-                     (unsigned long)found[k]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(scan, " [{:#x}]={:#x}", found_reg[k], found[k]);
+      BASE_LOGI("agc", "  shader scan: nf={}{}", nf, scan.c_str());
     }
     // The AGC binds shaders via a pipeline/descriptor, not PGM regs. Dump the
     // GS/PS user-data (16 dwords each) and follow any GPU-aperture pointer one
@@ -1269,20 +1254,19 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       s_ud++;
       for (int which = 0; which < 2; which++) {
         const uint32_t* ud = which ? pud : vud;
-        std::fprintf(stderr, "[agc]   %sUD:", which ? "ps" : "gs");
+        base::String ud_words;
         for (int k = 0; k < 16; k++)
-          std::fprintf(stderr, " %08x", ud[k]);
-        std::fprintf(stderr, "\n");
+          base::FormatTo(ud_words, " {:08x}", ud[k]);
+        BASE_LOGI("agc", "  {}UD:{}", which ? "ps" : "gs", ud_words.c_str());
         for (int k = 0; k + 1 < 16; k++) {
           uint64_t p =
               (static_cast<uint64_t>(ud[k + 1] & 0xFFFF) << 32) | ud[k];
           if (GpuAddr(p) && gpu::IsReadableRange(p, 8 * sizeof(uint32_t))) {
             auto* pw = reinterpret_cast<const uint32_t*>(p);
-            std::fprintf(stderr, "[agc]     UD[%d]->%#lx:", k,
-                         (unsigned long)p);
+            base::String pw_words;
             for (int j = 0; j < 8; j++)
-              std::fprintf(stderr, " %08x", pw[j]);
-            std::fprintf(stderr, "\n");
+              base::FormatTo(pw_words, " {:08x}", pw[j]);
+            BASE_LOGI("agc", "    UD[{}]->{:#x}:{}", k, p, pw_words.c_str());
           }
         }
       }
@@ -1336,12 +1320,11 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       s_idxdump++;
       const uint16_t* i16 = reinterpret_cast<const uint16_t*>(ibase);
       const uint32_t* i32 = reinterpret_cast<const uint32_t*>(ibase);
-      std::fprintf(stderr, "[agc]   IDX op=%#x ibase=%#lx count=%u type=%u:", op,
-                   (unsigned long)ibase, d.index_count, g_index_type);
+      base::String idx;
       for (uint32_t k = 0; k < d.index_count && k < 8; k++)
-        std::fprintf(stderr, " %u",
-                     g_index_type == 1 ? i32[k] : (uint32_t)i16[k]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(idx, " {}", g_index_type == 1 ? i32[k] : (uint32_t)i16[k]);
+      BASE_LOGI("agc", "  IDX op={:#x} ibase={:#x} count={} type={}:{}", op,
+                ibase, d.index_count, g_index_type, idx.c_str());
     }
   }
 
@@ -1390,36 +1373,33 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
     static int s_probe = 0;
     if (kRtProbe && s_probe < 200) {
       s_probe++;
-      std::fprintf(
-          stderr,
-          "[agc] RTPROBE draw#%lu rt=%#lx tmask=%#x info0=%#x clip=%#x "
-          "blend=%u ctl=%#x cc=%#x tex0=%#lx ntex=%u\n",
-          (unsigned long)g_draws_seen.load(), (unsigned long)d.rt_base,
-          g_regs[mmCB_TARGET_MASK], g_regs[mmCB_COLOR0_INFO],
-          g_regs[mmPA_CL_CLIP_CNTL], (g_regs[mmCB_BLEND0_CONTROL] >> 30) & 1,
-          g_regs[mmCB_BLEND0_CONTROL], g_regs[mmCB_COLOR_CONTROL],
-          (unsigned long)(d.num_texs ? d.texs[0].base : 0), d.num_texs);
+      BASE_LOGI("agc",
+                "RTPROBE draw#{} rt={:#x} tmask={:#x} info0={:#x} clip={:#x} "
+                "blend={} ctl={:#x} cc={:#x} tex0={:#x} ntex={}",
+                g_draws_seen.load(), d.rt_base, g_regs[mmCB_TARGET_MASK],
+                g_regs[mmCB_COLOR0_INFO], g_regs[mmPA_CL_CLIP_CNTL],
+                (g_regs[mmCB_BLEND0_CONTROL] >> 30) & 1,
+                g_regs[mmCB_BLEND0_CONTROL], g_regs[mmCB_COLOR_CONTROL],
+                d.num_texs ? d.texs[0].base : 0, d.num_texs);
     }
     // Why a colour draw ended up with no target: print the state that rejected
     // CB_COLOR0 (a stale/zero base, or an INFO with no format).
     static int s_nort = 0;
     if (kTrace && !d.mrt_count && (tmask & 0xF) && s_nort < 12) {
       s_nort++;
-      std::fprintf(
-          stderr, "[agc]   NO-RT tmask=%#x cb0Base=%#lx info0=%#x fmt=%u\n",
-          tmask, (unsigned long)g_regs.CbColorBase(0), g_regs[mmCB_COLOR0_INFO],
-          (g_regs[mmCB_COLOR0_INFO] >> 2) & 0x1F);
+      BASE_LOGI("agc", "  NO-RT tmask={:#x} cb0Base={:#x} info0={:#x} fmt={}",
+                tmask, g_regs.CbColorBase(0), g_regs[mmCB_COLOR0_INFO],
+                (g_regs[mmCB_COLOR0_INFO] >> 2) & 0x1F);
     }
     static int s_rtdbg = 0;
     if (kTrace && s_rtdbg < 12) {
       s_rtdbg++;
-      std::fprintf(
-          stderr,
-          "[agc]   DRAW rt: cb0Base=%#lx info0=%#x tmask=%#x -> mrt_count=%u "
-          "vs_a=%#lx ps_a=%#lx prim=%#x idx=%u\n",
-          (unsigned long)g_regs.CbColorBase(0), g_regs[mmCB_COLOR0_INFO],
-          g_regs[mmCB_TARGET_MASK], d.mrt_count, (unsigned long)vs_a,
-          (unsigned long)ps_a, d.prim_type, d.index_count);
+      BASE_LOGI("agc",
+                "  DRAW rt: cb0Base={:#x} info0={:#x} tmask={:#x} -> "
+                "mrt_count={} vs_a={:#x} ps_a={:#x} prim={:#x} idx={}",
+                g_regs.CbColorBase(0), g_regs[mmCB_COLOR0_INFO],
+                g_regs[mmCB_TARGET_MASK], d.mrt_count, vs_a, ps_a, d.prim_type,
+                d.index_count);
     }
   }
 
@@ -1522,14 +1502,12 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
         // AGC shader code starts with the 0xBEEB03FF sentinel; a ps_a that
         // isn't (e.g. 0xffc9dfe7 poison fill) means the PS PGM_LO reg didn't
         // land.
-        std::fprintf(
-            stderr,
-            "[agc] DL recompile vs=%#lx (%08x) ps=%#lx (%08x %08x)...\n",
-            (unsigned long)vs_a, vc[0], (unsigned long)ps_a, pc ? pc[0] : 0,
-            pc ? pc[1] : 0);
-        std::fprintf(stderr,
-                     "[agc] DL psInputEna=%#x (frag-coord/face VGPR seed)\n",
-                     g_regs[mmSPI_PS_INPUT_ENA]);
+        BASE_LOGI("agc",
+                  "DL recompile vs={:#x} ({:08x}) ps={:#x} ({:08x} {:08x})...",
+                  vs_a, vc[0], ps_a, pc ? pc[0] : 0, pc ? pc[1] : 0);
+        BASE_LOGI("agc",
+                  "DL psInputEna={:#x} (frag-coord/face VGPR seed)",
+                  g_regs[mmSPI_PS_INPUT_ENA]);
       }
       it = g_sh_cache
                .emplace(key, rdna::Recompile(
@@ -1540,17 +1518,15 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
                                  gs_user_sgprs, ps_user_sgprs))
                .first;
       if (dl)
-        std::fprintf(stderr, "[agc] DL recompile done ok=%d\n", it->second.ok);
+        BASE_LOGI("agc", "DL recompile done ok={}", it->second.ok);
       // A shader we cannot recompile drops its draw entirely, which is
       // indistinguishable from "the title never issued it" unless it is said
       // out loud. Report each failing pair once.
       if (!it->second.ok) {
         static int failed = 0;
         if (failed++ < 32)
-          std::fprintf(
-              stderr,
-              "[agc] recompile FAILED vs=%#lx ps=%#lx -- draw dropped\n",
-              (unsigned long)vs_a, (unsigned long)ps_a);
+          BASE_LOGI("agc", "recompile FAILED vs={:#x} ps={:#x} -- draw dropped",
+                    vs_a, ps_a);
       }
     }
     gcn::Recompiled& rc = it->second;
@@ -1577,12 +1553,11 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
           rdna::ResolveBuffers(reinterpret_cast<const uint32_t*>(vs_a), vud,
                                gs_user_sgprs, kUdBase);
       if (dl)
-        std::fprintf(stderr,
-                     "[agc] DL attrs=%zu gsUd=%u res=%zu vud[0..7]=%08x %08x "
-                     "%08x %08x %08x %08x %08x %08x\n",
-                     rc.attrs.size(), gs_user_sgprs, vs_resources.size(),
-                     vud[0], vud[1], vud[2], vud[3], vud[4], vud[5], vud[6],
-                     vud[7]);
+        BASE_LOGI("agc",
+                  "DL attrs={} gsUd={} res={} vud[0..7]={:08x} {:08x} {:08x} "
+                  "{:08x} {:08x} {:08x} {:08x} {:08x}",
+                  rc.attrs.size(), gs_user_sgprs, vs_resources.size(), vud[0],
+                  vud[1], vud[2], vud[3], vud[4], vud[5], vud[6], vud[7]);
       for (size_t i = 0; i < rc.attrs.size() && i < 8; i++) {
         auto& a = rc.attrs[i];
         VBuffer vb{};
@@ -1591,12 +1566,11 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
         if (a.use_pc != ~0u) {
           const auto resolved = vs_resources.find(a.use_pc);
           if (dl)
-            std::fprintf(stderr,
-                         "[agc]   attr%zu use_pc=%#x found=%d valid=%d\n", i,
-                         a.use_pc, resolved != vs_resources.end(),
-                         resolved != vs_resources.end()
-                             ? (int)resolved->second.descriptor_valid
-                             : -1);
+            BASE_LOGI("agc", "  attr{} use_pc={:#x} found={} valid={}", i,
+                      a.use_pc, resolved != vs_resources.end(),
+                      resolved != vs_resources.end()
+                          ? (int)resolved->second.descriptor_valid
+                          : -1);
           if (resolved == vs_resources.end() ||
               !resolved->second.descriptor_valid)
             continue;
@@ -1621,14 +1595,14 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
           }
         }
         if (dl)
-          std::fprintf(
-              stderr,
-              "[agc]   attr%zu loc=%u nc=%u tbl_sgpr=%u off=%u ioff=%u soff=%u "
-              "(%s) -> base=%#lx stride=%u nrec=%u gfmt=%u -> dfmt=%u "
-              "nfmt=%u\n",
+          BASE_LOGI(
+              "agc",
+              "  attr{} loc={} nc={} tbl_sgpr={} off={} ioff={} soff={} "
+              "({}) -> base={:#x} stride={} nrec={} gfmt={} -> dfmt={} "
+              "nfmt={}",
               i, a.location, a.num_comps, a.table_sgpr, a.vbuf_dword_off,
-              a.inst_offset, fetch_soffset, how, (unsigned long)vb.base,
-              vb.stride, vb.num_records, vb.gfmt, vb.dfmt, vb.nfmt);
+              a.inst_offset, fetch_soffset, how, vb.base, vb.stride,
+              vb.num_records, vb.gfmt, vb.dfmt, vb.nfmt);
         if (!InGuest(vb.base) || !PlausibleVb(vb))
           continue;  // unresolved: keep the rest
         // Where this attribute sits inside the vertex. The V# only names the
@@ -1734,11 +1708,10 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
               uint64_t base = it->second.base & ~uint64_t{3};
               uint64_t bytes = static_cast<uint64_t>(cb.num_dwords) * 4;
               if (dl)
-                std::fprintf(
-                    stderr,
-                    "[agc]   cbuf %s bind=%u use_pc=%#x base=%#lx dwords=%u\n",
-                    vertex_stage ? "vs" : "ps", cb.binding, cb.use_pc,
-                    (unsigned long)base, cb.num_dwords);
+                BASE_LOGI("agc", "  cbuf {} bind={} use_pc={:#x} base={:#x} "
+                                 "dwords={}",
+                          vertex_stage ? "vs" : "ps", cb.binding, cb.use_pc,
+                          base, cb.num_dwords);
               if (!InGuest(base) || !gpu::IsReadableRange(base, bytes))
                 continue;
               d.cbufs[cb.binding] = {base, static_cast<uint32_t>(bytes)};
@@ -1844,11 +1817,10 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
           d.num_texs = static_cast<uint32_t>(std::min<size_t>(texs.size(), 16));
           if (dl)
             for (uint32_t i = 0; i < d.num_texs; i++)
-              std::fprintf(
-                  stderr,
-                  "[agc]   tex%u base=%#lx %ux%u dfmt=%u nfmt=%u tiling=%u\n",
-                  i, (unsigned long)d.texs[i].base, d.texs[i].w, d.texs[i].h,
-                  d.texs[i].dfmt, d.texs[i].nfmt, d.texs[i].tiling);
+              BASE_LOGI("agc", "  tex{} base={:#x} {}x{} dfmt={} nfmt={} "
+                               "tiling={}",
+                        i, d.texs[i].base, d.texs[i].w, d.texs[i].h,
+                        d.texs[i].dfmt, d.texs[i].nfmt, d.texs[i].tiling);
         }
         d.vs_addr = vs_a;
         d.ps_addr = ps_a;
@@ -1869,13 +1841,11 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
     static int shown = 0;
     if (shown < 16 && kGpuDrawcensus) {
       shown++;
-      std::fprintf(
-          stderr,
-          "[drawcensus] dropped: vs=%#lx ps=%#lx prim=%u vcount=%u "
-          "mrt=%u rt=%#lx num_vattrs=%u shaderAttrs=%zu num_vbufs=%u\n",
-          (unsigned long)vs_a, (unsigned long)ps_a, d.prim_type, d.vertex_count,
-          d.mrt_count, (unsigned long)d.rt_base, d.num_vattrs, drop_attr_count,
-          d.num_vbufs);
+      BASE_LOGI("drawcensus",
+                "dropped: vs={:#x} ps={:#x} prim={} vcount={} mrt={} rt={:#x} "
+                "num_vattrs={} shaderAttrs={} num_vbufs={}",
+                vs_a, ps_a, d.prim_type, d.vertex_count, d.mrt_count, d.rt_base,
+                d.num_vattrs, drop_attr_count, d.num_vbufs);
     }
     return;
   }
@@ -1904,21 +1874,19 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       gpu::IsReadableRange(reinterpret_cast<uint64_t>(d.vertex_data),
                            vertex_bytes)) {
     s_vdump++;
-    std::fprintf(
-        stderr,
-        "[agc] VDUMP draw#%lu num_vattrs=%u stride=%u count=%u prim=%u "
-        "vp=[xs=%g xo=%g ys=%g yo=%g] num_cbufs=%u cbuf_base=%#lx cbuf_size=%u "
-        "rt=%#lx ps=%#lx vs=%#lx\n",
-        (unsigned long)my_draw, d.num_vattrs, d.vertex_stride, d.vertex_count,
-        d.prim_type, d.viewport_x_scale, d.viewport_x_offset,
-        d.viewport_y_scale, d.viewport_y_offset, d.num_cbufs,
-        (unsigned long)d.cbuf_base, d.cbuf_size, (unsigned long)d.rt_base,
-        (unsigned long)d.ps_addr, (unsigned long)vs_a);
+    BASE_LOGI(
+        "agc",
+        "VDUMP draw#{} num_vattrs={} stride={} count={} prim={} "
+        "vp=[xs={} xo={} ys={} yo={}] num_cbufs={} cbuf_base={:#x} cbuf_size={} "
+        "rt={:#x} ps={:#x} vs={:#x}",
+        my_draw, d.num_vattrs, d.vertex_stride, d.vertex_count, d.prim_type,
+        d.viewport_x_scale, d.viewport_x_offset, d.viewport_y_scale,
+        d.viewport_y_offset, d.num_cbufs, d.cbuf_base, d.cbuf_size, d.rt_base,
+        d.ps_addr, vs_a);
     for (uint32_t a = 0; a < d.num_vattrs; a++)
-      std::fprintf(stderr,
-                   "[agc]   vattr%u loc=%u off=%u nc=%u dfmt=%u nfmt=%u\n", a,
-                   d.vattrs[a].location, d.vattrs[a].offset,
-                   d.vattrs[a].num_comps, d.vattrs[a].dfmt, d.vattrs[a].nfmt);
+      BASE_LOGI("agc", "  vattr{} loc={} off={} nc={} dfmt={} nfmt={}", a,
+                d.vattrs[a].location, d.vattrs[a].offset, d.vattrs[a].num_comps,
+                d.vattrs[a].dfmt, d.vattrs[a].nfmt);
     // DELTA_AGC_VDUMPPROG: the decoded VS for this exact draw (shader dumps are
     // otherwise emitted once at recompile time and cannot be tied to a draw).
     if (kVdumpProg && InGuest(vs_a)) {
@@ -1927,19 +1895,20 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       if (gpu::IsReadableRange(addr, kMaxShaderBytes)) {
         const auto prog =
             rdna::DecodeShader(reinterpret_cast<const uint32_t*>(addr), 4096);
-        std::fprintf(stderr, "[agc]   %s %#lx: %zu insts\n",
-                     kAgcVdumpps ? "PS" : "VS", (unsigned long)addr, prog.size());
+        BASE_LOGI("agc", "  {} {:#x}: {} insts", kAgcVdumpps ? "PS" : "VS",
+                  addr, prog.size());
         for (const auto& in : prog) {
-          std::fprintf(stderr, "[agc]    pc=%04x %-6s op=%#05x %08x", in.pc,
-                       kEncName[static_cast<uint32_t>(in.enc) < 19
-                                    ? static_cast<uint32_t>(in.enc)
-                                    : 0],
-                       in.opcode, in.raw[0]);
+          base::String line;
+          base::FormatTo(line, "   pc={:04x} {:<6} op={:#05x} {:08x}", in.pc,
+                         kEncName[static_cast<uint32_t>(in.enc) < 19
+                                      ? static_cast<uint32_t>(in.enc)
+                                      : 0],
+                         in.opcode, in.raw[0]);
           if (in.size >= 2)
-            std::fprintf(stderr, " %08x", in.raw[1]);
+            base::FormatTo(line, " {:08x}", in.raw[1]);
           if (in.has_literal)
-            std::fprintf(stderr, " lit=%08x", in.literal);
-          std::fprintf(stderr, "\n");
+            base::FormatTo(line, " lit={:08x}", in.literal);
+          BASE_LOGI("agc", "{}", line.c_str());
         }
       }
     }
@@ -1951,12 +1920,12 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       float f;
       std::memcpy(&u, vb + o, 4);
       std::memcpy(&f, vb + o, 4);
-      std::fprintf(stderr, "[agc]     vtx[+%02u] u=%08x f=%g\n", o, u, f);
+      BASE_LOGI("agc", "    vtx[+{:02}] u={:08x} f={}", o, u, f);
     }
     const float* m = d.mvp;
-    std::fprintf(
-        stderr,
-        "[agc]   mvp=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]\n",
+    BASE_LOGI(
+        "agc",
+        "  mvp=[{} {} {} {} / {} {} {} {} / {} {} {} {} / {} {} {} {}]",
         m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10],
         m[11], m[12], m[13], m[14], m[15]);
     // The VS loads its real vertex V# via SMEM from a pointer in GS
@@ -1969,16 +1938,17 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       if (!GpuAddr(p) || !gpu::IsReadableRange(p, bytes))
         continue;  // user data holds non-pointers too
       const uint32_t* pw = reinterpret_cast<const uint32_t*>(p);
-      std::fprintf(stderr, "[agc]   ud[%d]->%#lx dwords:", k, (unsigned long)p);
+      base::String ud_line;
+      base::FormatTo(ud_line, "  ud[{}]->{:#x} dwords:", k, p);
       for (int j = 0; j < (k == 4 ? 32 : 8); j++)
-        std::fprintf(stderr, " %08x", pw[j]);
-      std::fprintf(stderr, "  floats:");
+        base::FormatTo(ud_line, " {:08x}", pw[j]);
+      base::FormatTo(ud_line, "  floats:");
       for (int j = 0; j < 8; j++) {
         float f;
         std::memcpy(&f, &pw[j], 4);
-        std::fprintf(stderr, " %g", f);
+        base::FormatTo(ud_line, " {}", f);
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("agc", "{}", ud_line.c_str());
     }
     // DELTA_AGC_VDUMPPROJ: project this draw's first vertices on the host,
     // using the 4x3 world matrix (a 12-dword cbuffer) and the view-projection
@@ -2015,12 +1985,12 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
           for (int r = 0; r < 4; r++)
             c[r] = vp[r * 4 + 0] * w4[0] + vp[r * 4 + 1] * w4[1] +
                    vp[r * 4 + 2] * w4[2] + vp[r * 4 + 3] * w4[3];
-          std::fprintf(stderr,
-                       "[agc]   proj v%u obj=(%g %g %g) world=(%g %g %g) "
-                       "clip=(%g %g %g %g) ndc=(%g %g)\n",
-                       v, p[0], p[1], p[2], w4[0], w4[1], w4[2], c[0], c[1],
-                       c[2], c[3], c[3] ? c[0] / c[3] : 0.f,
-                       c[3] ? c[1] / c[3] : 0.f);
+          BASE_LOGI("agc",
+                    "  proj v{} obj=({} {} {}) world=({} {} {}) "
+                    "clip=({} {} {} {}) ndc=({} {})",
+                    v, p[0], p[1], p[2], w4[0], w4[1], w4[2], c[0], c[1],
+                    c[2], c[3], c[3] ? c[0] / c[3] : 0.f,
+                    c[3] ? c[1] / c[3] : 0.f);
         }
       }
     }
@@ -2032,55 +2002,56 @@ void HandleDraw(uint32_t op, const uint32_t* body, uint32_t count) {
       if (n <= 0 || !gpu::IsReadableRange(d.cbufs[b].base, n * sizeof(float)))
         continue;
       const float* cf = reinterpret_cast<const float*>(d.cbufs[b].base);
-      std::fprintf(stderr, "[agc]   cbuf[%u]@%#lx (%u dw) floats:", b,
-                   (unsigned long)d.cbufs[b].base, d.cbufs[b].size / 4);
+      base::String cbuf_line;
+      base::FormatTo(cbuf_line, "  cbuf[{}]@{:#x} ({} dw) floats:", b,
+                     d.cbufs[b].base, d.cbufs[b].size / 4);
       for (int j = 0; j < n; j++) {
         if (j && j % 4 == 0)
-          std::fprintf(stderr, " |");
-        std::fprintf(stderr, " %g", cf[j]);
+          base::FormatTo(cbuf_line, " |");
+        base::FormatTo(cbuf_line, " {}", cf[j]);
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("agc", "{}", cbuf_line.c_str());
     }
   }
 
   if (!g_frame_active) {
     if (dl)
-      std::fprintf(stderr, "[agc] DL BeginFrame...\n");
+      BASE_LOGI("agc", "DL BeginFrame...");
     rhi::BeginFrame(rhi::DefaultRenderer());
     g_frame_active = true;
   }
   if (dl) {
-    std::fprintf(stderr,
-                 "[agc] DL draw#%lu rhi::Draw num_vattrs=%d rt=%#lx "
-                 "tmask=%#x cc=%#x blend=%u dv=%d db=%#lx dt=%u dw=%u df=%u "
-                 "ntex=%u tex0=%#lx\n",
-                 (unsigned long)my_draw, d.num_vattrs, (unsigned long)d.rt_base,
-                 d.target_mask, d.color_control, d.blend_enable, d.depth_valid,
-                 (unsigned long)d.depth_base, d.depth_test_enable,
-                 d.depth_write_enable, d.depth_func, d.num_texs,
-                 (unsigned long)(d.num_texs ? d.texs[0].base : 0));
+    BASE_LOGI("agc",
+              "DL draw#{} rhi::Draw num_vattrs={} rt={:#x} "
+              "tmask={:#x} cc={:#x} blend={} dv={} db={:#x} dt={} dw={} df={} "
+              "ntex={} tex0={:#x}",
+              my_draw, d.num_vattrs, d.rt_base,
+              d.target_mask, d.color_control, d.blend_enable, d.depth_valid,
+              d.depth_base, d.depth_test_enable,
+              d.depth_write_enable, d.depth_func, d.num_texs,
+              (d.num_texs ? d.texs[0].base : 0));
     for (uint32_t i = 0; i < d.num_texs; i++)
-      std::fprintf(stderr,
-                   "[agc]   DL tex%u base=%#lx %ux%u dfmt=%u nfmt=%u tiling=%u "
-                   "pitch=%u\n",
-                   i, (unsigned long)d.texs[i].base, d.texs[i].w, d.texs[i].h,
-                   d.texs[i].dfmt, d.texs[i].nfmt, d.texs[i].tiling,
-                   d.texs[i].pitch);
-    std::fprintf(stderr,
-                 "[agc]   DL vtx data=%#lx stride=%u count=%u num_vbufs=%u "
-                 "idx=%#lx icount=%u\n",
-                 (unsigned long)d.vertex_data, d.vertex_stride, d.vertex_count,
-                 d.num_vbufs, (unsigned long)d.index_data, d.index_count);
+      BASE_LOGI("agc",
+                "  DL tex{} base={:#x} {}x{} dfmt={} nfmt={} tiling={} "
+                "pitch={}",
+                i, d.texs[i].base, d.texs[i].w, d.texs[i].h,
+                d.texs[i].dfmt, d.texs[i].nfmt, d.texs[i].tiling,
+                d.texs[i].pitch);
+    BASE_LOGI("agc",
+              "  DL vtx data={:#x} stride={} count={} num_vbufs={} "
+              "idx={:#x} icount={}",
+              d.vertex_data, d.vertex_stride, d.vertex_count,
+              d.num_vbufs, d.index_data, d.index_count);
     for (uint32_t i = 0; i < d.num_vbufs; i++)
-      std::fprintf(stderr, "[agc]   DL vbuf%u data=%#lx stride=%u nrec=%u\n", i,
-                   (unsigned long)d.vbufs[i].data, d.vbufs[i].stride,
-                   d.vbufs[i].num_records);
+      BASE_LOGI("agc", "  DL vbuf{} data={:#x} stride={} nrec={}", i,
+                d.vbufs[i].data, d.vbufs[i].stride,
+                d.vbufs[i].num_records);
   }
   g_draws_issued.fetch_add(1, std::memory_order_relaxed);
   g_last_draw_rt = d.rt_base;
   rhi::Draw(rhi::DefaultRenderer(), d);
   if (dl)
-    std::fprintf(stderr, "[agc] DL draw#%lu done\n", (unsigned long)my_draw);
+    BASE_LOGI("agc", "DL draw#{} done", my_draw);
 }
 
 uint32_t g_op_hist[256] = {};
@@ -2111,10 +2082,9 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
         // and every packet in between is lost.
         static uint64_t resyncs = 0;
         if (kWalkStat && (++resyncs % 500) == 1)
-          std::fprintf(stderr,
-                       "[walkstat] resync #%llu at word %u/%u (hdr %08x op %#x "
-                       "cnt %u)\n",
-                       (unsigned long long)resyncs, i, words, hdr, op, cnt);
+          BASE_LOGI("walkstat",
+                    "resync #{} at word {}/{} (hdr {:08x} op {:#x} cnt {})",
+                    resyncs, i, words, hdr, op, cnt);
         i += 1;
         continue;
       }
@@ -2126,10 +2096,11 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
         static int shown = 0;
         if (op == kOpDump && shown < 12) {
           shown++;
-          std::fprintf(stderr, "[opdump] op=%#04x cnt=%u body:", op, cnt);
+          base::String opdump;
+          base::FormatTo(opdump, "op={:#04x} cnt={} body:", op, cnt);
           for (uint32_t b = 0; b < cnt && b < 20; b++)
-            std::fprintf(stderr, " %08x", body[b]);
-          std::fprintf(stderr, "\n");
+            base::FormatTo(opdump, " {:08x}", body[b]);
+          BASE_LOGI("opdump", "{}", opdump.c_str());
         }
       }
       // Who actually binds the render target: report the packet that first
@@ -2141,9 +2112,8 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
         static uint32_t s_prev_op = 0;
         if (cur != s_last_cb && s_cb_log < 16) {
           s_cb_log++;
-          std::fprintf(stderr,
-                       "[agc] CB0BASE %08x -> %08x by op %#04x (next %#04x)\n",
-                       s_last_cb, cur, s_prev_op, op);
+          BASE_LOGI("agc", "CB0BASE {:08x} -> {:08x} by op {:#04x} (next {:#04x})",
+                    s_last_cb, cur, s_prev_op, op);
           s_last_cb = cur;
         }
         s_prev_op = op;
@@ -2153,12 +2123,13 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
         }
       }
       if (dump_this) {
-        std::fprintf(stderr, "[agc]   @%-5u T3 op=%#04x count=%u body:", i, op,
-                     cnt);
+        base::String dump_line;
+        base::FormatTo(dump_line, "  @{:<5} T3 op={:#04x} count={} body:", i,
+                       op, cnt);
         uint32_t show_n =
             (op == 0x93 || op == 0x79) ? cnt : (cnt < 6 ? cnt : 6);
         for (uint32_t b = 0; b < show_n && b < 24; b++)
-          std::fprintf(stderr, " %08x", body[b]);
+          base::FormatTo(dump_line, " {:08x}", body[b]);
         // INDIRECT register packets reference a GPU buffer at body[0..1]; dump
         // it so we can RE the register layout (which offset holds
         // CB_COLOR/shaders).
@@ -2169,12 +2140,12 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
               (static_cast<uint64_t>(body[1] & 0xFFFF) << 32) | body[0];
           if (GpuAddr(a) && gpu::IsReadableRange(a, 12 * sizeof(uint32_t))) {
             auto* aw = reinterpret_cast<const uint32_t*>(a);
-            std::fprintf(stderr, " -> buf %#lx:", (unsigned long)a);
+            base::FormatTo(dump_line, " -> buf {:#x}:", a);
             for (int b = 0; b < 12; b++)
-              std::fprintf(stderr, " %08x", aw[b]);
+              base::FormatTo(dump_line, " {:08x}", aw[b]);
           }
         }
-        std::fprintf(stderr, "\n");
+        BASE_LOGI("agc", "{}", dump_line.c_str());
       }
       // DELTA_AGC_RTPROBE: remember which packet last changed CB_COLOR0_BASE,
       // so a draw that ends up with no colour target can name what unbound it.
@@ -2288,10 +2259,10 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
             if (kGpuDmatrace) {
               static int dmn = 0;
               if (dmn++ < 60)
-                std::fprintf(stderr,
-                             "[dma] ctrl=%#x src=%#lx dst=%#lx bytes=%u%s\n",
-                             ctrl, (unsigned long)src, (unsigned long)dst,
-                             bytes, (src_mem && dst_mem) ? " COPIED" : "");
+                BASE_LOGI("dma",
+                          "ctrl={:#x} src={:#x} dst={:#x} bytes={}{}",
+                          ctrl, src, dst,
+                          bytes, (src_mem && dst_mem) ? " COPIED" : "");
             }
           }
           break;
@@ -2403,10 +2374,9 @@ void Walk(const uint32_t* p, uint32_t words, bool dump_this, int depth) {
         if (kTrace && s_t0 < 20 && base0 >= kShRegBase &&
             base0 < kShRegBase + 0x300) {
           s_t0++;
-          std::fprintf(
-              stderr,
-              "[agc]   type0 SH write base=%#x cnt=%u v0=%08x v1=%08x\n", base0,
-              cnt0, p[i + 1], cnt0 > 1 ? p[i + 2] : 0);
+          BASE_LOGI("agc",
+                    "  type0 SH write base={:#x} cnt={} v0={:08x} v1={:08x}",
+                    base0, cnt0, p[i + 1], cnt0 > 1 ? p[i + 2] : 0);
         }
       }
       i += 1 + cnt0;
@@ -2447,15 +2417,13 @@ void SubmitDcb(const void* dcb, uint32_t size_bytes) {
         uint64_t a =
             (static_cast<uint64_t>(lo) << 8) | ((uint64_t)(hi & 0xFF) << 40);
         if (GpuAddr(a)) {
-          std::fprintf(stderr,
-                       "[agc]   SHADOW+%#x lo=%08x hi=%08x -> addr %#lx\n",
-                       w * 4, lo, hi, (unsigned long)a);
+          BASE_LOGI("agc", "  SHADOW+{:#x} lo={:08x} hi={:08x} -> addr {:#x}",
+                    w * 4, lo, hi, a);
           shown++;
         }
       }
       if (!shown)
-        std::fprintf(stderr,
-                     "[agc]   SHADOW scan: 2MB all-zero (no PGM written)\n");
+        BASE_LOGI("agc", "  SHADOW scan: 2MB all-zero (no PGM written)");
     }
   }
   uint32_t words = size_bytes / 4;
@@ -2468,31 +2436,30 @@ void SubmitDcb(const void* dcb, uint32_t size_bytes) {
   if (dump_this) {
     g_dumped++;
     const uint32_t* w = static_cast<const uint32_t*>(dcb);
-    std::fprintf(stderr,
-                 "[agc] === dcb walk #%lu (size=%u words=%u hdr0=%#x) ===\n",
-                 static_cast<unsigned long>(sn), size_bytes, words, w[0]);
+    BASE_LOGI("agc", "=== dcb walk #{} (size={} words={} hdr0={:#x}) ===",
+              sn, size_bytes, words, w[0]);
     uint32_t raw_n =
         words > 100 ? 100 : words;  // dump big draw buffers fully enough
-    std::fprintf(stderr, "[agc]   raw[0..%u]:", raw_n);
+    base::String raw;
+    base::FormatTo(raw, "  raw[0..{}]:", raw_n);
     for (uint32_t k = 0; k < raw_n; k++)
-      std::fprintf(stderr, " %08x", w[k]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(raw, " {:08x}", w[k]);
+    BASE_LOGI("agc", "{}", raw.c_str());
   }
   Walk(static_cast<const uint32_t*>(dcb), words, dump_this, 0);
   // Periodic global opcode census so we see draw opcodes that only appear in
   // later (undumped) submits -- tells us if the title is issuing draws yet.
   if (kTrace && non_empty && (sn % 200) == 0) {
-    std::fprintf(stderr, "[agc] === global opcode census @submit %lu ===\n",
-                 static_cast<unsigned long>(sn));
+    BASE_LOGI("agc", "=== global opcode census @submit {} ===", sn);
     for (int o = 0; o < 256; o++)
       if (g_op_hist[o])
-        std::fprintf(stderr, "[agc]   op %#04x x%u\n", o, g_op_hist[o]);
+        BASE_LOGI("agc", "  op {:#04x} x{}", o, g_op_hist[o]);
   }
   if (dump_this) {
-    std::fprintf(stderr, "[agc] === dcb walk done; opcode histogram ===\n");
+    BASE_LOGI("agc", "=== dcb walk done; opcode histogram ===");
     for (int o = 0; o < 256; o++)
       if (g_op_hist[o])
-        std::fprintf(stderr, "[agc]   op %#04x x%u\n", o, g_op_hist[o]);
+        BASE_LOGI("agc", "  op {:#04x} x{}", o, g_op_hist[o]);
   }
 }
 

@@ -10,6 +10,8 @@
 
 #include <cstdio>
 
+#include <base/logging.h>
+
 namespace gpu::gcn {
 namespace {
 
@@ -1891,9 +1893,9 @@ std::string DisasmLine(const Inst& inst) {
 
 void Disassemble(const uint32_t* code, uint32_t max_dwords, const char* tag) {
   const Program program = Decode(code, max_dwords);
-  std::fprintf(stderr, "[gcn] %s: %zu instructions\n", tag, program.size());
+  BASE_LOGI("gcn", "{}: {} instructions", tag, program.size());
   for (const Inst& inst : program)
-    std::fprintf(stderr, "[gcn]   %s\n", DisasmLine(inst).c_str());
+    BASE_LOGI("gcn", "  {}", DisasmLine(inst).c_str());
 }
 
 }  // namespace gpu::gcn

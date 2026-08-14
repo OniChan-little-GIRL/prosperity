@@ -7,6 +7,9 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 
 #include <mutex>
 #include "wait_probe.h"
@@ -215,12 +218,12 @@ static void evfTrace(const char *op, int id, const eventFlag *ef,
   const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count();
-  std::fprintf(stderr,
-               "[evf] us=%lld tid=%ld %s id=%d '%s' pat=%#llx mode=%#x -> ret=%d res=%#llx\n",
-               (long long)us, (long)gettid(), op, id,
-               ef ? ef->fname().c_str() : "?",
-               (unsigned long long)pattern, mode, ret,
-               (unsigned long long)res);
+  BASE_LOGI("evf",
+            "us={} tid={} {} id={} '{}' pat={:#x} mode={:#x} -> ret={} "
+            "res={:#x}",
+            (long long)us, (long)gettid(), op, id,
+            ef ? ef->fname().c_str() : "?", (unsigned long long)pattern, mode,
+            ret, (unsigned long long)res);
   // DELTA_EVF_STACK: name the guest code on both sides of a handshake. Which
   // function waits or signals is what a trace of ids alone cannot say.
   if (kEvfStack)
@@ -238,13 +241,13 @@ int PS4ABI sys_evf_create(const char *name, uint32_t attr,
   // We don't enforce the name check strictly: some system libs pass an empty
   // name for private flags, and our auto-naming path depends on it.
   if (!name) {
-    std::printf("[evf] create rejected: null name (attr=%#x)\n", attr);
+    BASE_LOGI("evf", "create rejected: null name (attr={:#x})", attr);
     return -SysError::eINVAL;
   }
   auto *ef = new eventFlag(proc::getActive(), name, initPattern);
-  std::printf("[evf] create '%s' attr=%#x init=%#llx -> id=%u\n",
-              name ? name : "", attr, (unsigned long long)initPattern,
-              ef->handle());
+  BASE_LOGI("evf", "create '{}' attr={:#x} init={:#x} -> id={}",
+            name ? name : "", attr, (unsigned long long)initPattern,
+            ef->handle());
   return ef->handle();
 }
 
@@ -290,8 +293,8 @@ int PS4ABI sys_evf_open(const char *name) {
   // open gives them a shared flag and the sync actually works.
   uint64_t seed = systemFlagInit(name);
   auto *ef = new eventFlag(proc::getActive(), name, seed, seed);
-  std::printf("[evf] open '%s' (auto-created) -> id=%u\n", name ? name : "",
-              ef->handle());
+  BASE_LOGI("evf", "open '{}' (auto-created) -> id={}", name ? name : "",
+            ef->handle());
   return ef->handle();
 }
 
@@ -408,10 +411,11 @@ static void evfSetTally(int id) {
   if (now - last < std::chrono::seconds(10))
     return;
   last = now;
-  std::fprintf(stderr, "[evfset] ids ever signalled:");
-  for (const auto &[k, v] : hist) std::fprintf(stderr, " %d(x%llu)", k,
-                                               (unsigned long long)v);
-  std::fprintf(stderr, "\n");
+  base::String ids;
+  base::FormatTo(ids, "ids ever signalled:");
+  for (const auto &[k, v] : hist) base::FormatTo(ids, " {}(x{})", k,
+                                                 (unsigned long long)v);
+  BASE_LOGI("evfset", "{}", ids.c_str());
 }
 
 int PS4ABI sys_evf_set(int id, uint64_t bits) {

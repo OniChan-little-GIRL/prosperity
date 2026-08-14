@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -126,16 +127,15 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   if (kDrawTraceAll) {
     static uint32_t traced = 0;
     if (traced++ < 100)
-      std::fprintf(stderr,
-                   "[dt] f%d rt=%#lx count=%u indexed=%u nv=%u mrt=%u mask=%#x "
-                   "psmask=%#x prim=%u vp=[%.1f %.1f %.1f %.1f] depth=%#lx "
-                   "handled=%d\n",
-                   g_frame.num, (unsigned long)d.rt_base, d.vertex_count,
-                   d.index_count, d.num_vattrs, d.mrt_count, d.target_mask,
-                   d.recomp ? d.recomp->ps_mrt_mask : 0, d.prim_type,
-                   d.viewport_x_scale, d.viewport_x_offset, d.viewport_y_scale,
-                   d.viewport_y_offset, (unsigned long)d.depth_base,
-                   recompiled);
+      BASE_LOGI("dt", "f{} rt={:#x} count={} indexed={} nv={} mrt={} mask={:#x} "
+                      "psmask={:#x} prim={} vp=[{:.1f} {:.1f} {:.1f} {:.1f}] "
+                      "depth={:#x} handled={:d}",
+                g_frame.num, (unsigned long)d.rt_base, d.vertex_count,
+                d.index_count, d.num_vattrs, d.mrt_count, d.target_mask,
+                d.recomp ? d.recomp->ps_mrt_mask : 0, d.prim_type,
+                d.viewport_x_scale, d.viewport_x_offset, d.viewport_y_scale,
+                d.viewport_y_offset, (unsigned long)d.depth_base,
+                recompiled);
   }
   if (recompiled)
     return;

@@ -68,6 +68,7 @@
 #include "audio_daemon.h"
 
 #include <base.h>
+#include <base/logging.h>
 
 #include <atomic>
 #include <chrono>
@@ -233,11 +234,10 @@ void daemonMain() {
         if (!plausibleSlot(bpf, type, rate, grain)) {
           if (!p.badFormat) {
             p.badFormat = true;
-            std::fprintf(stderr,
-                         "[audiod] slot %zu declares bpf=%u type=%u rate=%u "
-                         "grain=%u -- not a shape this module can produce, "
-                         "leaving it alone\n",
-                         k, bpf, type, rate, grain);
+            BASE_LOGI("audiod",
+                      "slot {} declares bpf={} type={} rate={} grain={} -- not "
+                      "a shape this module can produce, leaving it alone",
+                      k, bpf, type, rate, grain);
           }
           continue;
         }
@@ -253,10 +253,10 @@ void daemonMain() {
         if (u32(kOffIndex) != k) {
           if (!p.badFormat) {
             p.badFormat = true;
-            std::fprintf(stderr,
-                         "[audiod] slot %zu declares port index %u -- refusing "
-                         "to grant, the event-flag bit would be wrong\n",
-                         k, u32(kOffIndex));
+            BASE_LOGI("audiod",
+                      "slot {} declares port index {} -- refusing to grant, the "
+                      "event-flag bit would be wrong",
+                      k, u32(kOffIndex));
           }
           continue;
         }
@@ -269,11 +269,10 @@ void daemonMain() {
           // that thread. Say so once instead of skipping in silence.
           if (!p.warnedNoArea) {
             p.warnedNoArea = true;
-            std::fprintf(stderr,
-                         "[audiod] port %zu has a pending block but its sample "
-                         "region is %s (need %zu bytes) -- not granting\n",
-                         k, it == areas.end() ? "not mapped" : "too small",
-                         need);
+            BASE_LOGI("audiod",
+                      "port {} has a pending block but its sample region is {} "
+                      "(need {} bytes) -- not granting",
+                      k, it == areas.end() ? "not mapped" : "too small", need);
           }
           continue;  // sample region not mapped yet: come back next tick
         }
@@ -300,11 +299,10 @@ void daemonMain() {
           p.configured = true;
           if (type == 0 || type == 1) {
             p.sink = prosperity_audio_open(rate, channels, type == 1 ? 1 : 0);
-            std::fprintf(stderr,
-                         "[audiod] port %zu -> sink %d: %uch %s %uHz grain=%u "
-                         "(bpf=%u)\n",
-                         k, p.sink, channels, type == 1 ? "f32" : "s16", rate,
-                         grain, bpf);
+            BASE_LOGI("audiod",
+                      "port {} -> sink {}: {}ch {} {}Hz grain={} (bpf={})",
+                      k, p.sink, channels, type == 1 ? "f32" : "s16", rate,
+                      grain, bpf);
           } else {
             // Sample type 2 ("32-bit") exists in the module's format table but
             // has never been observed here. It is a real format: the kernel's
@@ -312,9 +310,10 @@ void daemonMain() {
             // host sink lacks a mapping, so drain the port rather than guess a
             // conversion -- the title keeps running, just without this port's
             // audio.
-            std::fprintf(stderr,
-                         "[audiod] port %zu sample type %u is unverified; "
-                         "draining without playback\n", k, type);
+            BASE_LOGI("audiod",
+                      "port {} sample type {} is unverified; draining without "
+                      "playback",
+                      k, type);
           }
         }
         p.grain = grain;
@@ -367,12 +366,12 @@ void daemonMain() {
         const Port &p = ports[k];
         if (!p.blocks)
           continue;
-        std::fprintf(stderr,
-                     "[audiod] port=%zu sink=%d %uch %s %uHz grain=%u "
-                     "blocks=%llu dropped=%llu peak=%.3f peakMax=%.3f\n",
-                     k, p.sink, p.channels, p.type == 1 ? "f32" : "s16", p.rate,
-                     p.grain, (unsigned long long)p.blocks,
-                     (unsigned long long)p.dropped, p.peak, p.peakMax);
+        BASE_LOGI("audiod",
+                  "port={} sink={} {}ch {} {}Hz grain={} blocks={} dropped={} "
+                  "peak={:.3f} peakMax={:.3f}",
+                  k, p.sink, p.channels, p.type == 1 ? "f32" : "s16", p.rate,
+                  p.grain, (unsigned long long)p.blocks,
+                  (unsigned long long)p.dropped, p.peak, p.peakMax);
       }
     }
 
@@ -427,14 +426,14 @@ void audioDaemonNoticeShm(const char *name, uint8_t *base, size_t size) {
   bool expected = false;
   if (!g_started.compare_exchange_strong(expected, true))
     return;
-  std::fprintf(stderr,
-               "[audiod] '%s' is an LLE libSceAudioOut control block; starting "
-               "the system audio daemon stand-in\n", name);
+  BASE_LOGI("audiod",
+            "'{}' is an LLE libSceAudioOut control block; starting the system "
+            "audio daemon stand-in", name);
   if (kAudiomixAck)
-    std::fprintf(stderr,
-                 "[audiod] WARNING: DELTA_AUDIOMIX_ACK is set. That research "
-                 "aid fakes the mix-flag grant on a timer, which races the "
-                 "daemon's real grant and breaks pacing.\n");
+    BASE_LOGI("audiod",
+              "WARNING: DELTA_AUDIOMIX_ACK is set. That research aid fakes the "
+              "mix-flag grant on a timer, which races the daemon's real grant "
+              "and breaks pacing.");
   std::thread(daemonMain).detach();
 }
 

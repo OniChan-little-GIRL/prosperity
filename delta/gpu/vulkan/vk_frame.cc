@@ -30,6 +30,10 @@
 #include <cstring>
 #include <limits>
 #include <vector>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/options.h>
 
 namespace {
@@ -130,12 +134,12 @@ void EnsureReadback(uint32_t w, uint32_t h, VkFormat fmt) {
   // here unmaps a pointer the other slot is still holding.
   static const bool kRbTrace = std::getenv("DELTA_GPU_RBTRACE") != nullptr;
   if (kRbTrace)
-    std::fprintf(stderr,
-                 "[rb] realloc for %ux%u fmt=%d need=%llu have=%llu "
-                 "old_map=%p old_buf=%p\n",
-                 w, h, (int)fmt, (unsigned long long)need,
-                 (unsigned long long)g_frame.readback_size,
-                 g_frame.readback_map, (void*)g_frame.readback);
+    BASE_LOGI("rb",
+              "realloc for {}x{} fmt={} need={} have={} old_map={:p} "
+              "old_buf={:p}",
+              w, h, (int)fmt, (unsigned long long)need,
+              (unsigned long long)g_frame.readback_size, g_frame.readback_map,
+              (void*)g_frame.readback);
   vkDeviceWaitIdle(g_dev.device);
   if (g_frame.readback_map)
     vkUnmapMemory(g_dev.device, g_frame.readback_mem);
@@ -192,7 +196,7 @@ RdocApi* GetRdocApi() {
                    : nullptr;
     RdocApi* a = nullptr;
     if (!get || get(10000, reinterpret_cast<void**>(&a)) != 1) {
-      std::fprintf(stderr, "[rdoc] no capture layer attached\n");
+      BASE_LOGI("rdoc", "no capture layer attached");
       return nullptr;
     }
     return a;
@@ -272,9 +276,8 @@ bool ReportRtContents(FrameSlot& owner) {
         vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
         rt.layout = old_layout;
       }
-      std::fprintf(
-          stderr, "[rtstat] readback submit failed: end=%d submit=%d wait=%d\n",
-          (int)end_result, (int)submit_result, (int)wait_result);
+      BASE_LOGI("rtstat", "readback submit failed: end={} submit={} wait={}",
+                (int)end_result, (int)submit_result, (int)wait_result);
       return false;
     }
     vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
@@ -552,19 +555,18 @@ bool ReportRtContents(FrameSlot& owner) {
                   std::fwrite(px3, 1, 3, pf);
                 }
                 std::fclose(pf);
-                std::fprintf(stderr, "[rtstat-fb] wrote %s\n", fp);
+                BASE_LOGI("rtstat-fb", "wrote {}", fp);
               }
             }
-            std::fprintf(stderr,
-                         "[rtstat-fb] %#lx max=%.4g hi100=%lu "
-                         "fbA=%.4g/%.4g/%.4g below0.8999=%lu "
-                         "at(%u,%u)=%.4g,%.4g,%.4g a=%.4g %s\n",
-                         (unsigned long)kv.first, fmax, (unsigned long)fhi,
-                         fhi ? fa_min : 0.f,
-                         fhi ? fa_sum / (double)fhi : 0.0, fhi ? fa_max : 0.f,
-                         (unsigned long)below, max_x, max_y, at[0], at[1],
-                         at[2], at[3],
-                         at[3] >= 0.89990f ? "RESET" : "AMPLIFY");
+            BASE_LOGI("rtstat-fb",
+                      "{:#x} max={:.4g} hi100={} fbA={:.4g}/{:.4g}/{:.4g} "
+                      "below0.8999={} at({},{})={:.4g},{:.4g},{:.4g} "
+                      "a={:.4g} {}",
+                      (unsigned long)kv.first, fmax, (unsigned long)fhi,
+                      fhi ? fa_min : 0.f,
+                      fhi ? fa_sum / (double)fhi : 0.0, fhi ? fa_max : 0.f,
+                      (unsigned long)below, max_x, max_y, at[0], at[1], at[2],
+                      at[3], at[3] >= 0.89990f ? "RESET" : "AMPLIFY");
           }
         }
         vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &fc);
@@ -591,27 +593,30 @@ bool ReportRtContents(FrameSlot& owner) {
       size_t i = (size_t)(q * (double)(lums.size() - 1));
       return lums[i];
     };
-    std::fprintf(
-        stderr,
-        "[rtstat] f%d RT %#lx %ux%u draws=%u nz=%lu rgbnz=%lu/%lu "
-        "mean=%lu tone=%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu hot=%lu nan=%lu inf=%lu "
-        "max=%.4g@%u,%u(a=%.4g) hi100=%lu hibox=%u,%u-%u,%u hiA=%.4g/%.4g/%.4g p99=%.4g p999=%.4g guestnz=%lu/%lu vs=%#lx ps=%#lx "
-        "cb=%#x rb=%#x vals=%08x %08x %08x %08x\n",
-        g_frame.num, (unsigned long)kv.first, rt.w, rt.h, rt.draws,
-        (unsigned long)nz, (unsigned long)rgb_nz, (unsigned long)samples,
-        (unsigned long)(samples ? luma_sum / (double)samples * 255.0 : 0.0),
-        (unsigned long)tone[0], (unsigned long)tone[1], (unsigned long)tone[2],
-        (unsigned long)tone[3], (unsigned long)tone[4], (unsigned long)tone[5],
-        (unsigned long)tone[6], (unsigned long)tone[7], (unsigned long)hot,
-        (unsigned long)nan_half,
-        (unsigned long)inf_half, lum_max, max_x, max_y, a_at_max, (unsigned long)hi,
-        hi ? hx0 : 0, hi ? hy0 : 0, hx1, hy1,
-        hi ? hi_a_min : 0.f, hi ? hi_a_sum / (double)hi : 0.0,
-        hi ? hi_a_max : 0.f, pct(0.99), pct(0.999),
-        (unsigned long)guest_nz, (unsigned long)guest_bytes,
-        (unsigned long)rt.last_vs,
-        (unsigned long)rt.last_ps, rt.last_cbuf_mask, rt.last_rawbuf_mask,
-        distinct[0], distinct[1], distinct[2], distinct[3]);
+    BASE_LOGI("rtstat",
+              "f{} RT {:#x} {}x{} draws={} nz={} rgbnz={}/{} mean={} "
+              "tone={}/{}/{}/{}/{}/{}/{}/{} hot={} nan={} inf={} "
+              "max={:.4g}@{},{}(a={:.4g}) hi100={} hibox={},{}-{},{} "
+              "hiA={:.4g}/{:.4g}/{:.4g} p99={:.4g} p999={:.4g} guestnz={}/{} "
+              "vs={:#x} ps={:#x} cb={:#x} rb={:#x} vals={:08x} {:08x} {:08x} "
+              "{:08x}",
+              g_frame.num, (unsigned long)kv.first, rt.w, rt.h, rt.draws,
+              (unsigned long)nz, (unsigned long)rgb_nz, (unsigned long)samples,
+              (unsigned long)(samples ? luma_sum / (double)samples * 255.0
+                                      : 0.0),
+              (unsigned long)tone[0], (unsigned long)tone[1],
+              (unsigned long)tone[2], (unsigned long)tone[3],
+              (unsigned long)tone[4], (unsigned long)tone[5],
+              (unsigned long)tone[6], (unsigned long)tone[7], (unsigned long)hot,
+              (unsigned long)nan_half, (unsigned long)inf_half, lum_max, max_x,
+              max_y, a_at_max, (unsigned long)hi, hi ? hx0 : 0, hi ? hy0 : 0,
+              hx1, hy1, hi ? hi_a_min : 0.f,
+              hi ? hi_a_sum / (double)hi : 0.0, hi ? hi_a_max : 0.f,
+              pct(0.99), pct(0.999), (unsigned long)guest_nz,
+              (unsigned long)guest_bytes, (unsigned long)rt.last_vs,
+              (unsigned long)rt.last_ps, rt.last_cbuf_mask,
+              rt.last_rawbuf_mask, distinct[0], distinct[1], distinct[2],
+              distinct[3]);
     // DELTA_GPU_RTSTAT_DIS: disassemble the pixel shader that produced a
     // NaN-poisoned half-float target. Guest shader addresses differ from run to
     // run, so the shader has to be named in the same run that observed the NaN.
@@ -756,12 +761,11 @@ bool ReportRtContents(FrameSlot& owner) {
       hi = std::max(hi, v);
       sum += v;
     }
-    std::fprintf(stderr,
-                 "[dbstat] f%d DEPTH %#lx %ux%u min=%g max=%g mean=%g "
-                 "zero=%lu/%lu one=%lu\n",
-                 g_frame.num, (unsigned long)entry.first, d.w, d.h, lo, hi,
-                 samples ? sum / samples : 0.0, (unsigned long)zero,
-                 (unsigned long)samples, (unsigned long)one);
+    BASE_LOGI("dbstat",
+              "f{} DEPTH {:#x} {}x{} min={} max={} mean={} zero={}/{} one={}",
+              g_frame.num, (unsigned long)entry.first, d.w, d.h, lo, hi,
+              samples ? sum / samples : 0.0, (unsigned long)zero,
+              (unsigned long)samples, (unsigned long)one);
     // Under RTDUMP, write the Z plane too: "75% of it is exactly zero" is a
     // number that fits several very different pictures, and which one it is
     // decides where to look next.
@@ -819,7 +823,7 @@ void BeginFrame(Renderer& renderer) {
   }
   if (RdocFrame() && g_frame.num == RdocFrame() && GetRdocApi()) {
     GetRdocApi()->StartFrameCapture(RdocDevice(), nullptr);
-    std::fprintf(stderr, "[rdoc] capturing frame %d\n", g_frame.num);
+    BASE_LOGI("rdoc", "capturing frame {}", g_frame.num);
   }
   // Bind the active frame slot: its command buffer + readback aliases, and its
   // half of each host-visible ring (the other half may still be read by the
@@ -851,23 +855,22 @@ void BeginFrame(Renderer& renderer) {
     peak_ubo = std::max(peak_ubo, used_ubo);
     peak_sbo = std::max(peak_sbo, used_sbo);
     if (g_frame.num % 10 == 0)
-      std::fprintf(stderr,
-                   "[ringhwm] f%d draws=%u vb=%lluK/%lluK(peak %lluK) "
-                   "ib=%lluK/%lluK(peak %lluK) ubo=%lluK/%lluK(peak %lluK) "
-                   "sbo=%lluK/%lluK(peak %lluK)\n",
-                   g_frame.num, g_frame.draws,
-                   (unsigned long long)(used_vb >> 10),
-                   (unsigned long long)((VbRingBytes() / 2) >> 10),
-                   (unsigned long long)(peak_vb >> 10),
-                   (unsigned long long)(used_ib >> 10),
-                   (unsigned long long)((kIbRing / 2) >> 10),
-                   (unsigned long long)(peak_ib >> 10),
-                   (unsigned long long)(used_ubo >> 10),
-                   (unsigned long long)((kUboRing / 2) >> 10),
-                   (unsigned long long)(peak_ubo >> 10),
-                   (unsigned long long)(used_sbo >> 10),
-                   (unsigned long long)((kSboRing / 2) >> 10),
-                   (unsigned long long)(peak_sbo >> 10));
+      BASE_LOGI("ringhwm",
+                "f{} draws={} vb={}K/{}K(peak {}K) ib={}K/{}K(peak {}K) "
+                "ubo={}K/{}K(peak {}K) sbo={}K/{}K(peak {}K)",
+                g_frame.num, g_frame.draws,
+                (unsigned long long)(used_vb >> 10),
+                (unsigned long long)((VbRingBytes() / 2) >> 10),
+                (unsigned long long)(peak_vb >> 10),
+                (unsigned long long)(used_ib >> 10),
+                (unsigned long long)((kIbRing / 2) >> 10),
+                (unsigned long long)(peak_ib >> 10),
+                (unsigned long long)(used_ubo >> 10),
+                (unsigned long long)((kUboRing / 2) >> 10),
+                (unsigned long long)(peak_ubo >> 10),
+                (unsigned long long)(used_sbo >> 10),
+                (unsigned long long)((kSboRing / 2) >> 10),
+                (unsigned long long)(peak_sbo >> 10));
     prev_vb = g_frame.slot_idx * (VbRingBytes() / 2);
     prev_ib = g_frame.slot_idx * (kIbRing / 2);
     prev_ubo = g_frame.slot_idx * (kUboRing / 2);
@@ -959,10 +962,9 @@ void WatchGuestMem() {
     seen_nz++;
   if (reported < 6 && (nz || (g_frame.num % 500) == 0)) {
     reported++;
-    std::fprintf(stderr,
-                 "[memwatch] f%d %#lx nonzero=%lu/4096 (frames-nonzero=%lu)\n",
-                 g_frame.num, (unsigned long)a, (unsigned long)nz,
-                 (unsigned long)seen_nz);
+    BASE_LOGI("memwatch", "f{} {:#x} nonzero={}/4096 (frames-nonzero={})",
+              g_frame.num, (unsigned long)a, (unsigned long)nz,
+              (unsigned long)seen_nz);
   }
 }
 
@@ -1028,11 +1030,11 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
       }
   }
   if (kPresentTrace)
-    std::fprintf(
-        stderr, "[present] f%d scanout=%#lx -> present=%#lx%s\n", g_frame.num,
-        (unsigned long)scanout_base, (unsigned long)present_base,
-        (scanout_base && present_base == scanout_base) ? ""
-                                                       : " (fallback last_rt)");
+    BASE_LOGI("present", "f{} scanout={:#x} -> present={:#x}{}", g_frame.num,
+              (unsigned long)scanout_base, (unsigned long)present_base,
+              (scanout_base && present_base == scanout_base)
+                  ? ""
+                  : " (fallback last_rt)");
   auto it = g_rts.find(present_base);
 
   // Record the presented RT's readback copy into this frame's slot, submit it,
@@ -1110,8 +1112,8 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     if (submit_result == VK_SUCCESS)
       submit_result = vkQueueSubmit(g_dev.queue, 1, &si, cur.fence);
     if (end_result != VK_SUCCESS || submit_result != VK_SUCCESS)
-      std::fprintf(stderr, "[gpuvk] frame submit failed: end=%d submit=%d\n",
-                   (int)end_result, (int)submit_result);
+      BASE_LOGI("gpuvk", "frame submit failed: end={} submit={}",
+                (int)end_result, (int)submit_result);
     cur.submitted = submit_result == VK_SUCCESS;
   }
   if (!cur.submitted) {
@@ -1166,9 +1168,8 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     const VkResult fin_wait =
         vkWaitForFences(g_dev.device, 1, &fin.fence, VK_TRUE, UINT64_MAX);
     if (fin_wait != VK_SUCCESS) {
-      std::fprintf(stderr,
-                   "[gpuvk] frame %d fence DEVICE FAULT: wait=%d draws=%u\n",
-                   fin.frame_num, (int)fin_wait, fin.frame_draws);
+      BASE_LOGI("gpuvk", "frame {} fence DEVICE FAULT: wait={} draws={}",
+                fin.frame_num, (int)fin_wait, fin.frame_draws);
       ReportDeviceFault(g_dev);
       renderer.state = nullptr;
       return;
@@ -1204,7 +1205,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     }
     if (RdocFrame() && GetRdocApi() && GetRdocApi()->IsFrameCapturing()) {
       uint32_t ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
-      std::fprintf(stderr, "[rdoc] capture %s\n", ok ? "written" : "FAILED");
+      BASE_LOGI("rdoc", "capture {}", ok ? "written" : "FAILED");
       if (ok && kRdocExit) {
         std::fflush(nullptr);
         std::_Exit(0);
@@ -1236,12 +1237,11 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     // channels rather than reporting on one of them.
     for (size_t i = 0; rb && i < n; i += 4099, sampled++)
       nz += rb[i] != 0;
-    std::fprintf(stderr,
-                 "[rb] present f%d nz=%llu/%llu rt=%#lx %ux%u map=%p%s\n",
-                 fin.frame_num, (unsigned long long)nz,
-                 (unsigned long long)sampled, (unsigned long)fin.present_base,
-                 fin.w, fin.h, fin.readback_map,
-                 fin.readback_map == g_frame.readback_map ? " (bound)" : "");
+    BASE_LOGI("rb",
+              "present f{} nz={}/{} rt={:#x} {}x{} map={:p}{}",
+              fin.frame_num, (unsigned long long)nz, (unsigned long long)sampled,
+              (unsigned long)fin.present_base, fin.w, fin.h, fin.readback_map,
+              fin.readback_map == g_frame.readback_map ? " (bound)" : "");
   }
   uint8_t* pixels;
   if (kFlipMode == 0 && fin.fmt == VK_FORMAT_B8G8R8A8_UNORM) {
@@ -1309,10 +1309,10 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
         std::fputc(pixels[i * 4 + 3], alpha);
       std::fclose(alpha);
     }
-    std::fprintf(
-        stderr, "[snap] wrote %s (f%d %ux%u draws=%u rt=%#lx scanout=%#lx)\n",
-        p, fin.frame_num, fin.w, fin.h, fin.frame_draws,
-        (unsigned long)fin.present_base, (unsigned long)fin.scanout_base);
+    BASE_LOGI("snap",
+              "wrote {} (f{} {}x{} draws={} rt={:#x} scanout={:#x})", p,
+              fin.frame_num, fin.w, fin.h, fin.frame_draws,
+              (unsigned long)fin.present_base, (unsigned long)fin.scanout_base);
     snapped = true;
   }
   // Sequence capture (DELTA_GPU_SNAPSEQ=K): write up to K numbered
@@ -1325,8 +1325,8 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     char p[256];
     std::snprintf(p, sizeof p, "%s/seq_%02d.ppm", DumpDir(), seq_done);
     WritePpm(p, pixels, fin.w, fin.h);
-    std::fprintf(stderr, "[snapseq] %d -> f%d draws=%u\n", seq_done,
-                 fin.frame_num, fin.frame_draws);
+    BASE_LOGI("snapseq", "{} -> f{} draws={}", seq_done, fin.frame_num,
+              fin.frame_draws);
     seq_done++;
     seq_last_frame = fin.frame_num;
   }
@@ -1341,8 +1341,8 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     char p[256];
     std::snprintf(p, sizeof(p), "%s/every_%03d.ppm", DumpDir(), every_done);
     WritePpm(p, pixels, fin.w, fin.h);
-    std::fprintf(stderr, "[snapevery] %d -> f%d draws=%u\n", every_done,
-                 fin.frame_num, fin.frame_draws);
+    BASE_LOGI("snapevery", "{} -> f{} draws={}", every_done, fin.frame_num,
+              fin.frame_draws);
     every_done++;
     every_last = fin.frame_num;
   }
@@ -1370,18 +1370,18 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     WritePpm(latest, pixels, fin.w, fin.h);
   }
   if (g_dump && fin.frame_num % 200 == 0) {
-    std::fprintf(
-        stderr,
-        "[gpuvk] frame %d draws=%u heuristic=%u rt=%#lx %ux%u  scanout=%#lx\n",
+    BASE_LOGI(
+        "gpuvk",
+        "frame {} draws={} heuristic={} rt={:#x} {}x{}  scanout={:#x}",
         fin.frame_num, fin.frame_draws, g_frame.heuristic,
         (unsigned long)fin.present_base, fin.w, fin.h,
         (unsigned long)fin.scanout_base);
     for (auto& kv : g_rts)
       if (kv.second.used_this_frame)
-        std::fprintf(stderr, "[gpuvk]    RT %#lx %ux%u draws=%u%s\n",
-                     (unsigned long)kv.first, kv.second.w, kv.second.h,
-                     kv.second.draws,
-                     kv.first == fin.scanout_base ? " <-SCANOUT" : "");
+        BASE_LOGI("gpuvk", "   RT {:#x} {}x{} draws={}{}",
+                  (unsigned long)kv.first, kv.second.w, kv.second.h,
+                  kv.second.draws,
+                  kv.first == fin.scanout_base ? " <-SCANOUT" : "");
   }
   // Perf overlay, drawn into the presented buffer only -- the PPM capture
   // paths above already consumed `pixels`, so dumps stay clean.
@@ -1394,7 +1394,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     char p[256];
     std::snprintf(p, sizeof p, "%s/gpu_overlay.ppm", DumpDir());
     WritePpm(p, pixels, fin.w, fin.h);
-    std::fprintf(stderr, "[overlay] wrote %s\n", p);
+    BASE_LOGI("overlay", "wrote {}", p);
   }
   // Present the rendered scanout into the window the VideoOut HLE opened. When
   // there is no display (headless) the window was never created, so we skip
@@ -1430,7 +1430,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
 
   if (RdocFrame() && GetRdocApi() && GetRdocApi()->IsFrameCapturing()) {
     uint32_t ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
-    std::fprintf(stderr, "[rdoc] capture %s\n", ok ? "written" : "FAILED");
+    BASE_LOGI("rdoc", "capture {}", ok ? "written" : "FAILED");
     if (ok && kRdocExit) {
       std::fflush(nullptr);
       std::_Exit(0);

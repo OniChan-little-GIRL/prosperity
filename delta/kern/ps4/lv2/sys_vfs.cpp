@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <unistd.h>
 #include <base/strings/string_ref.h>
 #include <algorithm>
@@ -84,8 +85,8 @@ static void printOpenCaller(const char *path) {
       auto &mi = m->getInfo();
       auto base = reinterpret_cast<uintptr_t>(mi.textSeg.addr);
       if (base && v >= base && v < base + mi.textSeg.size) {
-        std::fprintf(stderr, "[open-caller] %s : %s+%#lx\n", path,
-                     mi.name.c_str(), v - base);
+        BASE_LOGI("open-caller", "{} : {}+{:#x}", path, mi.name.c_str(),
+                  v - base);
         printed++;
         break;
       }
@@ -165,7 +166,7 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
     return -SysError::eINVAL;
 
   if (kVfsTrace)
-    std::fprintf(stderr, "[open] %s flags=%#x mode=%#x\n", path, flags, mode);
+    BASE_LOGI("open", "{} flags={:#x} mode={:#x}", path, flags, mode);
   if (std::strstr(path, ".psarc"))
     printOpenCaller(path);
 
@@ -206,12 +207,12 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
       const size_t n = entries.size();
       auto *dir = new dirDevice(proc::getActive(), std::move(entries));
       if (kVfsTrace)
-        std::fprintf(stderr, "[open]   -> dir fd=%u entries=%zu %s\n",
-                     dir->handle(), n, path);
+        BASE_LOGI("open", "  -> dir fd={} entries={} {}", dir->handle(), n,
+                  path);
       return dir->handle();
     }
     if (kVfsTrace)
-      std::fprintf(stderr, "[open]   -> dir ENOENT %s\n", path);
+      BASE_LOGI("open", "  -> dir ENOENT {}", path);
     return -SysError::eNOENT;
   }
 
@@ -227,8 +228,8 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
       if (file->openWritable(host, (flags & O_CREAT) != 0,
                              (flags & O_TRUNC) != 0)) {
         if (kVfsTrace)
-          std::fprintf(stderr, "[open]   -> writable fd=%u %s\n",
-                       file->handle(), host.c_str());
+          BASE_LOGI("open", "  -> writable fd={} {}", file->handle(),
+                    host.c_str());
         return file->handle();
       }
       file->releaseHandle();
@@ -240,7 +241,7 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
   utl::File vf = vfs::openRead(path);
   if (!vf.Exists()) {
     if (kVfsTrace)
-      std::fprintf(stderr, "[open]   -> ENOENT %s\n", path);
+      BASE_LOGI("open", "  -> ENOENT {}", path);
     return -SysError::eNOENT;
   }
 
@@ -262,8 +263,8 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
   if (std::strstr(path, ".qar"))
     markQarFd(file->handle(), true);
   if (kVfsTrace)
-    std::fprintf(stderr, "[open]   -> fd=%u size=%lld %s\n", file->handle(),
-                 (long long)fsize, path);
+    BASE_LOGI("open", "  -> fd={} size={} {}", file->handle(),
+              (long long)fsize, path);
   return file->handle();
 }
 
@@ -292,12 +293,12 @@ void fdReadStat(uint32_t fd, int64_t n) {
     std::thread([] {
       for (;;) {
         std::this_thread::sleep_for(std::chrono::seconds(20));
-        std::fprintf(stderr, "[fdstats] --- bytes read per fd ---\n");
+        BASE_LOGI("fdstats", "--- bytes read per fd ---");
         for (uint32_t i = 0; i < 4096; i++)
           if (uint64_t b = bytes[i].load(std::memory_order_relaxed))
-            std::fprintf(stderr, "[fdstats] fd=%u calls=%llu bytes=%llu\n", i,
-                         (unsigned long long)calls[i].load(),
-                         (unsigned long long)b);
+            BASE_LOGI("fdstats", "fd={} calls={} bytes={}", i,
+                      (unsigned long long)calls[i].load(),
+                      (unsigned long long)b);
       }
     }).detach();
     return true;
@@ -341,7 +342,7 @@ int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
     if (fd <= 2)
       return 0;
     if (kRdall)
-      std::fprintf(stderr, "[rd] fd=%u -> EBADF (no device)\n", fd);
+      BASE_LOGI("rd", "fd={} -> EBADF (no device)", fd);
     return -SysError::eBADF;
   }
   int64_t r = d->read(buf, nbytes);
@@ -351,13 +352,14 @@ int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
   // to see whether texture data lands in the GPU texture region (0x41x) directly or
   // a staging buffer the game later copies from.
   if (kReadTrace && nbytes >= 0x4000)
-    std::fprintf(stderr, "[read] fd=%u buf=%p nbytes=%#zx -> %lld\n", fd, buf, nbytes,
-                 (long long)r);
+    BASE_LOGI("read", "fd={} buf={:p} nbytes={:#x} -> {}", fd, buf, nbytes,
+              (long long)r);
   if (kRdall) {
     uint32_t f4 = 0;
     if (buf && r >= 4) f4 = *reinterpret_cast<const uint32_t *>(buf);
-    std::fprintf(stderr, "[rd] t=%ld fd=%u nbytes=%#zx -> %lld buf=%p first4=%08x\n", (long)gettid(), fd, nbytes,
-                 (long long)r, buf, f4);
+    BASE_LOGI("rd",
+              "t={} fd={} nbytes={:#x} -> {} buf={:p} first4={:08x}",
+              (long)gettid(), fd, nbytes, (long long)r, buf, f4);
   }
   return r;
 }
@@ -413,7 +415,7 @@ static void fillStatfs(void *buf, const char *mount) {
 
 int PS4ABI sys_statfs(const char *path, void *buf) {
   if (kVfsTrace)
-    std::fprintf(stderr, "[statfs] '%s'\n", path ? path : "(null)");
+    BASE_LOGI("statfs", "'{}'", path ? path : "(null)");
   if (!buf)
     return -SysError::eFAULT;
   fillStatfs(buf, path);
@@ -465,14 +467,14 @@ int PS4ABI sys_fstat(uint32_t fd, void *stat) {
       static std::unordered_map<uint32_t, uint64_t> bad;
       std::lock_guard<std::mutex> lk(m);
       if (bad[fd]++ == 0)
-        std::fprintf(stderr, "[fstat] fd=%u -> EBADF (unknown descriptor)\n", fd);
+        BASE_LOGI("fstat", "fd={} -> EBADF (unknown descriptor)", fd);
     }
     return -SysError::eBADF;
   }
   int r = d->fstat(stat);
   if (kRdall && stat)
-    std::fprintf(stderr, "[fstat] fd=%u -> st_size=%lld\n", fd,
-                 (long long)static_cast<SceKernelStat *>(stat)->st_size);
+    BASE_LOGI("fstat", "fd={} -> st_size={}", fd,
+              (long long)static_cast<SceKernelStat *>(stat)->st_size);
   return r;
 }
 
@@ -487,14 +489,14 @@ int PS4ABI sys_stat(const char *path, void *stat) {
   bool isDir = false;
   if (!vfs::stat(path, size, isDir)) {
     if (kRdall)
-      std::fprintf(stderr, "[stat] %s -> ENOENT\n", path);
+      BASE_LOGI("stat", "{} -> ENOENT", path);
     return -SysError::eNOENT;
   }
   fillStat(*reinterpret_cast<SceKernelStat *>(stat),
            isDir ? kSceFileModeDir : kSceFileModeReg, size);
   if (kRdall)
-    std::fprintf(stderr, "[stat] %s -> size=%lld dir=%d\n", path,
-                 (long long)size, (int)isDir);
+    BASE_LOGI("stat", "{} -> size={} dir={}", path, (long long)size,
+              (int)isDir);
   return 0;
 }
 
@@ -523,7 +525,7 @@ int PS4ABI sys_close(uint32_t fd) {
 
   if (proc && fd != -1) {
     if (kRdall)
-      std::fprintf(stderr, "[close] fd=%u\n", fd);
+      BASE_LOGI("close", "fd={}", fd);
     auto *d = fdToDevice(fd);
     if (d && d->isRegularFile()) {
       uint32_t evict = static_cast<uint32_t>(-1);

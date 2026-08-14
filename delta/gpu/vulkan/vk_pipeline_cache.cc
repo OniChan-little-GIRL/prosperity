@@ -22,6 +22,10 @@
 #include <cstdlib>
 #include <utility>
 #include <vector>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/options.h>
 
 namespace {
@@ -79,10 +83,11 @@ std::vector<uint64_t> ParsePsList(const char* e, const char* tag) {
         p++;
     }
   if (!out.empty()) {
-    std::fprintf(stderr, "[%s] armed for %zu shader(s):", tag, out.size());
+    base::String armed;
+    base::FormatTo(armed, "armed for {} shader(s):", out.size());
     for (uint64_t v : out)
-      std::fprintf(stderr, " %#llx", (unsigned long long)v);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(armed, " {:#x}", (unsigned long long)v);
+    BASE_LOGI(tag, "{}", armed.c_str());
   }
   return out;
 }
@@ -302,7 +307,7 @@ bool CreatePipeline() {
   cba.colorWriteMask = 0xF;
   g_quad.pipeline = BuildPipeline(false, cba, kDefaultRtFormat);
   if (!g_quad.pipeline) {
-    std::fprintf(stderr, "[gpuvk] pipeline failed\n");
+    BASE_LOGI("gpuvk", "pipeline failed");
     return false;
   }
   return true;
@@ -335,7 +340,7 @@ bool CreateTexPipeline() {
   cba.colorWriteMask = 0xF;
   g_quad.tex_pipeline = BuildPipeline(true, cba, kDefaultRtFormat);
   if (!g_quad.tex_pipeline) {
-    std::fprintf(stderr, "[gpuvk] tex pipeline failed\n");
+    BASE_LOGI("gpuvk", "tex pipeline failed");
     return false;
   }
   return true;
@@ -558,11 +563,10 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       static std::vector<uint64_t> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
-        std::fprintf(stderr,
-                     "[nozps] depth test disabled for ps=%#llx (test_enable was "
-                     "%d, func %u)\n",
-                     (unsigned long long)d.ps_addr, (int)d.depth_test_enable,
-                     d.depth_func & 0x7);
+        BASE_LOGI("nozps",
+                  "depth test disabled for ps={:#x} (test_enable was {}, func {})",
+                  (unsigned long long)d.ps_addr, (int)d.depth_test_enable,
+                  d.depth_func & 0x7);
       }
     }
     dss.depthTestEnable =
@@ -572,10 +576,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       static std::vector<uint64_t> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
-        std::fprintf(stderr,
-                     "[nozwps] depth write disabled for ps=%#llx (was %d)\n",
-                     (unsigned long long)d.ps_addr,
-                     (int)d.depth_write_enable);
+        BASE_LOGI("nozwps", "depth write disabled for ps={:#x} (was {})",
+                  (unsigned long long)d.ps_addr, (int)d.depth_write_enable);
       }
     }
     const bool force_write = ForceZWriteForPs(d.ps_addr);
@@ -583,10 +585,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       static std::vector<uint64_t> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
-        std::fprintf(stderr,
-                     "[zwps] depth write FORCED for ps=%#llx (was %d)\n",
-                     (unsigned long long)d.ps_addr,
-                     (int)d.depth_write_enable);
+        BASE_LOGI("zwps", "depth write FORCED for ps={:#x} (was {})",
+                  (unsigned long long)d.ps_addr, (int)d.depth_write_enable);
       }
     }
     dss.depthWriteEnable =
@@ -648,16 +648,15 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       (kGpuPipetrace == 1 || d.ps_addr == kGpuPipetrace)) {
     static int n = 0;
     if (n++ < 24)
-      std::fprintf(
-          stderr,
-          "[pipe] ps=%#lx mrtN=%u psMrtMask=%#x tmask=%#x smask=%#x att0: "
-          "en=%u src=%d dst=%d src_a=%d dst_a=%d writeMask=%#x\n",
-          (unsigned long)d.ps_addr, mrt_n, d.recomp->ps_mrt_mask, d.target_mask,
-          d.shader_mask,
-          cb_att[0].blendEnable, (int)cb_att[0].srcColorBlendFactor,
-          (int)cb_att[0].dstColorBlendFactor,
-          (int)cb_att[0].srcAlphaBlendFactor,
-          (int)cb_att[0].dstAlphaBlendFactor, cb_att[0].colorWriteMask);
+      BASE_LOGI("pipe",
+                "ps={:#x} mrtN={} psMrtMask={:#x} tmask={:#x} smask={:#x} "
+                "att0: en={} src={} dst={} src_a={} dst_a={} writeMask={:#x}",
+                (unsigned long)d.ps_addr, mrt_n, d.recomp->ps_mrt_mask,
+                d.target_mask, d.shader_mask, cb_att[0].blendEnable,
+                (int)cb_att[0].srcColorBlendFactor,
+                (int)cb_att[0].dstColorBlendFactor,
+                (int)cb_att[0].srcAlphaBlendFactor,
+                (int)cb_att[0].dstAlphaBlendFactor, cb_att[0].colorWriteMask);
   }
   VkPipelineColorBlendStateCreateInfo cb{
       VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -701,7 +700,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
     vkDestroyShaderModule(g_dev.device, gs, nullptr);
   vkDestroyShaderModule(g_dev.device, fs, nullptr);
   if (r != VK_SUCCESS) {
-    std::fprintf(stderr, "[gpuvk] recomp pipeline failed: %d\n", (int)r);
+    BASE_LOGI("gpuvk", "recomp pipeline failed: {}", (int)r);
     return nullptr;
   }
   NameObject(VK_OBJECT_TYPE_PIPELINE, (uint64_t)rp.pipe,

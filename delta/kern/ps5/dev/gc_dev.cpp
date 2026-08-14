@@ -8,6 +8,9 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -56,7 +59,7 @@ extern "C" uint64_t prosperity_ps5_scanout_base();
 // per-flip buffer can be checked against the registered display buffers.
 static void traceFlip(const char *site, uint64_t base) {
   if (kFlipTrace)
-    std::printf("[flip] %s present=%#lx\n", site, (unsigned long)base);
+    BASE_LOGI("flip", "{} present={:#x}", site, (unsigned long)base);
 }
 
 namespace krnl {
@@ -80,9 +83,9 @@ static void scanPagePm4(void *ctx, uint8_t *p, size_t sz) {
   int perPage = 0;
   for (uint64_t j = 0; j < n && *hits < 24 && perPage < 4; j++) {
     if (isDcb(w[j])) {
-      std::printf("[agc]   DCB@%#lx hdr=%08x op=%#x\n",
-                  (unsigned long)(reinterpret_cast<uint64_t>(p) + j * 4), w[j],
-                  (w[j] >> 8) & 0xFF);
+      BASE_LOGI("agc", "  DCB@{:#x} hdr={:08x} op={:#x}",
+                (unsigned long)(reinterpret_cast<uint64_t>(p) + j * 4), w[j],
+                (w[j] >> 8) & 0xFF);
       (*hits)++;
       perPage++;
     }
@@ -155,13 +158,13 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
     auto now = std::chrono::steady_clock::now();
     if (now - last > std::chrono::seconds(10)) {
       last = now;
-      std::printf("[gcioctl] --- 10s census ---\n");
+      BASE_LOGI("gcioctl", "--- 10s census ---");
       for (auto &[c, n] : hist)
-        std::printf("[gcioctl] %#x %llu\n", c, (unsigned long long)n);
+        BASE_LOGI("gcioctl", "{:#x} {}", c, (unsigned long long)n);
     }
   }
   if (kGcTrace)
-    std::printf("[gc] ioctl(%x) data=%p\n", cmd, data);
+    BASE_LOGI("gc", "ioctl({:x}) data={:p}", cmd, data);
   switch (cmd) {
   case 0xC0108102: {  // GNM submit: {u32 a0, u32 count, u64 descPtr}
     struct argl { uint32_t a0; uint32_t count; uint64_t descPtr; };
@@ -217,27 +220,30 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       // describes start-up.
       if (kAgcTrace && (dumps < 8 || (calls % 200 == 0 && dumps < 12))) {
         dumps++;
-        std::printf("[agc] --- submit #%llu ---\n", (unsigned long long)calls);
+        BASE_LOGI("agc", "--- submit #{} ---", (unsigned long long)calls);
         auto *w = reinterpret_cast<uint32_t *>(a);
-        std::printf("[agc] submit arg[0..15]:");
+        base::String line;
+        base::FormatTo(line, "submit arg[0..15]:");
         for (int k = 0; k < 16; k++)
-          std::printf(" %08x", w[k]);
-        std::printf("\n[agc]   dcb0=%#lx dcb1=%#lx size=%u\n", (unsigned long)base,
-                    (unsigned long)base2, size);
+          base::FormatTo(line, " {:08x}", w[k]);
+        base::FormatTo(line, "\n  dcb0={:#x} dcb1={:#x} size={}", (unsigned long)base,
+                       (unsigned long)base2, size);
+        BASE_LOGI("agc", "{}", line.c_str());
         for (int k = 0; k + 1 < 16; k++) {
           uint64_t p = (static_cast<uint64_t>(w[k + 1]) << 32) | w[k];
           if (gpuReadable(p, 32)) {
             auto *pw = reinterpret_cast<const uint32_t *>(p);
-            std::printf("[agc]   arg[%d] ptr=%#lx ->", k, (unsigned long)p);
-            for (int j = 0; j < 8; j++) std::printf(" %08x", pw[j]);
-            std::printf("\n");
+            base::String line;
+            base::FormatTo(line, "  arg[{}] ptr={:#x} ->", k, (unsigned long)p);
+            for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", pw[j]);
+            BASE_LOGI("agc", "{}", line.c_str());
           }
         }
         if (auto *pr = proc::getActive()) {
           int hits = 0;
           pr->getVma().forEachGpuAperturePage(scanPagePm4, &hits);
           if (!hits)
-            std::printf("[agc]   no PM4 anywhere in the GPU aperture (empty ring?)\n");
+            BASE_LOGI("agc", "  no PM4 anywhere in the GPU aperture (empty ring?)");
         }
         // Distinguish "the title wrote nothing" from "we are reading a mapping
         // that does not see its writes": count non-zero dwords in the ring
@@ -247,8 +253,8 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
           uint32_t nz = 0, first = 0;
           for (uint32_t k = 0; k < 0x8000 / 4; k++)
             if (rw[k]) { if (!nz) first = k; nz++; }
-          std::printf("[agc]   ring %#lx: %u/%u dwords non-zero (first @dw %u)\n",
-                      (unsigned long)base, nz, 0x8000u / 4, first);
+          BASE_LOGI("agc", "  ring {:#x}: {}/{} dwords non-zero (first @dw {})",
+                    (unsigned long)base, nz, 0x8000u / 4, first);
         }
       }
       // The window a submit names is empty AT IOCTL TIME if the driver fills it
@@ -262,10 +268,11 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         for (uint32_t k = 0; k < 0x8000 / 4; k++)
           if (pw[k]) nz++;
         if (nz && dumps <= 12) {
-          std::printf("[agc]   prev ring %#lx now %u dwords non-zero:",
-                      (unsigned long)prevBase, nz);
-          for (int k = 0; k < 12; k++) std::printf(" %08x", pw[k]);
-          std::printf("\n");
+          base::String line;
+          base::FormatTo(line, "  prev ring {:#x} now {} dwords non-zero:",
+                         (unsigned long)prevBase, nz);
+          for (int k = 0; k < 12; k++) base::FormatTo(line, " {:08x}", pw[k]);
+          BASE_LOGI("agc", "{}", line.c_str());
         }
       }
       prevBase = base;
@@ -277,26 +284,29 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       if (kAgcRingdump && ringN < 3) {
         ringN++;
         auto *w = reinterpret_cast<const uint32_t *>(a);
-        std::printf("[ring] arg:");
-        for (int k = 0; k < 16; k++) std::printf(" %08x", w[k]);
-        std::printf("\n");
+        base::String line;
+        base::FormatTo(line, "arg:");
+        for (int k = 0; k < 16; k++) base::FormatTo(line, " {:08x}", w[k]);
+        BASE_LOGI("ring", "{}", line.c_str());
         auto sniff = [](uint64_t p, const char *what) {
           if (!gpuReadable(p, 1024)) return;
           const auto *q = reinterpret_cast<const uint32_t *>(p);
           uint32_t t3 = 0;
           for (int i = 0; i < 256; i++)
             if ((q[i] >> 30) == 3) t3++;
-          std::printf("[ring]   %s %#lx: %08x %08x %08x %08x  (type3 hdrs in 256 dw: %u)\n",
-                      what, (unsigned long)p, q[0], q[1], q[2], q[3], t3);
+          BASE_LOGI("ring",
+                    "  {} {:#x}: {:08x} {:08x} {:08x} {:08x}  (type3 hdrs in 256 dw: {})",
+                    what, (unsigned long)p, q[0], q[1], q[2], q[3], t3);
         };
         for (int k = 0; k + 1 < 16; k++)
           sniff((static_cast<uint64_t>(w[k + 1]) << 32) | w[k], "argptr");
         const uint64_t tbl = 0x80014981d8ull;
         if (gpuAddr(tbl)) {
           const auto *t = reinterpret_cast<const uint32_t *>(tbl);
-          std::printf("[ring] table @%#lx:", (unsigned long)tbl);
-          for (int k = 0; k < 16; k++) std::printf(" %08x", t[k]);
-          std::printf("\n");
+          base::String line;
+          base::FormatTo(line, "table @{:#x}:", (unsigned long)tbl);
+          for (int k = 0; k < 16; k++) base::FormatTo(line, " {:08x}", t[k]);
+          BASE_LOGI("ring", "{}", line.c_str());
           for (int k = 0; k + 1 < 16; k += 2)
             sniff((static_cast<uint64_t>(t[k + 1] & 0xFFFF) << 32) | t[k], "tblptr");
         }
@@ -357,9 +367,10 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       if (kAgcTrace && s_d131 < 6) {
         s_d131++;
         auto *w = static_cast<const uint32_t *>(data);
-        std::printf("[agc] 8131 arg(18 dwords):");
-        for (int i = 0; i < 18; i++) std::printf(" %08x", w[i]);
-        std::printf("\n");
+        base::String line;
+        base::FormatTo(line, "8131 arg(18 dwords):");
+        for (int i = 0; i < 18; i++) base::FormatTo(line, " {:08x}", w[i]);
+        BASE_LOGI("agc", "{}", line.c_str());
         // The ACQ ring is only ever sampled from the 0x8121 handler, which stops
         // firing once the driver has initialised. Sample it HERE, on the actual
         // per-frame submit, or "the ring is empty" only ever describes start-up.
@@ -370,9 +381,10 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
           for (uint32_t k = 0; k < 0x8000 / 4; k++)
             if (rw[k]) nz++;
           if (!nz) continue;
-          std::printf("[agc]   acqring %#lx: %u non-zero:", (unsigned long)r, nz);
-          for (int k = 0; k < 12; k++) std::printf(" %08x", rw[k]);
-          std::printf("\n");
+          base::String line;
+          base::FormatTo(line, "  acqring {:#x}: {} non-zero:", (unsigned long)r, nz);
+          for (int k = 0; k < 12; k++) base::FormatTo(line, " {:08x}", rw[k]);
+          BASE_LOGI("agc", "{}", line.c_str());
         }
         // Raw dump of every IT_INDIRECT_BUFFER the arg points at. The decoded walk
         // can only show what it manages to parse; the question here is whether the
@@ -384,9 +396,10 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
           if (dw > 256) dw = 256;
           if (!gpuReadable(ib, dw * 4)) continue;
           auto *iw = reinterpret_cast<const uint32_t *>(ib);
-          std::printf("[agc]   IB %#lx (%u dw):", (unsigned long)ib, dw);
-          for (uint32_t k = 0; k < dw; k++) std::printf(" %08x", iw[k]);
-          std::printf("\n");
+          base::String line;
+          base::FormatTo(line, "  IB {:#x} ({} dw):", (unsigned long)ib, dw);
+          for (uint32_t k = 0; k < dw; k++) base::FormatTo(line, " {:08x}", iw[k]);
+          BASE_LOGI("agc", "{}", line.c_str());
         }
       }
       prosperity_agc_submit(reinterpret_cast<uint64_t>(data), (cmd >> 16) & 0x1fff);
@@ -408,13 +421,13 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       static int s_d132 = 0;
       if (kAgcTrace && s_d132 < 8) {
         s_d132++;
-        std::printf("[agc] 8132 arg=[%08x %08x %08x %08x] ptr=%#lx count=%u\n",
-                    w[0], w[1], w[2], w[3], (unsigned long)ptr, count);
+        BASE_LOGI("agc", "8132 arg=[{:08x} {:08x} {:08x} {:08x}] ptr={:#x} count={}",
+                  w[0], w[1], w[2], w[3], (unsigned long)ptr, count);
         if (ptr && count && count < 4096) {
           auto *dd = reinterpret_cast<const uint32_t *>(ptr);
           for (uint32_t i = 0; i < count && i < 24; i++)
-            std::printf("[agc]   desc[%u] = %08x %08x %08x %08x\n", i,
-                        dd[i * 4], dd[i * 4 + 1], dd[i * 4 + 2], dd[i * 4 + 3]);
+            BASE_LOGI("agc", "  desc[{}] = {:08x} {:08x} {:08x} {:08x}", i,
+                      dd[i * 4], dd[i * 4 + 1], dd[i * 4 + 2], dd[i * 4 + 3]);
         }
       }
       // Census: a whole submit used to be dropped when it carried >= 64
@@ -429,13 +442,14 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         uint64_t n = nSubmits.load();
         if (n - last.load() >= 2000) {
           last.store(n);
-          std::printf("[gccensus] submits=%llu batch-dropped(count>=64)=%llu "
-                      "desc=%llu forwarded=%llu skipped-addr=%llu\n",
-                      (unsigned long long)n,
-                      (unsigned long long)nDropBatch.load(),
-                      (unsigned long long)nDesc.load(),
-                      (unsigned long long)nFwd.load(),
-                      (unsigned long long)nSkipAddr.load());
+          BASE_LOGI("gccensus",
+                    "submits={} batch-dropped(count>=64)={} desc={} forwarded={} "
+                    "skipped-addr={}",
+                    (unsigned long long)n,
+                    (unsigned long long)nDropBatch.load(),
+                    (unsigned long long)nDesc.load(),
+                    (unsigned long long)nFwd.load(),
+                    (unsigned long long)nSkipAddr.load());
         }
       }
       if (ptr && count && count < 64) {
@@ -479,10 +493,11 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       agcDumps++;
       uint32_t len = (cmd >> 16) & 0x1fff;
       auto *w = static_cast<uint32_t *>(data);
-      std::printf("[agc] mode1 ioctl(%x) len=%u:", cmd, len);
+      base::String line;
+      base::FormatTo(line, "mode1 ioctl({:x}) len={}:", cmd, len);
       for (uint32_t k = 0; k * 4 < len && k < 24; k++)
-        std::printf(" %08x", w[k]);
-      std::printf("\n");
+        base::FormatTo(line, " {:08x}", w[k]);
+      BASE_LOGI("agc", "{}", line.c_str());
       for (uint32_t k = 0; (k + 1) * 4 < len && k < 24; k++) {
         uint64_t p = (static_cast<uint64_t>(w[k + 1]) << 32) | w[k];
         // Follow both GPU-aperture pointers AND host/stack pointers (the mode-1
@@ -491,21 +506,22 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         bool stk = p >= 0x7ff000000000ull && p < 0x800000000000ull;
         if (gpu || stk) {
           auto *pw = reinterpret_cast<const uint32_t *>(p);
-          std::printf("[agc]   +%u ptr=%#lx ->", k * 4, (unsigned long)p);
-          for (int j = 0; j < 8; j++) std::printf(" %08x", pw[j]);
+          base::String line;
+          base::FormatTo(line, "  +{} ptr={:#x} ->", k * 4, (unsigned long)p);
+          for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", pw[j]);
           // If the struct holds a further (GPU) pointer, deref that too (a label).
           if (stk) {
             for (int e = 0; e < 6; e++) {
               uint64_t cand = (static_cast<uint64_t>(pw[e + 1]) << 32) | pw[e];
               if (gpuAddr(cand)) {
                 auto *cw = reinterpret_cast<const uint32_t *>(cand);
-                std::printf("\n[agc]     [+%d] buf %#lx sz=%08x ->", e * 4,
-                            (unsigned long)cand, pw[e + 2]);
-                for (int j = 0; j < 8; j++) std::printf(" %08x", cw[j]);
+                base::FormatTo(line, "\n    [+{}] buf {:#x} sz={:08x} ->", e * 4,
+                               (unsigned long)cand, pw[e + 2]);
+                for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", cw[j]);
               }
             }
           }
-          std::printf("\n");
+          BASE_LOGI("agc", "{}", line.c_str());
         }
       }
     }
@@ -516,7 +532,7 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
   static int unhandledLogged = 0;
   if (kGcTrace || unhandledLogged < 32) {
     unhandledLogged++;
-    std::printf("[gc] UNHANDLED ioctl(%x) data=%p\n", cmd, data);
+    BASE_LOGI("gc", "UNHANDLED ioctl({:x}) data={:p}", cmd, data);
   }
   if (data && (cmd & 0x40000000u)) {
     uint32_t len = (cmd >> 16) & 0x1fff;
@@ -562,8 +578,8 @@ uint8_t *gcDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t fl
   static const bool trace = kGcTrace ||
                             kDmemTrace;
   if (trace)
-    std::fprintf(stderr, "[gc] devmap off=%#zx len=%#zx -> %p (shared)\n", offset,
-                 len, p);
+    BASE_LOGI("gc", "devmap off={:#x} len={:#x} -> {:p} (shared)", offset, len,
+              p);
   return reinterpret_cast<uint8_t *>(p);
 }
 }  // namespace krnl

@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <base/logging.h>
+
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -164,17 +166,17 @@ void ReportDeviceFault(DeviceState& device) {
   info.pVendorInfos = vendors.data();
   counts.vendorBinarySize = 0;
   p_get_fault(device.device, &counts, &info);
-  std::fprintf(stderr, "[gpuvk] device fault: '%s' addrs=%u vendor=%u\n",
-               info.description, counts.addressInfoCount,
-               counts.vendorInfoCount);
+  BASE_LOGI("gpuvk", "device fault: '{}' addrs={} vendor={}",
+            info.description, counts.addressInfoCount,
+            counts.vendorInfoCount);
   for (const auto& a : addrs)
-    std::fprintf(stderr, "[gpuvk]   fault addr type=%d va=%#llx prec=%#llx\n",
-                 (int)a.addressType, (unsigned long long)a.reportedAddress,
-                 (unsigned long long)a.addressPrecision);
+    BASE_LOGI("gpuvk", "  fault addr type={} va={:#x} prec={:#x}",
+              (int)a.addressType, (unsigned long long)a.reportedAddress,
+              (unsigned long long)a.addressPrecision);
   for (const auto& v : vendors)
-    std::fprintf(stderr, "[gpuvk]   vendor '%s' code=%#llx data=%#llx\n",
-                 v.description, (unsigned long long)v.vendorFaultCode,
-                 (unsigned long long)v.vendorFaultData);
+    BASE_LOGI("gpuvk", "  vendor '{}' code={:#x} data={:#x}",
+              v.description, (unsigned long long)v.vendorFaultCode,
+              (unsigned long long)v.vendorFaultData);
 }
 
 uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags props) {
@@ -340,8 +342,8 @@ bool CreateDevice() {
         ic.pNext = &vf;
       }
     } else {
-      std::fprintf(stderr, "[vkval] %s not available on this loader\n",
-                   validation_layer);
+      BASE_LOGI("vkval", "{} not available on this loader",
+                validation_layer);
     }
   }
   VKOK(vkCreateInstance(&ic, nullptr, &g_dev.instance));
@@ -351,7 +353,7 @@ bool CreateDevice() {
   uint32_t n = 0;
   vkEnumeratePhysicalDevices(g_dev.instance, &n, nullptr);
   if (!n) {
-    std::fprintf(stderr, "[gpuvk] no device\n");
+    BASE_LOGI("gpuvk", "no device");
     return false;
   }
   std::vector<VkPhysicalDevice> devs(n);
@@ -405,7 +407,7 @@ bool CreateDevice() {
     }
   }
   if (g_dev.phys == VK_NULL_HANDLE) {
-    std::fprintf(stderr, "[gpuvk] no gfx device\n");
+    BASE_LOGI("gpuvk", "no gfx device");
     return false;
   }
 
@@ -421,7 +423,7 @@ bool CreateDevice() {
       break;
     }
   if (!found) {
-    std::fprintf(stderr, "[gpuvk] no gfx queue\n");
+    BASE_LOGI("gpuvk", "no gfx queue");
     return false;
   }
   g_dev.timestamp_valid_bits = qprops[g_dev.qfam].timestampValidBits;
@@ -572,7 +574,7 @@ bool CreateDevice() {
         g_dev.device, "vkCmdEndRenderingKHR");
   }
   if (!g_cmd_begin_rendering) {
-    std::fprintf(stderr, "[gpuvk] no dynamic rendering\n");
+    BASE_LOGI("gpuvk", "no dynamic rendering");
     return false;
   }
 
@@ -593,7 +595,7 @@ bool CreateDevice() {
       {gcn::kMaxCsResources, props.limits.maxPerStageDescriptorStorageBuffers,
        props.limits.maxDescriptorSetStorageBuffers});
   g_dev.max_storage_buffer_range = props.limits.maxStorageBufferRange;
-  std::fprintf(stderr, "[gpuvk] device: %s\n", props.deviceName);
+  BASE_LOGI("gpuvk", "device: {}", props.deviceName);
   if (!CreateUploadRings(props))
     return false;
   return true;
@@ -634,7 +636,7 @@ bool Init(Renderer& renderer) {
   std::thread init_thread([&ok] { ok = CreateDevice(); });
   init_thread.join();
   if (!ok) {
-    std::fprintf(stderr, "[gpuvk] headless Vulkan unavailable; gpu disabled\n");
+    BASE_LOGI("gpuvk", "headless Vulkan unavailable; gpu disabled");
     return false;
   }
   g_dev.ready = true;

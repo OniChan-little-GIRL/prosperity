@@ -10,6 +10,7 @@
 #include "vprx.h"
 #include <crypto/sha1.h>
 #include <base/containers/vector.h>
+#include <base/logging.h>
 #include <cstdlib>
 #include <cstring>
 
@@ -288,8 +289,8 @@ uintptr_t vprx_get(const char *lib, uint64_t hid) {
   // all. Fires once per import at load time, so it stays bounded.
   if (const char *t = kNidTrace) {
     if (t[0] == '1' || std::strstr(lib, t))
-      std::fprintf(stderr, "[nid] %s hid=%#018llx -> LLE (no HLE)\n", lib,
-                   (unsigned long long)hid);
+      BASE_LOGI("nid", "{} hid={:#018x} -> LLE (no HLE)", lib,
+                (unsigned long long)hid);
   }
   return 0;
 }

@@ -8,6 +8,9 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 
 #include "wait_probe.h"
 #include "../../thread_names.h"
@@ -137,9 +140,10 @@ int PS4ABI sys_thr_new(thr_param *p, int size) {
       }
     }
   }
-  std::printf("[thr_new] tid=%u start=%p arg=%p stack=%p+%#zx tls=%p entry=%s\n",
-              tid, (void *)p->start_func, p->arg, (void *)p->stack_base,
-              p->stack_size, (void *)p->tls_base, entry);
+  BASE_LOGI("thr_new",
+            "tid={} start={:p} arg={:p} stack={:p}+{:#x} tls={:p} entry={}",
+            tid, (void *)p->start_func, p->arg, (void *)p->stack_base,
+            p->stack_size, (void *)p->tls_base, entry);
 
   if (p->child_tid)
     *p->child_tid = tid;
@@ -181,9 +185,8 @@ int PS4ABI sys_thr_new(thr_param *p, int size) {
       }
     }
     if (filled)
-      std::printf(
-          "[thr_new] tid=%u backed %d unmapped stack page(s) for %p+%#zx\n", tid,
-          filled, (void *)p->stack_base, p->stack_size);
+      BASE_LOGI("thr_new", "tid={} backed {} unmapped stack page(s) for {:p}+{:#x}",
+                tid, filled, (void *)p->stack_base, p->stack_size);
   }
 
   auto fn = p->start_func;
@@ -524,8 +527,7 @@ static void cvTrace(const char *what, const void *ucond, uint32_t self) {
     return;
   char comm[32] = "";
   threadComm(comm, sizeof(comm));
-  std::fprintf(stderr, "[cv] %-12s ucond=%p tid=%u (%s)\n", what, ucond, self,
-               comm);
+  BASE_LOGI("cv", "{:<12} ucond={:p} tid={} ({})", what, ucond, self, comm);
   std::fflush(stderr);
 }
 
@@ -552,11 +554,10 @@ static void addrWatchLog(int op, const void *ptr, const void *a, uint64_t val,
     return;
   char comm[32] = "";
   threadComm(comm, sizeof(comm));
-  std::fprintf(stderr,
-               "[umtxw] op=%-2d ptr=%p a=%p val=%#llx tid=%u%s%s%s (%s)\n", op,
-               ptr, a, static_cast<unsigned long long>(val), self,
-               hitPtr ? " HIT:ptr" : "", hitA ? " HIT:a" : "",
-               hitBatch ? " HIT:nwake-batch" : "", comm);
+  BASE_LOGI("umtxw", "op={:<2} ptr={:p} a={:p} val={:#x} tid={}{}{}{} ({})",
+            op, ptr, a, static_cast<unsigned long long>(val), self,
+            hitPtr ? " HIT:ptr" : "", hitA ? " HIT:a" : "",
+            hitBatch ? " HIT:nwake-batch" : "", comm);
   std::fflush(stderr);
 }
 
@@ -572,8 +573,8 @@ static void addrWatchDump(const char *what, const void *p, uint32_t self) {
   char pre[80], at[160];
   hexBytes(pre, sizeof(pre), static_cast<const uint8_t *>(p) - 16, 16);
   hexBytes(at, sizeof(at), p, 32);
-  std::fprintf(stderr, "[umtxw] %-16s %p tid=%u\n  [-16] %s\n  [ +0] %s\n",
-               what, p, self, pre, at);
+  BASE_LOGI("umtxw", "{:<16} {:p} tid={}\n  [-16] {}\n  [ +0] {}", what, p,
+            self, pre, at);
   std::fflush(stderr);
 }
 
@@ -665,13 +666,13 @@ const char *opName(uint32_t op) {
 }
 
 void dump() {
-  std::fprintf(stderr, "[umtxhist] total=%llu dropped=%llu\n",
-               (unsigned long long)g_total.load(),
-               (unsigned long long)g_dropped.load());
+  BASE_LOGI("umtxhist", "total={} dropped={}",
+            (unsigned long long)g_total.load(),
+            (unsigned long long)g_dropped.load());
   for (uint32_t i = 0; i < 64; ++i)
     if (uint64_t n = g_op[i].load())
-      std::fprintf(stderr, "[umtxhist]   op %-2u %-18s %llu\n", i, opName(i),
-                   (unsigned long long)n);
+      BASE_LOGI("umtxhist", "  op {:<2} {:<18} {}", i, opName(i),
+                (unsigned long long)n);
   struct Row { uint64_t n, addr; uint32_t op, tid; };
   std::vector<Row> rows;
   for (auto &s : g_slots)
@@ -680,9 +681,9 @@ void dump() {
   std::sort(rows.begin(), rows.end(),
             [](const Row &a, const Row &b) { return a.n > b.n; });
   for (size_t i = 0; i < rows.size() && i < 28; ++i)
-    std::fprintf(stderr, "[umtxhist]   %-18s %#012llx gtid=%-3u %llu\n",
-                 opName(rows[i].op), (unsigned long long)rows[i].addr,
-                 rows[i].tid, (unsigned long long)rows[i].n);
+    BASE_LOGI("umtxhist", "  {:<18} {:#012x} gtid={:<3} {}",
+              opName(rows[i].op), (unsigned long long)rows[i].addr,
+              rows[i].tid, (unsigned long long)rows[i].n);
   std::fflush(stderr);
 }
 
@@ -704,8 +705,8 @@ static void umtxTrace(int op, void *ptr, uint32_t self, uint32_t owner) {
     return;
   static std::atomic<int> n{0};
   if (n.fetch_add(1) < 4000)
-    std::fprintf(stderr, "[umtx] op=%d ptr=%p self=%u owner=%#x\n", op, ptr,
-                 self, owner);
+    BASE_LOGI("umtx", "op={} ptr={:p} self={} owner={:#x}", op, ptr, self,
+              owner);
 }
 
 // DELTA_UMTX_PROF=1: WALL time each thread spends inside sys_umtx_op, as a
@@ -763,25 +764,28 @@ void maybeReport() {
     return;
   const double window = double(now_ns - prev);
   std::lock_guard<std::mutex> lk(g_mtx);
-  std::fprintf(stderr, "[umtxwall] over %.1fs:", window / 1e9);
+  base::String line1;
+  base::FormatTo(line1, "over {:.1f}s:", window / 1e9);
   for (Acc *a : g_accs) {
     const uint64_t ns = a->ns.exchange(0);
     const uint64_t n = a->calls.exchange(0);
     if (ns * 100.0 / window < 5.0)
       continue;  // only threads it actually holds up
-    std::fprintf(stderr, " tid%u=%.0f%%(x%llu)", a->tid, ns * 100.0 / window,
-                 (unsigned long long)n);
+    base::FormatTo(line1, " tid{}={:.0f}%(x{})", a->tid, ns * 100.0 / window,
+                   (unsigned long long)n);
   }
-  std::fprintf(stderr, "\n[umtxwall]   ops:");
+  BASE_LOGI("umtxwall", "{}", line1.c_str());
+  base::String line2;
+  base::FormatTo(line2, "  ops:");
   for (uint32_t i = 0; i < 64; ++i) {
     const uint64_t n = g_op_n[i].exchange(0);
     const uint64_t ns = g_op_ns[i].exchange(0);
     if (n)
-      std::fprintf(stderr, " %s=%llu(%.0fns,fast=%.0f%%)", umtxhist::opName(i),
-                   (unsigned long long)n, n ? double(ns) / n : 0.0,
-                   n ? g_fast[i].exchange(0) * 100.0 / n : 0.0);
+      base::FormatTo(line2, " {}={}({:.0f}ns,fast={:.0f}%)", umtxhist::opName(i),
+                     (unsigned long long)n, n ? double(ns) / n : 0.0,
+                     n ? g_fast[i].exchange(0) * 100.0 / n : 0.0);
   }
-  std::fprintf(stderr, "\n");
+  BASE_LOGI("umtxwall", "{}", line2.c_str());
 }
 }  // namespace umtxwall
 
@@ -1305,7 +1309,7 @@ int PS4ABI sys_umtx_op(void *ptr, int op, uint64_t val, void *a, void *b) {
       return -SysError::eINVAL;
     static std::atomic<uint32_t> seen[32]{};
     if (op >= 0 && op < 32 && seen[op].fetch_add(1) == 0)
-      std::printf("[umtx] unhandled op=%d\n", op);
+      BASE_LOGI("umtx", "unhandled op={}", op);
     return 0;
   }
   }

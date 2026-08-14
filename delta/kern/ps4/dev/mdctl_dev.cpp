@@ -1,4 +1,5 @@
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 
@@ -30,7 +31,7 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
   case kMdAttach: {
     // No memory-disk backing in the emulator; report unsupported so a caller
     // that expects a /dev/md%d afterwards fails cleanly instead of hanging.
-    std::printf("[mdctl] ATTACH unsupported (no memory-disk backing)\n");
+    BASE_LOGI("mdctl", "ATTACH unsupported (no memory-disk backing)");
     return -SysError::eOPNOTSUPP;
   }
   case kMdDetach: {
@@ -54,7 +55,7 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
   default:
     // Unknown mdctl command: soft-succeed, zeroing any OUT payload so the
     // caller reads a benign result instead of stale stack bytes.
-    std::printf("[mdctl] UNHANDLED ioctl(%#x)\n", cmd);
+    BASE_LOGI("mdctl", "UNHANDLED ioctl({:#x})", cmd);
     if (cmd & 0x40000000u) {
       const uint32_t len = (cmd >> 16) & 0x1fff;
       if (len)

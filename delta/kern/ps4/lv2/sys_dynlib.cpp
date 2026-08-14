@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -111,10 +112,10 @@ int PS4ABI sys_dynlib_get_info_ex(uint32_t handle, int32_t ukn /*always 1*/,
   dyn_info->eh_frame_hdr_addr = reinterpret_cast<uintptr_t>(info.ehFrameAddr);
   dyn_info->eh_frame_size = info.ehFrameheaderSize;
   dyn_info->eh_frame_hdr_size = info.ehFrameSize;
-  std::printf("[get_info_ex] h=%u %s eh_frame=%#lx+%#x hdr=%#lx+%#x\n",
-              handle, info.name.c_str(), dyn_info->eh_frame_addr,
-              dyn_info->eh_frame_size, dyn_info->eh_frame_hdr_addr,
-              dyn_info->eh_frame_hdr_size);
+  BASE_LOGI("get_info_ex", "h={} {} eh_frame={:#x}+{:#x} hdr={:#x}+{:#x}",
+            handle, info.name.c_str(), dyn_info->eh_frame_addr,
+            dyn_info->eh_frame_size, dyn_info->eh_frame_hdr_addr,
+            dyn_info->eh_frame_hdr_size);
 
   auto &text = dyn_info->segs[0];
   text.addr = reinterpret_cast<uintptr_t>(info.textSeg.addr);
@@ -153,14 +154,14 @@ int PS4ABI sys_dynlib_dlsym(uint32_t handle, const char *symName, void **sym) {
     addrOut = mod->getSymbolByNid(symName);
 
   if (!addrOut) {
-    std::printf("DLSYM %s!%s -> UNRESOLVED\n", modName.c_str(), symName);
+    BASE_LOGI("dlsym", "{}!{} -> UNRESOLVED", modName.c_str(), symName);
     *sym = nullptr;
     return -1;
   }
 
-  std::printf("DLSYM %s!%s -> %p (+%#lx)\n", modName.c_str(), symName,
-              reinterpret_cast<void *>(addrOut),
-              addrOut - reinterpret_cast<uintptr_t>(mod->getInfo().base));
+  BASE_LOGI("dlsym", "{}!{} -> {:p} (+{:#x})", modName.c_str(), symName,
+            reinterpret_cast<void *>(addrOut),
+            addrOut - reinterpret_cast<uintptr_t>(mod->getInfo().base));
 
   *sym = reinterpret_cast<void *>(addrOut);
 
@@ -178,8 +179,8 @@ int PS4ABI sys_dynlib_get_obj_member(uint32_t handle, uint8_t index,
   case 1:  // module init proc
     *value = info.initAddr;
     if (kModinitTrace)
-      std::fprintf(stderr, "[modinit] h=%u %s init=%p\n", handle,
-                   info.name.c_str(), info.initAddr);
+      BASE_LOGI("modinit", "h={} {} init={:p}", handle, info.name.c_str(),
+                info.initAddr);
     return 0;
   case 2:  // module fini proc
     *value = info.finiAddr;
@@ -202,8 +203,8 @@ int PS4ABI sys_dynlib_get_proc_param(void **data, size_t *size) {
     *data = reinterpret_cast<void *>(info.procParam);
     *size = info.procParamSize;
     if (kProcparamTrace)
-      std::fprintf(stderr, "[procparam] get_proc_param -> data=%p size=%#zx\n",
-                   *data, *size);
+      BASE_LOGI("procparam", "get_proc_param -> data={:p} size={:#x}", *data,
+                *size);
     return 0;
   }
 
@@ -287,8 +288,8 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
   base::String name;
   name.append(baseStart, nameLen);
 
-  std::printf("[load_prx] path='%s' -> '%s' flags=%#llx\n", path, name.c_str(),
-              (unsigned long long)flags);
+  BASE_LOGI("load_prx", "path='{}' -> '{}' flags={:#x}", path, name.c_str(),
+            (unsigned long long)flags);
 
   // Modules whose LLE module_start needs a backend we don't emulate yet fall into
   // two groups by how the guest reacts to a failed load-start.
@@ -313,14 +314,14 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
   bool skipInit = false;
   for (auto *s : kLoadOk) {
     if (std::strcmp(name.c_str(), s) == 0) {
-      std::printf("[load_prx] %s: load-start ok, skipping LLE module_start\n", s);
+      BASE_LOGI("load_prx", "{}: load-start ok, skipping LLE module_start", s);
       skipInit = true;
       break;
     }
   }
   for (auto *s : kSkipNotFound) {
     if (std::strcmp(name.c_str(), s) == 0) {
-      std::printf("[load_prx] %s: reporting not-found (init unsupported)\n", s);
+      BASE_LOGI("load_prx", "{}: reporting not-found (init unsupported)", s);
       return -SysError::eNOENT;
     }
   }
@@ -370,9 +371,9 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
         char *end = nullptr;
         uintptr_t a = baseAddr + std::strtoull(p, &end, 0);
         p = end;
-        std::printf("[modinit] running %s init @ +%#lx\n", s, a - baseAddr);
+        BASE_LOGI("modinit", "running {} init @ +{:#x}", s, a - baseAddr);
         cpu::backend().runGuestFunction(a, 0, 0, 0);
-        std::printf("[modinit] %s init @ returned\n", s);
+        BASE_LOGI("modinit", "{} init @ returned", s);
       }
       // DELTA_VO_LLE_FIX: run libSceVideoOut's lazy init now (its 0xd530 ctor sets
       // the display-config defaults + tail-calls 0x28f0 which opens /dev/dce and
@@ -383,11 +384,11 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
       // sceVideoOutOpen skips re-running the ctor and reads our connected slot.
       if (kVoLleFix) {
         uint8_t *base = mod->getInfo().base;
-        std::printf("[volle] running libSceVideoOut ctor (+0xd530)\n");
+        BASE_LOGI("volle", "running libSceVideoOut ctor (+0xd530)");
         cpu::backend().runGuestFunction(baseAddr + 0xd530, 0, 0, 0);
         int32_t idx = *reinterpret_cast<int32_t *>(base + 0x1cb40);
         uint32_t f0c = *reinterpret_cast<uint32_t *>(base + 0x1cb50);
-        std::printf("[volle] after ctor: idx=%d cfg[0].f0=%#x\n", idx, f0c);
+        BASE_LOGI("volle", "after ctor: idx={} cfg[0].f0={:#x}", idx, f0c);
         if (idx >= 1 && idx < 8) {
           uint8_t *cfg0 = base + 0x1cb50;
           uint8_t *cfgi = base + 0x1cb50 + (size_t)idx * 0x140;
@@ -396,9 +397,10 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
           // scePthreadOnce control @ +0x1cb18: mark "already run" so Open skips it.
           *reinterpret_cast<uint32_t *>(base + 0x1cb18) = 1;
           uint64_t op = *reinterpret_cast<uint64_t *>(cfgi + 0x48);
-          std::printf("[volle] connected cfg[%d] (f0=4), once-guard set; "
-                      "cfg[idx].op@+0x48 = %#lx (base+%#lx)\n",
-                      idx, (unsigned long)op, (unsigned long)(op - (uintptr_t)base));
+          BASE_LOGI("volle",
+                    "connected cfg[{}] (f0=4), once-guard set; "
+                    "cfg[idx].op@+0x48 = {:#x} (base+{:#x})",
+                    idx, (unsigned long)op, (unsigned long)(op - (uintptr_t)base));
           // TEST (DELTA_VO_PATCH_OP): force the driver open-op to return a type-4
           // handle (0x40), so Open's (ret>>4)==cfg[idx].f0(4) && ret>1 checks pass.
           // Confirms whether the op return is the last gate before Open succeeds.
@@ -417,7 +419,7 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
 // lifetime), so unload is a success no-op: the guest's module_stop has already
 // run and it just wants the bookkeeping to succeed.
 int PS4ABI sys_dynlib_unload_prx(uint32_t handle) {
-  std::printf("[unload_prx] handle=%#x (no-op)\n", handle);
+  BASE_LOGI("unload_prx", "handle={:#x} (no-op)", handle);
   return 0;
 }
 
@@ -455,8 +457,8 @@ void *PS4ABI guest_tls_get_addr(tls_index *ti) {
     return block + ti->offset;
   }
 
-  std::printf("[tls] __tls_get_addr: no module for index %llu\n",
-              (unsigned long long)ti->module_id);
+  BASE_LOGI("tls", "__tls_get_addr: no module for index {}",
+            (unsigned long long)ti->module_id);
   return nullptr;
 }
 

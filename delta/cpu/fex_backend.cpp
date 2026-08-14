@@ -14,6 +14,9 @@
 #if defined(DELTA_BACKEND_FEX)
 
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <logger/logger.h>
 
 #include <atomic>
@@ -206,9 +209,8 @@ static void startWatchdog() {
             auto &S = t.thread->CurrentFrame->State;
             char sym[200];
             symRange(S.rip, sym, sizeof(sym));
-            std::fprintf(stderr, "[smp %llu] tid=%u rip=%#llx %s\n",
-                         (unsigned long long)tick, t.id,
-                         (unsigned long long)S.rip, sym);
+            BASE_LOGI("smp", "{} tid={} rip={:#x} {}", (unsigned long long)tick,
+                      t.id, (unsigned long long)S.rip, sym);
           }
           std::fflush(stderr);
         }
@@ -335,30 +337,29 @@ static void startWatchdog() {
               if (spreadNs <= 1000)
                 withTwoTight++;
               if (reported++ < 40) {
-                std::fprintf(stderr,
-                             "[riprace] %u threads inside, samples spread %llu ns%s:",
-                             n, (unsigned long long)spreadNs,
-                             spreadNs <= 1000 ? "  <== SIMULTANEOUS" : "");
+                base::String line;
+                base::FormatTo(line, "{} threads inside, samples spread {} ns{}:",
+                               n, (unsigned long long)spreadNs,
+                               spreadNs <= 1000 ? "  <== SIMULTANEOUS" : "");
                 for (unsigned k = 0; k < n; k++) {
                   char sym[160];
                   symRange(hits[k].rip, sym, sizeof(sym));
-                  std::fprintf(stderr, "  tid=%u rip=%#llx %s", hits[k].id,
-                               (unsigned long long)hits[k].rip, sym);
+                  base::FormatTo(line, "  tid={} rip={:#x} {}", hits[k].id,
+                                 (unsigned long long)hits[k].rip, sym);
                 }
-                std::fprintf(stderr, "\n");
+                BASE_LOGI("riprace", "{}", line.c_str());
               }
             }
             if ((rounds % 5000) == 0)
-              std::fprintf(stderr,
-                           "[riprace] %llu rounds (%llu thread-answers): %llu with "
-                           "one inside, %llu with TWO OR MORE (%llu of them within "
-                           "1us), max %llu\n",
-                           (unsigned long long)rounds,
-                           (unsigned long long)answered,
-                           (unsigned long long)withOne,
-                           (unsigned long long)withTwo,
-                           (unsigned long long)withTwoTight,
-                           (unsigned long long)maxSeen);
+              BASE_LOGI("riprace",
+                        "{} rounds ({} thread-answers): {} with one inside, {} with "
+                        "TWO OR MORE ({} of them within 1us), max {}",
+                        (unsigned long long)rounds,
+                        (unsigned long long)answered,
+                        (unsigned long long)withOne,
+                        (unsigned long long)withTwo,
+                        (unsigned long long)withTwoTight,
+                        (unsigned long long)maxSeen);
             std::fflush(stderr);
           }
         }).detach();
@@ -393,9 +394,9 @@ static void startWatchdog() {
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
           uint64_t obj = 0;
           if (!rd(pobj, &obj, 8) || obj < 0x1000) {
-            std::fprintf(stderr, "[loadwatch %llu] obj ptr @%#llx not ready (obj=%#llx)\n",
-                         (unsigned long long)tick, (unsigned long long)pobj,
-                         (unsigned long long)obj);
+            BASE_LOGI("loadwatch", "{} obj ptr @{:#x} not ready (obj={:#x})",
+                      (unsigned long long)tick, (unsigned long long)pobj,
+                      (unsigned long long)obj);
             std::fflush(stderr);
             continue;
           }
@@ -408,13 +409,13 @@ static void startWatchdog() {
             c[i] = v;
             total += v;
           }
-          if (!ok) { std::fprintf(stderr, "[loadwatch %llu] obj=%#llx read fault\n",
-                                  (unsigned long long)tick, (unsigned long long)obj);
+          if (!ok) { BASE_LOGI("loadwatch", "{} obj={:#x} read fault",
+                               (unsigned long long)tick, (unsigned long long)obj);
                      std::fflush(stderr); continue; }
           if (total == lastTotal) plateau++; else plateau = 0;
           lastTotal = total;
-          std::fprintf(stderr,
-              "[loadwatch %llu] obj=%#llx REMAINING=%d plateau=%dx q=[%d %d %d %d %d %d %d %d %d %d]\n",
+          BASE_LOGI("loadwatch",
+              "{} obj={:#x} REMAINING={} plateau={}x q=[{} {} {} {} {} {} {} {} {} {}]",
               (unsigned long long)tick, (unsigned long long)obj, total, plateau,
               c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9]);
           std::fflush(stderr);
@@ -450,9 +451,9 @@ static void startWatchdog() {
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
           uint64_t obj = 0;
           if (!rd(pobj, &obj, 8) || obj < 0x1000) {
-            std::fprintf(stderr, "[loadwatch %llu] obj ptr @%#llx not ready (obj=%#llx)\n",
-                         (unsigned long long)tick, (unsigned long long)pobj,
-                         (unsigned long long)obj);
+            BASE_LOGI("loadwatch", "{} obj ptr @{:#x} not ready (obj={:#x})",
+                      (unsigned long long)tick, (unsigned long long)pobj,
+                      (unsigned long long)obj);
             std::fflush(stderr);
             continue;
           }
@@ -465,13 +466,13 @@ static void startWatchdog() {
             c[i] = v;
             total += v;
           }
-          if (!ok) { std::fprintf(stderr, "[loadwatch %llu] obj=%#llx read fault\n",
-                                  (unsigned long long)tick, (unsigned long long)obj);
+          if (!ok) { BASE_LOGI("loadwatch", "{} obj={:#x} read fault",
+                               (unsigned long long)tick, (unsigned long long)obj);
                      std::fflush(stderr); continue; }
           if (total == lastTotal) plateau++; else plateau = 0;
           lastTotal = total;
-          std::fprintf(stderr,
-              "[loadwatch %llu] obj=%#llx REMAINING=%d plateau=%dx q=[%d %d %d %d %d %d %d %d %d %d]\n",
+          BASE_LOGI("loadwatch",
+              "{} obj={:#x} REMAINING={} plateau={}x q=[{} {} {} {} {} {} {} {} {} {}]",
               (unsigned long long)tick, (unsigned long long)obj, total, plateau,
               c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9]);
           std::fflush(stderr);
@@ -485,8 +486,8 @@ static void startWatchdog() {
       for (int round = 0;; round++) {
         std::this_thread::sleep_for(std::chrono::seconds(secs));
         std::lock_guard lk(g_liveMutex);
-        std::fprintf(stderr, "=== WATCHDOG round %d: %zu live guest threads ===\n",
-                     round, g_live.size());
+        BASE_LOGI("watchdog", "=== WATCHDOG round {}: {} live guest threads ===",
+                  round, g_live.size());
         for (auto &t : g_live) {
           auto &S = t.thread->CurrentFrame->State;
           char sym[256];
@@ -494,9 +495,9 @@ static void startWatchdog() {
           // scN = total syscalls this thread has made: compare across rounds
           // to tell a thread that is genuinely STUCK in one wait (scN frozen)
           // from one that loops through waits (scN advancing).
-          std::fprintf(stderr, "  tid=%u gtid=%u rip=%#llx scN=%u (%s)\n", t.id,
-                       t.gtid ? *t.gtid : 0, (unsigned long long)S.rip,
-                       t.tracePos ? *t.tracePos : 0, sym);
+          BASE_LOGI("watchdog", "  tid={} gtid={} rip={:#x} scN={} ({})", t.id,
+                    t.gtid ? *t.gtid : 0, (unsigned long long)S.rip,
+                    t.tracePos ? *t.tracePos : 0, sym);
           // Scan the stack upward for return addresses into known modules (the
           // wait stub omits frame pointers, so a raw scan beats an rbp walk) to
           // reveal which subsystem this thread is parked inside.
@@ -511,12 +512,12 @@ static void startWatchdog() {
               const TraceEvt &e = t.trace[(pos - cnt + k) % kTraceRing];
               if (e.kind != 's')
                 continue;
-              std::fprintf(stderr,
-                           "      sc %3u %-18s (%#llx,%#llx,%#llx,%#llx) -> %#llx\n",
-                           e.id, krnl::syscall_getname(e.id),
-                           (unsigned long long)e.a0, (unsigned long long)e.a1,
-                           (unsigned long long)e.a2, (unsigned long long)e.a3,
-                           (unsigned long long)e.ret);
+              BASE_LOGI("watchdog",
+                        "      sc {:3} {:<18} ({:#x},{:#x},{:#x},{:#x}) -> {:#x}",
+                        e.id, krnl::syscall_getname(e.id),
+                        (unsigned long long)e.a0, (unsigned long long)e.a1,
+                        (unsigned long long)e.a2, (unsigned long long)e.a3,
+                        (unsigned long long)e.ret);
               // Thread parked in UMTX_OP_MUTEX_WAIT (last ring entry, op 17):
               // decode the umutex owner word -- the owner tid is the whole
               // ballgame in a deadlock (who holds it and what are THEY doing).
@@ -527,10 +528,10 @@ static void startWatchdog() {
                             1, &mv) == 0) {
                   uint32_t ow = *reinterpret_cast<volatile uint32_t *>(e.a0);
                   uint32_t ownerTid = ow & 0x7fffffff;
-                  std::fprintf(stderr,
-                               "      ^ umutex %#llx word=%#x owner-tid=%u%s\n",
-                               (unsigned long long)e.a0, ow, ownerTid,
-                               (ow & 0x80000000u) ? " CONTESTED" : "");
+                  BASE_LOGI("watchdog",
+                            "      ^ umutex {:#x} word={:#x} owner-tid={}{}",
+                            (unsigned long long)e.a0, ow, ownerTid,
+                            (ow & 0x80000000u) ? " CONTESTED" : "");
                   // Cross-reference: find the live thread that OWNS this umutex
                   // (its guest tid == owner-tid) and print what IT is doing. If
                   // the owner is itself parked in a wait while holding the lock,
@@ -546,10 +547,10 @@ static void startWatchdog() {
                       const TraceEvt &le = ot[(opos - 1) % kTraceRing];
                       if (le.kind == 's') { oid = le.id; osc = krnl::syscall_getname(le.id); oa0 = le.a0; oa1 = le.a1; }
                     }
-                    std::fprintf(stderr,
-                                 "      ^^ OWNER is watchdog tid=%u rip=%#llx scN=%u last: sc %u %s (%#llx,%#llx)\n",
-                                 o.id, (unsigned long long)o.thread->CurrentFrame->State.rip,
-                                 opos, oid, osc, (unsigned long long)oa0, (unsigned long long)oa1);
+                    BASE_LOGI("watchdog",
+                              "      ^^ OWNER is watchdog tid={} rip={:#x} scN={} last: sc {} {} ({:#x},{:#x})",
+                              o.id, (unsigned long long)o.thread->CurrentFrame->State.rip,
+                              opos, oid, osc, (unsigned long long)oa0, (unsigned long long)oa1);
                     break;
                   }
                 }
@@ -576,8 +577,8 @@ static void startWatchdog() {
             char s2[256];
             symRange(v, s2, sizeof(s2));
             if (s2[0] == '0') continue;  // unnamed range -> skip noise
-            std::fprintf(stderr, "      stk+%#x %#llx (%s)\n", i * 8,
-                         (unsigned long long)v, s2);
+            BASE_LOGI("watchdog", "      stk+{:#x} {:#x} ({})", i * 8,
+                      (unsigned long long)v, s2);
             shown++;
           }
         }
@@ -663,10 +664,10 @@ public:
           const char *nm = "";
           { std::lock_guard lk(g_thunkMutex);
             if (idx < g_thunkNames.size()) nm = g_thunkNames[idx].c_str(); }
-          std::fprintf(stderr, "[hle] %s thunk#%u(%#lx,%#lx,%#lx,%#lx) -> %#lx  from %s\n",
-                       nm, idx, Args->Argument[1], Args->Argument[2],
-                       Args->Argument[3], Args->Argument[4],
-                       (unsigned long)ret, cs);
+          BASE_LOGI("hle", "{} thunk#{}({:#x},{:#x},{:#x},{:#x}) -> {:#x}  from {}",
+                    nm, idx, Args->Argument[1], Args->Argument[2],
+                    Args->Argument[3], Args->Argument[4],
+                    (unsigned long)ret, cs);
         }
       }
       if (g_ctxPtr) {
@@ -682,10 +683,10 @@ public:
 
     // Optional syscall trace: FEX_SCTRACE=1.
     if (kFexSctrace)
-      std::fprintf(stderr, "[sc] %3u %-22s (%#lx, %#lx, %#lx, %#lx, %#lx, %#lx)\n",
-                   num, krnl::syscall_getname(num), Args->Argument[1],
-                   Args->Argument[2], Args->Argument[3], Args->Argument[4],
-                   Args->Argument[5], Args->Argument[6]);
+      BASE_LOGI("sc", "{:3} {:<22} ({:#x}, {:#x}, {:#x}, {:#x}, {:#x}, {:#x})",
+                num, krnl::syscall_getname(num), Args->Argument[1],
+                Args->Argument[2], Args->Argument[3], Args->Argument[4],
+                Args->Argument[5], Args->Argument[6]);
 
     // The lv2 handlers are plain AArch64 functions (PS4ABI is empty off-x86);
     // call with the six GPR args and translate their Linux-style negative errno
@@ -709,7 +710,7 @@ public:
     ev.ret = ret;
     t_inSyscall = false;
     if (kFexSctrace)
-      std::fprintf(stderr, "    -> %#lx\n", ret);
+      BASE_LOGI("sc", "    -> {:#x}", ret);
 
     // CF isn't stored directly in flags[]; update it through FEX's compacted-
     // EFLAGS API so the guest's `jb cerror` observes the syscall result.
@@ -902,9 +903,9 @@ public:
         pthread_attr_getstack(&at, &hsp, &hsz);
         pthread_attr_destroy(&at);
       }
-      std::fprintf(stderr,
-                   "[fex] gthread rip=%#llx gstack=[%p+%#zx] hoststack=[%p+%#zx]\n",
-                   (unsigned long long)entryRip, h->stack, h->stackSize, hsp, hsz);
+      BASE_LOGI("fex",
+                "gthread rip={:#x} gstack=[{:p}+{:#x}] hoststack=[{:p}+{:#x}]",
+                (unsigned long long)entryRip, h->stack, h->stackSize, hsp, hsz);
     }
     { std::lock_guard lk(g_liveMutex);
       g_live.push_back({h->thread, myId, t_trace, &t_tracePos,
@@ -928,13 +929,13 @@ public:
     if (kWatchdog) {
       char es[256]; symRange(entryRip, es, sizeof(es));
       char rs[256]; symRange(endS.rip, rs, sizeof(rs));
-      std::fprintf(stderr, "=== THREAD tid=%u RETURNED entry=%#llx (%s) ret=%#llx (%s) ===\n",
-                   myId, (unsigned long long)entryRip, es,
-                   (unsigned long long)endS.rip, rs);
+      BASE_LOGI("watchdog", "=== THREAD tid={} RETURNED entry={:#x} ({}) ret={:#x} ({}) ===",
+                myId, (unsigned long long)entryRip, es,
+                (unsigned long long)endS.rip, rs);
       if (endS.rip >= 0x200000000000ull && endS.rip < 0x210000000000ull) {
         const uint8_t *b = reinterpret_cast<const uint8_t *>(endS.rip);
-        std::fprintf(stderr, "      bytes@rip: %02x %02x %02x %02x %02x %02x\n",
-                     b[0], b[1], b[2], b[3], b[4], b[5]);
+        BASE_LOGI("watchdog", "      bytes@rip: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
+                  b[0], b[1], b[2], b[3], b[4], b[5]);
       }
       uint64_t rsp = endS.gregs[FEXCore::X86State::REG_RSP];
       int shown = 0;
@@ -945,8 +946,8 @@ public:
         if (v < 0x200000000000ull || v >= 0x210000000000ull) continue;
         char s2[256]; symRange(v, s2, sizeof(s2));
         if (s2[0] == '0') continue;
-        std::fprintf(stderr, "      stk+%#x %#llx (%s)\n", i * 8,
-                     (unsigned long long)v, s2);
+        BASE_LOGI("watchdog", "      stk+{:#x} {:#x} ({})", i * 8,
+                  (unsigned long long)v, s2);
         shown++;
       }
     }
@@ -954,18 +955,18 @@ public:
     // bad/unset function pointer (e.g. a GPU thread with no real GPU backend).
     // Dump its registers + a module-resolved stack scan to pin the culprit.
     if (endS.rip < 0x100000ull) {
-      std::fprintf(stderr, "=== BOGUS THREAD RETURN rip=%#lx ===\n",
-                   (unsigned long)endS.rip);
+      BASE_LOGI("fex", "=== BOGUS THREAD RETURN rip={:#x} ===",
+                (unsigned long)endS.rip);
       const char *rn[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
                           "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
       for (int i = 0; i < 16; i++)
-        std::fprintf(stderr, "  %s=%#lx\n", rn[i], (unsigned long)endS.gregs[i]);
+        BASE_LOGI("fex", "  {}={:#x}", rn[i], (unsigned long)endS.gregs[i]);
       uint64_t rsp = endS.gregs[FEXCore::X86State::REG_RSP];
       if (rsp) {
         for (int i = 0; i < 64; i++) {
           uint64_t v = reinterpret_cast<uint64_t *>(rsp)[i];
           if (v >= 0x200000000000ull && v < 0x206000000000ull)
-            std::fprintf(stderr, "  stk+%#x = %#lx\n", i * 8, (unsigned long)v);
+            BASE_LOGI("fex", "  stk+{:#x} = {:#x}", i * 8, (unsigned long)v);
         }
       }
     }
@@ -1550,9 +1551,9 @@ bool tryHandleJitSignal(int sig, void *infop, void *ucv) {
       static std::atomic<uint32_t> n{0};
       uint32_t c = n.fetch_add(1);
       if (c < 8 || (c & (c - 1)) == 0)  // first few, then powers of two
-        std::fprintf(stderr,
-                     "[fex] callret predictor over/underflow #%u reset (fault %#llx)\n",
-                     c, (unsigned long long)fa);
+        BASE_LOGI("fex",
+                  "callret predictor over/underflow #{} reset (fault {:#x})",
+                  c, (unsigned long long)fa);
       return true;
     }
   }
@@ -1580,8 +1581,9 @@ bool tryHandleJitSignal(int sig, void *infop, void *ucv) {
   {
     std::lock_guard<std::mutex> lk(logM);
     if (seenRips.insert(grip).second)
-      std::fprintf(stderr, "[fex] unaligned-atomic backpatch site guest rip=%#llx (%u sites)\n",
-                   (unsigned long long)grip, (unsigned)seenRips.size());
+      BASE_LOGI("fex",
+                "unaligned-atomic backpatch site guest rip={:#x} ({} sites)",
+                (unsigned long long)grip, (unsigned)seenRips.size());
   }
   uc->uc_mcontext.pc = pc + result.value_or(0);
   return result.has_value();

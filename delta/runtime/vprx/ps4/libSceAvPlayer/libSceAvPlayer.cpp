@@ -8,6 +8,8 @@
 #include <chrono>
 #include <thread>
 
+#include <base/logging.h>
+
 #include "cpu/cpu_backend.h"
 
 namespace {
@@ -49,8 +51,8 @@ void PS4ABI avpEventThread(void *arg) {
   if (!g_eventCallback)
     return;
   if (kAvpTrace)
-    std::fprintf(stderr, "[avp] event %d -> %#llx\n", event,
-                 (unsigned long long)g_eventCallback);
+    BASE_LOGI("avp", "event {} -> {:#x}", event,
+              (unsigned long long)g_eventCallback);
   // eventData is null for the state events.
   cpu::backend().runGuestFunction(g_eventCallback, g_eventObject,
                                   static_cast<uint64_t>(event), 0, 0);
@@ -83,7 +85,7 @@ void avpTrace(const char *fn) {
   if (!kAvpTrace) return;
   static uint64_t n = 0;
   if ((n++ % 100000) == 0)
-    std::fprintf(stderr, "[avp] %s (call #%llu)\n", fn, (unsigned long long)n);
+    BASE_LOGI("avp", "{} (call #{})", fn, (unsigned long long)n);
 }
 }
 
@@ -98,8 +100,8 @@ static void takeInitData(const char *fn, const void *initData) {
   g_eventCallback = p[0x58 / 8];
   if (!kAvpTrace) return;
   for (int i = 0; i < 16; i++)
-    std::fprintf(stderr, "[avp] %s initData[%#x]=%#llx\n", fn, i * 8,
-                 (unsigned long long)p[i]);
+    BASE_LOGI("avp", "{} initData[{:#x}]={:#x}", fn, i * 8,
+              (unsigned long long)p[i]);
 }
 
 int64_t PS4ABI sceAvPlayerInit(void *initData) {
@@ -119,7 +121,7 @@ int PS4ABI sceAvPlayerPostInit(int64_t /*handle*/, void * /*postInitData*/) {
 }
 
 int PS4ABI sceAvPlayerAddSource(int64_t /*handle*/, const char *filename) {
-  if (kAvpTrace) std::fprintf(stderr, "[avp] AddSource '%s'\n", filename ? filename : "(null)");
+  if (kAvpTrace) BASE_LOGI("avp", "AddSource '{}'", filename ? filename : "(null)");
   postEvent(kStateReady, 50);  // the source is open, as far as the title cares
   return 0;
 }

@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <base/logging.h>
+
 #include "gfx/gfx.h"
 
 // A single virtual DualShock4 presented through the libusb-style sceUsbd API.
@@ -24,7 +26,7 @@ const uint8_t kDeviceDesc[18] = {
 void traceOnce(const char *fn) {
   static const char *seen[64] = {};
   for (auto *&s : seen) {
-    if (!s) { s = fn; std::fprintf(stderr, "[usbd] %s\n", fn); return; }
+    if (!s) { s = fn; BASE_LOGI("usbd", "{}", fn); return; }
     if (s == fn) return;
   }
 }
@@ -86,8 +88,8 @@ int PS4ABI sceUsbdGetDeviceList(void ***list) {
 }
 void PS4ABI sceUsbdFreeDeviceList(void **list, int unref) {
   static int c = 0; if (c < 3) { c++;
-    std::fprintf(stderr, "[usbd] FreeDeviceList list=%p unref=%d (mine=%p)\n",
-                 (void *)list, unref, (void *)g_devList); }
+    BASE_LOGI("usbd", "FreeDeviceList list={:p} unref={} (mine={:p})",
+              list, unref, g_devList); }
 }
 
 int PS4ABI sceUsbdGetDeviceDescriptor(void *dev, void *desc) {

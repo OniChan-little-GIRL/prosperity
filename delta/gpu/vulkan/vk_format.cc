@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -290,10 +291,9 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
   const auto unmapped = [&](const char* what) {
     static int n = 0;
     if (n++ < 8)
-      std::fprintf(stderr,
-                   "[gpuvk] clear word: unmapped %s (info=%#x dfmt=%u nfmt=%u "
-                   "words %08x %08x), clearing to opaque black\n",
-                   what, info, dfmt, nfmt, word0, word1);
+      BASE_LOGI("gpuvk", "clear word: unmapped {} (info={:#x} dfmt={} nfmt={} "
+                         "words {:08x} {:08x}), clearing to opaque black",
+                what, info, dfmt, nfmt, word0, word1);
     return VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}};
   };
   uint32_t width[4] = {0, 0, 0, 0};

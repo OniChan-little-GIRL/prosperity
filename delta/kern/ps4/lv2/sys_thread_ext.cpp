@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -53,8 +54,7 @@ int PS4ABI sys_thr_exit(int64_t *state) {
   // joiner sleeps forever.
   if (state)
     sys_umtx_op(state, 3 /*UMTX_OP_WAKE*/, 0x7FFFFFFF, nullptr, nullptr);
-  std::printf("[thr_exit] state=%p -> terminating guest thread\n",
-              (void *)state);
+  BASE_LOGI("thr_exit", "state={:p} -> terminating guest thread", state);
   // DELTA_THREXIT_TRACE: a title whose worker thread dies silently leaves the
   // rest of the engine parked on a handshake it will never get; the stack at
   // exit names the loop that bailed.
@@ -70,12 +70,12 @@ int PS4ABI sys_thr_exit(int64_t *state) {
 
 // No guest signal machinery, so inter-thread kills are accepted and logged.
 int PS4ABI sys_thr_kill(uint32_t tid, int sig) {
-  std::printf("[thr_kill] tid=%u sig=%d (ignored)\n", tid, sig);
+  BASE_LOGI("thr_kill", "tid={} sig={} (ignored)", tid, sig);
   return 0;
 }
 
 int PS4ABI sys_thr_kill2(uint32_t pid, uint32_t tid, int sig) {
-  std::printf("[thr_kill2] pid=%u tid=%u sig=%d (ignored)\n", pid, tid, sig);
+  BASE_LOGI("thr_kill2", "pid={} tid={} sig={} (ignored)", pid, tid, sig);
   return 0;
 }
 
@@ -97,7 +97,7 @@ int PS4ABI sys_thr_suspend(const void *timeout) {
 int PS4ABI sys_thr_wake(uint32_t tid) { return 0; }
 
 int PS4ABI sys_thr_set_name(uint32_t tid, const char *name) {
-  std::printf("[thr_set_name] tid=%u name=%s\n", tid, name ? name : "(null)");
+  BASE_LOGI("thr_set_name", "tid={} name={}", tid, name ? name : "(null)");
   // Mirror the name onto the host thread so ps/gdb and the SIGUSR1 probe can tell
   // a title's threads apart. This names the CALLER, not `tid`: we have no guest
   // -> host thread map, and in practice threads name themselves. Linux caps comm
@@ -209,11 +209,11 @@ int PS4ABI sys_thr_suspend_ucontext(uint32_t tid) { return 0; }
 int PS4ABI sys_thr_resume_ucontext(uint32_t tid) { return 0; }
 
 int PS4ABI sys_thr_get_ucontext(uint32_t tid, void *ucontext) {
-  std::printf("[thr_get_ucontext] tid=%u (unsupported)\n", tid);
+  BASE_LOGI("thr_get_ucontext", "tid={} (unsupported)", tid);
   return -SysError::eOPNOTSUPP;
 }
 int PS4ABI sys_thr_set_ucontext(uint32_t tid, void *ucontext) {
-  std::printf("[thr_set_ucontext] tid=%u (unsupported)\n", tid);
+  BASE_LOGI("thr_set_ucontext", "tid={} (unsupported)", tid);
   return -SysError::eOPNOTSUPP;
 }
 

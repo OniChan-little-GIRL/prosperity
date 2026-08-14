@@ -84,6 +84,11 @@
 #include <cstring>
 #include <mutex>
 #include <vector>
+
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
+
 #include <utl/options.h>
 
 namespace {
@@ -138,8 +143,8 @@ int PS4ABI sceAudioOutOpen(int32_t /*userId*/, int32_t /*type*/, int32_t /*index
   decodeFormat(param, channels, isFloat);
   if (!freq) freq = 48000;
   if (kAudioTrace)
-    std::fprintf(stderr, "[audioopen] len=%u freq=%u param=%#x -> %uch %s\n",
-                 length, freq, param, channels, isFloat ? "f32" : "s16");
+    BASE_LOGI("audioopen", "len={} freq={} param={:#x} -> {}ch {}", length, freq,
+              param, channels, isFloat ? "f32" : "s16");
   int bridge = prosperity_audio_open(freq, channels, isFloat);
   std::lock_guard<std::mutex> lk(g_mtx);
   Port p;
@@ -174,14 +179,15 @@ int PS4ABI sceAudioOutOutputs(void *params, uint32_t num) {
   if (kAudioTrace && dumped < 4) {
     dumped++;
     const auto *b = static_cast<const uint8_t *>(params);
-    std::fprintf(stderr, "[audioparam] num=%u raw:", num);
+    base::String raw;
+    base::FormatTo(raw, "[audioparam] num={} raw:", num);
     for (uint32_t i = 0; i < num * 16 && i < 96; i++)
-      std::fprintf(stderr, "%s%02x", (i % 16) ? "" : " ", b[i]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(raw, "{}{:02x}", (i % 16) ? "" : " ", b[i]);
+    BASE_LOGI("audioparam", "{}", raw.c_str());
     const OutputParam *q = static_cast<const OutputParam *>(params);
     for (uint32_t i = 0; i < num && i < 6; i++)
-      std::fprintf(stderr, "[audioparam]  [%u] handle=%d ptr=%p\n", i,
-                   q[i].handle, q[i].ptr);
+      BASE_LOGI("audioparam", "  [{}] handle={} ptr={:p}", i, q[i].handle,
+                q[i].ptr);
   }
   const OutputParam *pp = static_cast<const OutputParam *>(params);
   int last = 0;

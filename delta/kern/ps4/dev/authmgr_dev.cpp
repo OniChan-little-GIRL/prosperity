@@ -1,4 +1,5 @@
 #include <base.h>
+#include <base/logging.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -16,7 +17,7 @@ int32_t authmgrDevice::ioctl(uint32_t cmd, void *data) {
 
   switch (cmd) {
   default:
-    std::printf("[authmgr] UNHANDLED ioctl(%#x)\n", cmd);
+    BASE_LOGI("authmgr", "UNHANDLED ioctl({:#x})", cmd);
     if (cmd & 0x40000000u) {
       const uint32_t len = (cmd >> 16) & 0x1fff;
       if (len)

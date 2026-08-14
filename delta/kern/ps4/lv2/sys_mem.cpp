@@ -9,6 +9,9 @@
 
 #include <cstdio>
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <logger/logger.h>
 #include <utl/mem.h>
 
@@ -169,8 +172,8 @@ uint8_t *allocLowGuest(size_t size, size_t align) {
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == reinterpret_cast<void *>(base)) {
       if (kAllocTrace)
-        std::printf("[lowalloc] %#lx +%#lx\n", (unsigned long)base,
-                    (unsigned long)size);
+        BASE_LOGI("lowalloc", "{:#x} +{:#x}", (unsigned long)base,
+                  (unsigned long)size);
       return static_cast<uint8_t *>(p);
     }
     if (p != MAP_FAILED)
@@ -237,10 +240,10 @@ void shmAudioTrace(const char *op, const std::string &name, const void *base,
                    size_t size, size_t off) {
   if (!shmAudioTraceOn() || !shmAudioMatch(name))
     return;
-  std::fprintf(stderr,
-               "[shmaudio] t=%llu tid=%ld %-9s '%s' base=%p size=%#zx off=%#zx\n",
-               (unsigned long long)shmAudioNowUs(), (long)gettid(), op,
-               name.c_str(), base, size, off);
+  BASE_LOGI("shmaudio",
+            "t={} tid={} {:<9} '{}' base={:p} size={:#x} off={:#x}",
+            (unsigned long long)shmAudioNowUs(), (long)gettid(), op,
+            name.c_str(), base, size, off);
 }
 
 std::string shmAudioSanitize(const std::string &n) {
@@ -270,8 +273,8 @@ bool shmAudioPoisonQuiet(const std::string &name, uint8_t *base, size_t size) {
 
 void shmAudioPoison(const std::string &name, uint8_t *base, size_t size) {
   if (shmAudioPoisonQuiet(name, base, size))
-    std::fprintf(stderr, "[shmaudio] poisoned '%s' %p +%#zx\n", name.c_str(),
-                 base, size);
+    BASE_LOGI("shmaudio", "poisoned '{}' {:p} +{:#x}", name.c_str(), base,
+              size);
 }
 
 void shmAudioRepoison(const std::string &name, uint8_t *base, size_t size) {
@@ -345,7 +348,7 @@ void shmAudioDumperMain(std::string dir, unsigned periodMs, unsigned maxSnaps,
   for (auto &kv : files)
     if (kv.second) std::fclose(kv.second);
   if (idx) std::fclose(idx);
-  std::fprintf(stderr, "[shmaudio] dumper finished\n");
+  BASE_LOGI("shmaudio", "dumper finished");
 }
 
 // ---------------------------------------------------------------------------
@@ -439,11 +442,11 @@ void shmAudioProbeMain(long periodUs) {
       const uint64_t now = shmAudioNowUs();
       if (now - last > 2000000) {
         last = now;
-        std::fprintf(stderr,
-                     "[shmprobe] port=%zu bpf=%u type=%u ch=%u rate=%u grain=%u "
-                     "state=%u blocks=%llu peak=%.4f peakMax=%.4f\n",
-                     k, bpf, stype, bpf / (stype == 0 ? 2u : 4u), rate, grain,
-                     state, (unsigned long long)blocks, peak, peakMax);
+        BASE_LOGI("shmprobe",
+                  "port={} bpf={} type={} ch={} rate={} grain={} state={} "
+                  "blocks={} peak={:.4f} peakMax={:.4f}",
+                  k, bpf, stype, bpf / (stype == 0 ? 2u : 4u), rate, grain,
+                  state, (unsigned long long)blocks, peak, peakMax);
       }
       // Release the port: the guest's next submit is gated on this being 0.
       *reinterpret_cast<volatile uint64_t *>(slot + 0x00) = 0;
@@ -461,7 +464,7 @@ void shmAudioProbeMaybeStart() {
   if (!started.compare_exchange_strong(e, true))
     return;
   const long us = std::strtol(v, nullptr, 0);
-  std::fprintf(stderr, "[shmprobe] consumer probe every %ldus\n", us);
+  BASE_LOGI("shmprobe", "consumer probe every {}us", us);
   std::thread(shmAudioProbeMain, us > 0 ? us : 10667).detach();
 }
 
@@ -476,9 +479,8 @@ void shmAudioDumpMaybeStart() {
   const unsigned ms = kShmDumpMs;
   const unsigned n = kShmDumpN;
   const size_t mx = kShmDumpMax;
-  std::fprintf(stderr,
-               "[shmaudio] dumper -> %s every %ums x%u (<=%#zx B)%s\n", dir, ms,
-               n, mx, kShmAudioDumpDelta ? " delta-only" : "");
+  BASE_LOGI("shmaudio", "dumper -> {} every {}ms x{} (<={:#x} B){}", dir, ms,
+            n, mx, kShmAudioDumpDelta ? " delta-only" : "");
   std::thread(shmAudioDumperMain, std::string(dir), ms, n, mx,
               kShmAudioDumpDelta.get()).detach();
 }
@@ -542,8 +544,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
     size_t minB = static_cast<size_t>(std::strtoull(mc, nullptr, 0)) * 1024 * 1024;
     if (minB == 0) minB = 64ull * 1024 * 1024;
     if (size >= minB) {
-      std::fprintf(stderr, "[mmap-caller] size=%#zx prot=%#x flags=%#x fd=%u:\n",
-                   size, prot, flags, fd);
+      BASE_LOGI("mmap-caller", "size={:#x} prot={:#x} flags={:#x} fd={}:", size,
+                prot, flags, fd);
       auto *sp = reinterpret_cast<uintptr_t *>(__builtin_frame_address(0));
       int shown = 0;
       for (int i = 0; i < 8192 && shown < 12; i++) {
@@ -552,8 +554,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
           auto &mi = m->getInfo();
           auto *t = mi.textSeg.addr;
           if (t && v >= (uintptr_t)t && v < (uintptr_t)t + mi.textSeg.size) {
-            std::fprintf(stderr, "  sp+%-4x %s+%#lx\n", i * 8, mi.name.c_str(),
-                         v - (uintptr_t)t);
+            BASE_LOGI("mmap-caller", "  sp+{:<4x} {}+{:#x}", i * 8,
+                      mi.name.c_str(), v - (uintptr_t)t);
             shown++;
             break;
           }
@@ -625,8 +627,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
         static_cast<device *>(obj)->isDirectMemory())
       dmemMap = true;
     if (kMmapfdTrace)
-      std::fprintf(stderr, "[mmapfd] fd=%u addr=%p size=%#zx off=%#zx objType=%d\n",
-                   fd, addr, size, offset, obj ? (int)obj->type() : -1);
+      BASE_LOGI("mmapfd", "fd={} addr={:p} size={:#x} off={:#x} objType={}",
+                fd, addr, size, offset, obj ? (int)obj->type() : -1);
     if (obj && obj->type() == kObject::oType::shm) {
       // POSIX shared memory: hand back the shared backing so every mapper of
       // this shm sees the same region (sized by ftruncate).
@@ -736,8 +738,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
         const int64_t fileOff = static_cast<int64_t>(offset & ~size_t(0x3FFF));
         int64_t got = static_cast<device *>(o)->readAt(ptr, size, fileOff);
         if (got > 0 && kMmapfdTrace)
-          std::fprintf(stderr, "[mmapfd]   filled %p from fd=%u off=%#llx -> %lld bytes\n",
-                       ptr, fd, (unsigned long long)fileOff, (long long)got);
+          BASE_LOGI("mmapfd", "  filled {:p} from fd={} off={:#x} -> {} bytes",
+                    ptr, fd, (unsigned long long)fileOff, (long long)got);
       }
   }
 
@@ -764,8 +766,9 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
     if (r >= 0x8000000000ull && r < 0x8300000000ull) {
       // Walk the guest frame chain (libkernel keeps frame pointers) so we see the
       // real caller above libkernel's mmap wrapper, not just the wrapper itself.
-      std::fprintf(stderr, "[gnmap] %p size=%#x fd=%d flags=%#x  callers:", ptr,
-                   size, static_cast<int>(fd), flags);
+      base::String callers;
+      base::FormatTo(callers, "{:p} size={:#x} fd={} flags={:#x}  callers:",
+                     ptr, size, static_cast<int>(fd), flags);
       void *fp = __builtin_frame_address(0);
       for (int depth = 0; depth < 20 && fp; depth++) {
         auto *frame = static_cast<void **>(fp);
@@ -773,18 +776,20 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
         if (!ret) break;
         char sym[160];
         krnl::symbolize(reinterpret_cast<uintptr_t>(ret), sym, sizeof(sym));
-        std::fprintf(stderr, " [%s]", sym);
+        base::FormatTo(callers, " [{}]", sym);
         fp = frame[0];
         if (reinterpret_cast<uintptr_t>(fp) < 0x10000) break;
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("gnmap", "{}", callers.c_str());
     }
   }
 
   if (kMmapLog)
-    std::printf("mmap %p, %zx, prot=%x flags=%x fd=%d off=%#zx, %p -> %p\n",
-                addr, size, prot, flags, static_cast<int>(fd), offset,
-                _ReturnAddress(), ptr);
+    BASE_LOGI("mmap",
+              "mmap {:p}, {:x}, prot={:x} flags={:x} fd={} off={:#x}, {:p} -> "
+              "{:p}",
+              addr, size, prot, flags, static_cast<int>(fd), offset,
+              _ReturnAddress(), ptr);
 
   // The kernel's returned address = page-aligned base + (offset & 0x3FFF), so a
   // map with a non-page-aligned offset points at the file's byte at `offset`
@@ -859,7 +864,7 @@ int PS4ABI sys_shm_open(const char *path, uint32_t flags, uint16_t mode) {
         // DIAGNOSTIC: restore the pre-LLE behaviour (fail an open of a system shm
         // the guest didn't create) to test whether auto-providing it makes a title
         // block waiting for a ShellCore handshake that never arrives (Doom64).
-        std::fprintf(stderr, "[shm_open] NOAUTO: '%s' -> ENOENT\n", name.c_str());
+        BASE_LOGI("shm_open", "NOAUTO: '{}' -> ENOENT", name.c_str());
         return -SysError::eNOENT;
       }
       if (!(flags & kO_CREAT) && isAbsentServiceChannel(name)) {
@@ -887,8 +892,8 @@ int PS4ABI sys_shm_open(const char *path, uint32_t flags, uint16_t mode) {
           std::memset(backing->base, 0, backing->size);
           proc->getVma().add(backing->base, backing->size, ppt::w);
         }
-        std::fprintf(stderr, "[shm_open] auto-provide system shm '%s' size=%#zx\n",
-                     name.c_str(), backing->size);
+        BASE_LOGI("shm_open", "auto-provide system shm '{}' size={:#x}",
+                  name.c_str(), backing->size);
         g_shmByName.emplace(name, backing);
       } else {
         // O_CREAT: fresh, empty backing; sized later by ftruncate.
@@ -914,8 +919,8 @@ int PS4ABI sys_shm_open(const char *path, uint32_t flags, uint16_t mode) {
   // A fresh fd per open, all sharing the named backing (POSIX-ish for a single
   // guest process). The ctor registers it in the object table.
   auto *obj = new shmObject(proc, std::move(name), std::move(backing));
-  std::fprintf(stderr, "[shm_open] '%s' flags=%#x -> fd=%u\n", path, flags,
-               obj->handle());
+  BASE_LOGI("shm_open", "'{}' flags={:#x} -> fd={}", path, flags,
+            obj->handle());
   shmAudioTrace("shm_open", obj->shmName, nullptr, 0, flags);
   shmAudioDumpMaybeStart();
   shmAudioProbeMaybeStart();

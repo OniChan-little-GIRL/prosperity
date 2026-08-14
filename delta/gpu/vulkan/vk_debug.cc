@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -61,7 +62,7 @@ void InitDebugUtils(VkInstance instance, bool extension_enabled) {
   g_insert_label = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(
       vkGetInstanceProcAddr(instance, "vkCmdInsertDebugUtilsLabelEXT"));
   if (g_set_name)
-    std::fprintf(stderr, "[gpuvk] debug utils active (names + labels)\n");
+    BASE_LOGI("gpuvk", "debug utils active (names + labels)");
 }
 
 bool DebugUtilsActive() {

@@ -25,6 +25,10 @@
 #include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
+
 #include <logger/logger.h>
 #include <utl/file.h>
 #include <utl/options.h>
@@ -259,10 +263,9 @@ public:
     uint64_t bo = rd64(h + 0x18);
     uint64_t dl = rd64(h + 0x28);
     if (kPfsDbg)
-      std::fprintf(stderr,
-                   "[pfsc] magic=%02x%02x%02x%02x bs=%llu bo=%llu dl=%llu\n",
-                   h[0], h[1], h[2], h[3], (unsigned long long)bs_,
-                   (unsigned long long)bo, (unsigned long long)dl);
+      BASE_LOGI("pfsc", "magic={:02x}{:02x}{:02x}{:02x} bs={} bo={} dl={}",
+                h[0], h[1], h[2], h[3], (unsigned long long)bs_,
+                (unsigned long long)bo, (unsigned long long)dl);
     if (bs_ == 0)
       return;
     n_ = dl / bs_;
@@ -494,15 +497,14 @@ struct PkgImpl {
           std::string nm(reinterpret_cast<const char *>(d.data() + o + 16), nl);
           if (ty == 2 && ch < ino.size()) {
             files[pre + "/" + nm] = {ino[ch].size, ino[ch].start};
-            if (const char *dbg = kPfsDbg)
-              if (nm.find(dbg) != std::string::npos)
-                std::fprintf(stderr,
-                             "[pfs] %s/%s size=%llu start=%u blocks=%u "
-                             "blocks*bs=%llu bs=%u\n",
-                             pre.c_str(), nm.c_str(),
-                             (unsigned long long)ino[ch].size, ino[ch].start,
-                             ino[ch].blocks,
-                             (unsigned long long)ino[ch].blocks * bs, bs);
+               if (const char *dbg = kPfsDbg)
+                 if (nm.find(dbg) != std::string::npos)
+                   BASE_LOGI("pfs", "{}/{} size={} start={} blocks={} "
+                            "blocks*bs={} bs={}",
+                            pre.c_str(), nm.c_str(),
+                            (unsigned long long)ino[ch].size, ino[ch].start,
+                            ino[ch].blocks,
+                            (unsigned long long)ino[ch].blocks * bs, bs);
           } else if (ty == 3 && nm != "." && nm != "..") {
             walk(ch, pre + "/" + nm, r, bs);
           }
@@ -555,11 +557,10 @@ struct PkgImpl {
       }
     }
     if (kPfsDbg)
-      std::fprintf(stderr,
-                   "[pkg] pfsOff=%llu outerBs=%u PFSC scan: found=%d "
-                   "innerBlk=%llu maxBlk=%llu\n",
-                   (unsigned long long)pfsOff, outerBs, found,
-                   (unsigned long long)innerBlk, (unsigned long long)maxBlk);
+      BASE_LOGI("pkg", "pfsOff={} outerBs={} PFSC scan: found={} "
+               "innerBlk={} maxBlk={}",
+               (unsigned long long)pfsOff, outerBs, found,
+               (unsigned long long)innerBlk, (unsigned long long)maxBlk);
     auto *sub = make<SubSource>(outer, innerBlk * outerBs);
     auto *pfsc = make<PfscSource>(sub);
 
@@ -604,9 +605,9 @@ struct PkgImpl {
           break;
         }
       if (node) {
-        std::fprintf(stderr, "[qarself] %s size=%llu startBlock=%u innerBs=%u\n",
-                     nodePath.c_str(), (unsigned long long)node->size,
-                     node->startBlock, innerBs);
+         BASE_LOGI("qarself", "{} size={} startBlock={} innerBs={}",
+                   nodePath.c_str(), (unsigned long long)node->size,
+                   node->startBlock, innerBs);
         uint64_t offs[] = {0, 1ull << 20, 100ull << 20, 400ull << 20,
                            800ull << 20,
                            node->size > 256 ? node->size - 256 : 0};
@@ -615,18 +616,19 @@ struct PkgImpl {
             continue;
           uint8_t buf[64] = {0};
           int64_t r = readNode(*node, buf, static_cast<int64_t>(o), 64);
-          std::fprintf(stderr, "[qarself] off=%llu r=%lld:",
-                       (unsigned long long)o, (long long)r);
+          base::String bytes;
+          base::FormatTo(bytes, "off={} r={}:",
+                         (unsigned long long)o, (long long)r);
           for (int i = 0; i < 16 && i < r; ++i)
-            std::fprintf(stderr, " %02x", buf[i]);
-          std::fprintf(stderr, " |");
+            base::FormatTo(bytes, " {:02x}", buf[i]);
+          base::FormatTo(bytes, " |");
           for (int i = 16; i < 32 && i < r; ++i)
-            std::fprintf(stderr, " %02x", buf[i]);
-          std::fprintf(stderr, "\n");
+            base::FormatTo(bytes, " {:02x}", buf[i]);
+          BASE_LOGI("qarself", "{}", bytes.c_str());
         }
-      } else {
-        std::fprintf(stderr, "[qarself] no file matching '%s'\n", want);
-      }
+       } else {
+         BASE_LOGI("qarself", "no file matching '{}'", want);
+       }
     }
   }
 
@@ -646,9 +648,9 @@ struct PkgImpl {
       auto *b = static_cast<const uint8_t *>(buf);
       uint32_t w = b[0] | (take > 1 ? b[1] << 8 : 0) | (take > 2 ? b[2] << 16 : 0) |
                    (take > 3 ? uint32_t(b[3]) << 24 : 0);
-      std::fprintf(stderr, "[pkgread] blk=%u off=%lld len=%lld -> %llu  first4=%08x\n",
-                   n.startBlock, (long long)off, (long long)len,
-                   (unsigned long long)take, w);
+      BASE_LOGI("pkgread", "blk={} off={} len={} -> {}  first4={:08x}",
+                n.startBlock, (long long)off, (long long)len,
+                (unsigned long long)take, w);
     }
     return static_cast<int64_t>(take);
   }

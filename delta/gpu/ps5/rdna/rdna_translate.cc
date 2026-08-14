@@ -43,6 +43,9 @@ gpu::gcn::Recompiled Recompile(const uint32_t*,
 #include "gpu/ps5/rdna/rdna_decode.h"
 #include "gpu/ps5/rdna/rdna_emit.h"
 #include "gpu/ps5/rdna/rdna_resource.h"
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/options.h>
 
 namespace {
@@ -195,16 +198,16 @@ const char* EncName(Enc e) {
 // dword(s). A length that lands the next pc mid-instruction shows up as a
 // garbage "UNKNOWN" op on the following line (a decoder desync).
 void DumpProgram(const Program& prog, const char* tag) {
-  std::fprintf(stderr, "[gcnspv] === %s decode: %zu insts ===\n", tag,
-               prog.size());
+  BASE_LOGI("gcnspv", "=== {} decode: {} insts ===", tag, prog.size());
   for (const Inst& in : prog) {
-    std::fprintf(stderr, "[gcnspv]   pc=%04x len=%u %-6s op=%#05x  %08x", in.pc,
-                 in.size, EncName(in.enc), in.opcode, in.raw[0]);
+    base::String line;
+    base::FormatTo(line, "  pc={:04x} len={} {:<6} op={:#05x}  {:08x}", in.pc,
+                   in.size, EncName(in.enc), in.opcode, in.raw[0]);
     if (in.size >= 2)
-      std::fprintf(stderr, " %08x", in.raw[1]);
+      base::FormatTo(line, " {:08x}", in.raw[1]);
     if (in.has_literal)
-      std::fprintf(stderr, " lit=%08x", in.literal);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(line, " lit={:08x}", in.literal);
+    BASE_LOGI("gcnspv", "{}", line.c_str());
   }
 }
 
@@ -565,9 +568,8 @@ bool RdnaPlanCbufs(const Program& program,
     }
     if (sload && smem.soffset == 125 && off < 0) {
       if (ShDbg())
-        std::fprintf(stderr,
-                     "[gcnspv] cbuf plan reject pc=%#x sload negative off=%d\n",
-                     inst.pc, off);
+        BASE_LOGI("gcnspv", "cbuf plan reject pc={:#x} sload negative off={}",
+                  inst.pc, off);
       return false;
     }
     if (sload &&
@@ -582,11 +584,11 @@ bool RdnaPlanCbufs(const Program& program,
             : static_cast<uint32_t>(off < 0 ? 0 : off) / 4 + SmemLoadCount(op);
     if (smem.soffset != 125 || hi > gpu::gcn::kCbufDwords) {
       if (ShDbg())
-        std::fprintf(stderr,
-                     "[gcnspv] cbuf plan reject pc=%#x op=%#x soffset=%u off=%d "
-                     "hi=%u raw=%08x %08x sbase=%u sdst=%u\n",
-                     inst.pc, op, smem.soffset, off, hi, inst.raw[0],
-                     inst.raw[1], smem.sbase, smem.sdst);
+        BASE_LOGI("gcnspv",
+                  "cbuf plan reject pc={:#x} op={:#x} soffset={} off={} "
+                  "hi={} raw={:08x} {:08x} sbase={} sdst={}",
+                  inst.pc, op, smem.soffset, off, hi, inst.raw[0],
+                  inst.raw[1], smem.sbase, smem.sdst);
       return false;
     }
 
@@ -600,9 +602,9 @@ bool RdnaPlanCbufs(const Program& program,
           first_binding + static_cast<uint32_t>(cbufs.size());
       if (binding >= kMaxCbufBindings) {
         if (ShDbg())
-          std::fprintf(stderr, "[gcnspv] cbuf plan reject pc=%#x out of "
-                               "bindings (%u)\n",
-                       inst.pc, binding);
+          BASE_LOGI("gcnspv", "cbuf plan reject pc={:#x} out of "
+                              "bindings ({})",
+                    inst.pc, binding);
         return false;
       }
       it = binding_by_producer.emplace(key, binding).first;
@@ -741,9 +743,8 @@ std::unordered_set<uint32_t> LaunchExecMovPcs(const Program& program) {
             !written.count(src) && (!b64 || !written.count(src + 1))) {
           skip.insert(in.pc);
           if (ShDbg())
-            std::fprintf(stderr,
-                         "[gcnspv] drop launch-state exec mov @pc=%04x (s%u)\n",
-                         in.pc, src);
+            BASE_LOGI("gcnspv", "drop launch-state exec mov @pc={:04x} (s{})",
+                      in.pc, src);
         }
         d0 = sdst;
         n = b64 ? 2 : 1;
@@ -817,9 +818,9 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
   const uint32_t v[4] = {w1 & 0xFF, (w1 >> 8) & 0xFF, (w1 >> 16) & 0xFF,
                          (w1 >> 24) & 0xFF};
   if (ShDbg())
-    std::fprintf(
-        stderr, "[gcnspv] %s-exp target=%u en=%#x compr=%u done=%u vsrc=%08x\n",
-        sc.is_ps ? "ps" : "vs", target, en, compr, (w >> 11) & 1, w1);
+    BASE_LOGI("gcnspv",
+              "{}-exp target={} en={:#x} compr={} done={} vsrc={:08x}",
+              sc.is_ps ? "ps" : "vs", target, en, compr, (w >> 11) & 1, w1);
   if (!en)
     return;  // architecturally null export
   if (sc.is_ps) {
@@ -830,8 +831,8 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
       static uint32_t seen[256] = {};
       const uint32_t k = ((target & 7) << 5) | ((en & 0xF) << 1) | compr;
       if (seen[k]++ == 0)
-        std::fprintf(stderr, "[exp] ps %#lx mrt%u en=%#x compr=%u\n",
-                     (unsigned long)g_ps_addr, target, en, compr);
+        BASE_LOGI("exp", "ps {:#x} mrt{} en={:#x} compr={}",
+                  (unsigned long)g_ps_addr, target, en, compr);
     }
     if (target <= 7) {  // MRT0..7
       sc.wrote_color = true;
@@ -1821,12 +1822,11 @@ std::vector<FetchAttr> ParseFetchInsts(const Program& insts) {
     const uint32_t dword_off = chained ? chain->second.second * 4 : 0;
     const bool vtx = BufLoadIsVertexFetch(in, chained);
     if (ShDbg())
-      std::fprintf(
-          stderr,
-          "[gcnspv] buf_load nc=%u vdst=v%u srsrc=s%u idxen=%u offen=%u "
-          "vaddr=v%u soffset=s%u ioff=%u -> %s (table_sgpr=s%u doff=%u)\n",
-          nc, vdata, srsrc, idxen, offen, vaddr, soffset, inst_offset,
-          vtx ? "vertex-attr" : "const-ubo", table_sgpr, dword_off);
+      BASE_LOGI("gcnspv",
+                "buf_load nc={} vdst=v{} srsrc=s{} idxen={} offen={} "
+                "vaddr=v{} soffset=s{} ioff={} -> {} (table_sgpr=s{} doff={})",
+                nc, vdata, srsrc, idxen, offen, vaddr, soffset, inst_offset,
+                vtx ? "vertex-attr" : "const-ubo", table_sgpr, dword_off);
     // Only a genuine per-vertex fetch becomes a vertex input. A constant load
     // is left for the UBO path (RdnaPlanBufLoadCbufs assigns the same table
     // slots).
@@ -1900,8 +1900,8 @@ bool TranslateVs(const Program& program,
     attrs = ParseFetchInsts(program);
   if (ShDbg())
     for (const FetchAttr& a : attrs)
-      std::fprintf(stderr, "[gcnspv] vs attr loc=%u nc=%u vgpr=%u pc=%#x\n",
-                   a.semantic, a.num_comps, a.dest_vgpr, a.pc);
+      BASE_LOGI("gcnspv", "vs attr loc={} nc={} vgpr={} pc={:#x}",
+                a.semantic, a.num_comps, a.dest_vgpr, a.pc);
   t.InitTypes();
 
   std::vector<Id> iface;
@@ -1989,7 +1989,7 @@ bool TranslateVs(const Program& program,
                        sc.mubuf_cbuf_by_pc);
   RdnaPlanGfxBuffers(program, 0, nullptr, r.vs_bufs, sc.gfx_buf_bind);
   if (ShDbg())
-    std::fprintf(stderr, "[gcnspv] vs planned %zu cbufs\n", r.vs_cbufs.size());
+    BASE_LOGI("gcnspv", "vs planned {} cbufs", r.vs_cbufs.size());
   // DELTA_GPU_DBGPOS=<vs address>[:<dword offset>]: recompute this one shader's
   // position export from its position input and a 4x4 transform in its cbuffer
   // (address 0 = every shader; the offset picks which matrix in the window).
@@ -2361,9 +2361,9 @@ Recompiled Recompile(const uint32_t* vs_code,
                    vs_user_sgprs) ||
       gpu::gcn::HadUnsupported()) {
     if (ShDbg() || kDrawCensus)
-      std::fprintf(stderr, "[gcnspv] vs %#lx rejected: %s\n",
-                   (unsigned long)reinterpret_cast<uintptr_t>(vs_code),
-                   gpu::gcn::UnsupportedOps().c_str());
+      BASE_LOGI("gcnspv", "vs {:#x} rejected: {}",
+                (unsigned long)reinterpret_cast<uintptr_t>(vs_code),
+                gpu::gcn::UnsupportedOps().c_str());
     return r;
   }
   Translator tp;
@@ -2377,9 +2377,9 @@ Recompiled Recompile(const uint32_t* vs_code,
     return r;
   if (gpu::gcn::HadUnsupported()) {
     if (ShDbg() || kDrawCensus)
-      std::fprintf(stderr, "[gcnspv] ps %#lx rejected: %s\n",
-                   (unsigned long)reinterpret_cast<uintptr_t>(ps_code),
-                   gpu::gcn::UnsupportedOps().c_str());
+      BASE_LOGI("gcnspv", "ps {:#x} rejected: {}",
+                (unsigned long)reinterpret_cast<uintptr_t>(ps_code),
+                gpu::gcn::UnsupportedOps().c_str());
     return r;
   }
 
@@ -2392,12 +2392,12 @@ Recompiled Recompile(const uint32_t* vs_code,
   std::string err;
   if (!gpu::gcn::spirv::Validate(vs, &err)) {
     if (gpu::gcn::TraceEnabled())
-      std::fprintf(stderr, "[rdna] VS invalid: %s\n", err.c_str());
+      BASE_LOGI("rdna", "VS invalid: {}", err.c_str());
     return r;
   }
   if (!gpu::gcn::spirv::Validate(ps, &err)) {
     if (gpu::gcn::TraceEnabled())
-      std::fprintf(stderr, "[rdna] PS invalid: %s\n", err.c_str());
+      BASE_LOGI("rdna", "PS invalid: {}", err.c_str());
     return r;
   }
   // DELTA_GPU_SPVDUMP=<dir>: write each recompiled stage's SPIR-V so it can be
@@ -2426,7 +2426,7 @@ Recompiled Recompile(const uint32_t* vs_code,
   if (!gs.empty() && gpu::gcn::spirv::Validate(gs, &gs_err))
     r.gs_spirv = gs;
   else if (gpu::gcn::TraceEnabled())
-    std::fprintf(stderr, "[rdna] RECTLIST GS invalid: %s\n", gs_err.c_str());
+    BASE_LOGI("rdna", "RECTLIST GS invalid: {}", gs_err.c_str());
   r.ok = !r.vs_spirv.empty() && !r.fs_spirv.empty();
   return r;
 }

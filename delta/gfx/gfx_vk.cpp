@@ -42,6 +42,8 @@
 #include "gfx.h"
 #include <string>
 
+#include <base/logging.h>
+
 #include "overlay.h"
 #include "overlay_log.h"
 #include "overlay_vk.h"
@@ -60,7 +62,7 @@ namespace {
   do {                                                                         \
     VkResult _r = (expr);                                                      \
     if (_r != VK_SUCCESS) {                                                    \
-      std::fprintf(stderr, "[gfx] %s failed: VkResult=%d\n", #expr, _r);       \
+      BASE_LOGI("gfx", "{} failed: VkResult={}", #expr, (int)_r);           \
       return false;                                                            \
     }                                                                          \
   } while (0)
@@ -217,7 +219,7 @@ void applyWindowIcon() {
 #endif
 
 void stopPresenting(const char *operation, VkResult result) {
-  std::fprintf(stderr, "[gfx] %s failed: VkResult=%d\n", operation, result);
+  BASE_LOGI("gfx", "{} failed: VkResult={}", operation, (int)result);
   g_canPresent.store(false, std::memory_order_release);
 }
 
@@ -397,8 +399,7 @@ bool createSwapchain() {
       vkCreateSwapchainKHR(g.device, &sc, nullptr, &newSwap);
   if (createResult != VK_SUCCESS) {
     discardRetiredSwapchain();
-    std::fprintf(stderr, "[gfx] vkCreateSwapchainKHR failed: VkResult=%d\n",
-                 createResult);
+    BASE_LOGI("gfx", "vkCreateSwapchainKHR failed: VkResult={}", (int)createResult);
     return false;
   }
 
@@ -514,7 +515,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   if (available())
     return true; // already up; init is idempotent
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
-    std::fprintf(stderr, "[gfx] SDL_Init failed: %s\n", SDL_GetError());
+    BASE_LOGI("gfx", "SDL_Init failed: {}", SDL_GetError());
     return false;
   }
   // Open the first connected controller (if any) for input + rumble. Hotplug is
@@ -529,15 +530,14 @@ bool init(const char *title, uint32_t width, uint32_t height) {
     }
   }
   if (!SDL_Vulkan_LoadLibrary(nullptr)) {
-    std::fprintf(stderr, "[gfx] SDL_Vulkan_LoadLibrary failed: %s\n",
-                 SDL_GetError());
+    BASE_LOGI("gfx", "SDL_Vulkan_LoadLibrary failed: {}", SDL_GetError());
     return false;
   }
   g.window =
       SDL_CreateWindow(g_title.empty() ? title : g_title.c_str(), (int)width,
                        (int)height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
   if (!g.window) {
-    std::fprintf(stderr, "[gfx] SDL_CreateWindow failed: %s\n", SDL_GetError());
+    BASE_LOGI("gfx", "SDL_CreateWindow failed: {}", SDL_GetError());
     return false;
   }
 #if defined(__linux__)
@@ -573,8 +573,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   VK_CHECK(vkCreateInstance(&ici, nullptr, &g.instance));
 
   if (!SDL_Vulkan_CreateSurface(g.window, g.instance, nullptr, &g.surface)) {
-    std::fprintf(stderr, "[gfx] SDL_Vulkan_CreateSurface failed: %s\n",
-                 SDL_GetError());
+    BASE_LOGI("gfx", "SDL_Vulkan_CreateSurface failed: {}", SDL_GetError());
     return false;
   }
 
@@ -582,7 +581,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   uint32_t nphys = 0;
   vkEnumeratePhysicalDevices(g.instance, &nphys, nullptr);
   if (!nphys) {
-    std::fprintf(stderr, "[gfx] no Vulkan physical devices\n");
+    BASE_LOGI("gfx", "no Vulkan physical devices");
     return false;
   }
   std::vector<VkPhysicalDevice> phs(nphys);
@@ -639,13 +638,13 @@ bool init(const char *title, uint32_t width, uint32_t height) {
     }
   }
   if (!found) {
-    std::fprintf(stderr, "[gfx] no graphics+present queue\n");
+    BASE_LOGI("gfx", "no graphics+present queue");
     return false;
   }
   {
     VkPhysicalDeviceProperties pp;
     vkGetPhysicalDeviceProperties(g.phys, &pp);
-    std::printf("[gfx] device: %s\n", pp.deviceName);
+    BASE_LOGI("gfx", "device: {}", pp.deviceName);
   }
 
   float prio = 1.0f;
@@ -699,8 +698,8 @@ bool init(const char *title, uint32_t width, uint32_t height) {
 
   if (!createSwapchain())
     return false;
-  std::printf("[gfx] swapchain %ux%u, %u images\n", g.swapExtent.width,
-              g.swapExtent.height, (uint32_t)g.swapImages.size());
+  BASE_LOGI("gfx", "swapchain {}x{}, {} images", g.swapExtent.width,
+            g.swapExtent.height, (uint32_t)g.swapImages.size());
   overlayVkInit(g.phys, g.device, g.queue, g.queueFamily, g.cmdPool,
                 g.swapFormat);
   overlayVkSetSwapchain(g.swapImages, g.swapExtent, g.swapFormat);

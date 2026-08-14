@@ -15,6 +15,9 @@
 #include <cstring>
 #include <set>
 
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/mem.h>
 #include <utl/options.h>
 
@@ -67,11 +70,11 @@ uint64_t ScanForDescriptor(uint64_t want_base) {
   const uint32_t want_hi = static_cast<uint32_t>((want_base >> 40) & 0x3F);
   std::FILE* maps = std::fopen("/proc/self/maps", "r");
   if (!maps) {
-    std::fprintf(stderr, "[tscan] cannot read /proc/self/maps\n");
+    BASE_LOGI("tscan", "cannot read /proc/self/maps");
     return 0;
   }
-  std::fprintf(stderr, "[tscan] sweeping for base=%#lx (word0=%08x hi=%u)\n",
-               static_cast<unsigned long>(want_base), want_word0, want_hi);
+  BASE_LOGI("tscan", "sweeping for base={:#x} (word0={:08x} hi={})",
+            static_cast<unsigned long>(want_base), want_word0, want_hi);
   char line[512];
   uint64_t scanned = 0, hits = 0, first_valid = 0;
   while (std::fgets(line, sizeof(line), maps)) {
@@ -94,18 +97,18 @@ uint64_t ScanForDescriptor(uint64_t want_base) {
       const TImage t = DecodeTImage(&p[i]);
       if (t.valid && !first_valid)
         first_valid = at;
-      std::fprintf(stderr,
-                   "[tscan] hit at=%#lx %ux%u pitch=%u dfmt=%u nfmt=%u "
-                   "valid=%d raw=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x\n",
-                   static_cast<unsigned long>(at), t.width, t.height, t.pitch,
-                   t.dfmt, t.nfmt, t.valid, p[i], p[i + 1], p[i + 2], p[i + 3],
-                   p[i + 4], p[i + 5], p[i + 6], p[i + 7]);
+      BASE_LOGI("tscan",
+                "hit at={:#x} {}x{} pitch={} dfmt={} nfmt={} "
+                "valid={:d} raw={:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x}",
+                static_cast<unsigned long>(at), t.width, t.height, t.pitch,
+                t.dfmt, t.nfmt, t.valid, p[i], p[i + 1], p[i + 2], p[i + 3],
+                p[i + 4], p[i + 5], p[i + 6], p[i + 7]);
     }
   }
   std::fclose(maps);
-  std::fprintf(stderr, "[tscan] done: %lu hits over %lu MiB\n",
-               static_cast<unsigned long>(hits),
-               static_cast<unsigned long>(scanned >> 20));
+  BASE_LOGI("tscan", "done: {} hits over {} MiB",
+            static_cast<unsigned long>(hits),
+            static_cast<unsigned long>(scanned >> 20));
   return first_valid;
 }
 
@@ -116,8 +119,8 @@ void CensusBlock(const char* what, uint64_t address) {
   constexpr uint64_t kBlock = 0x400000;
   const uint64_t base = address & ~(kBlock - 1);
   if (!GuestRange(base, kBlock)) {
-    std::fprintf(stderr, "[census] %s block %#lx not mapped\n", what,
-                 static_cast<unsigned long>(base));
+    BASE_LOGI("census", "{} block {:#x} not mapped", what,
+              static_cast<unsigned long>(base));
     return;
   }
   const uint32_t* p = reinterpret_cast<const uint32_t*>(base);
@@ -130,13 +133,13 @@ void CensusBlock(const char* what, uint64_t address) {
       first_nz = base + i * 4;
     last_nz = base + i * 4;
   }
-  std::fprintf(stderr,
-               "[census] %s %#lx: block %#lx has %lu/%lu non-zero dwords, "
-               "written span %#lx..%#lx\n",
-               what, static_cast<unsigned long>(address),
-               static_cast<unsigned long>(base), (unsigned long)nz,
-               (unsigned long)(kBlock / 4), (unsigned long)first_nz,
-               (unsigned long)last_nz);
+  BASE_LOGI("census",
+            "{} {:#x}: block {:#x} has {}/{} non-zero dwords, "
+            "written span {:#x}..{:#x}",
+            what, static_cast<unsigned long>(address),
+            static_cast<unsigned long>(base), (unsigned long)nz,
+            (unsigned long)(kBlock / 4), (unsigned long)first_nz,
+            (unsigned long)last_nz);
 }
 
 // DELTA_GPU_TWATCH=1: remember every address a null T# was read from and
@@ -195,12 +198,11 @@ void PollNullDescriptors() {
     if (mark > s.peak_watermark)
       s.peak_watermark = mark;
     const uint64_t want = s.address & 0x3FFFFF;
-    std::fprintf(stderr,
-                 "[wmark] %#lx offset=%#lx arena peak=%#lx now=%#lx -> %s\n",
-                 static_cast<unsigned long>(s.address), (unsigned long)want,
-                 (unsigned long)s.peak_watermark, (unsigned long)mark,
-                 s.peak_watermark >= want ? "REACHED (timing)"
-                                          : "never reached (stale pointer)");
+    BASE_LOGI("wmark", "{:#x} offset={:#x} arena peak={:#x} now={:#x} -> {}",
+              static_cast<unsigned long>(s.address), (unsigned long)want,
+              (unsigned long)s.peak_watermark, (unsigned long)mark,
+              s.peak_watermark >= want ? "REACHED (timing)"
+                                       : "never reached (stale pointer)");
   }
   for (NullSite& s : g_null_sites) {
     if (s.filled) {
@@ -216,16 +218,16 @@ void PollNullDescriptors() {
     }
     s.filled = true;
     filled++;
-    std::fprintf(stderr,
-                 "[twatch] %#lx (read null by PS %#lx at draw %lu) is NOW "
-                 "%08x/%08x/%08x/%08x after %lu more draws\n",
-                 static_cast<unsigned long>(s.address),
-                 static_cast<unsigned long>(s.code_base),
-                 (unsigned long)s.draw_seen, p[0], p[1], p[2], p[3],
-                 (unsigned long)(g_track_draws - s.draw_seen));
+    BASE_LOGI("twatch",
+              "{:#x} (read null by PS {:#x} at draw {}) is NOW "
+              "{:08x}/{:08x}/{:08x}/{:08x} after {} more draws",
+              static_cast<unsigned long>(s.address),
+              static_cast<unsigned long>(s.code_base),
+              (unsigned long)s.draw_seen, p[0], p[1], p[2], p[3],
+              (unsigned long)(g_track_draws - s.draw_seen));
   }
-  std::fprintf(stderr, "[twatch] %u of %u null sites later filled, %u still zero\n",
-               filled, static_cast<unsigned>(g_null_sites.size()), still_zero);
+  BASE_LOGI("twatch", "{} of {} null sites later filled, {} still zero",
+            filled, static_cast<unsigned>(g_null_sites.size()), still_zero);
 }
 
 // SMRD operand fields (GFX7).
@@ -736,10 +738,8 @@ struct ScalarEval {
       Clear(s.sdst + i);
     if (!base_known || !offset_known) {
       if (kGpuEudfail)
-        std::fprintf(
-            stderr,
-            "[eudfail] s_load x%u s%u <- s%u: base_known=%d off_known=%d\n",
-            dwords, s.sdst, base, base_known, offset_known);
+        BASE_LOGI("eudfail", "s_load x{} s{} <- s{}: base_known={} off_known={}",
+                  dwords, s.sdst, base, base_known, offset_known);
       return;
     }
     if (byte_off > UINT64_MAX - table)
@@ -747,12 +747,11 @@ struct ScalarEval {
     const uint64_t address = table + byte_off;
     if (!GuestRange(address, static_cast<uint64_t>(dwords) * 4)) {
       if (kGpuEudfail)
-        std::fprintf(
-            stderr,
-            "[eudfail] s_load UNMAPPED x%u s%u <- [s%u=%#lx + %#lx] = %#lx\n",
-            dwords, s.sdst, base, static_cast<unsigned long>(table),
-            static_cast<unsigned long>(byte_off),
-            static_cast<unsigned long>(address));
+        BASE_LOGI("eudfail",
+                  "s_load UNMAPPED x{} s{} <- [s{}={:#x} + {:#x}] = {:#x}",
+                  dwords, s.sdst, base, static_cast<unsigned long>(table),
+                  static_cast<unsigned long>(byte_off),
+                  static_cast<unsigned long>(address));
       return;
     }
     // The table this chain reads may have been filled by a compute dispatch
@@ -771,20 +770,21 @@ struct ScalarEval {
         src[s.sdst + i] = address + i * 4;
     }
     if (trace)
-      std::fprintf(stderr,
-                   "[eudenc] pc=%#x raw=%08x op=%#x sdst=s%u sbase=%u imm=%d "
-                   "offset=%#x lit=%d\n",
-                   inst.pc, inst.raw[0], s.op, s.sdst, s.sbase, s.imm ? 1 : 0,
-                   s.offset, inst.has_literal ? 1 : 0);
+      BASE_LOGI("eudenc",
+                "pc={:#x} raw={:08x} op={:#x} sdst=s{} sbase={} imm={} "
+                "offset={:#x} lit={}",
+                inst.pc, inst.raw[0], s.op, s.sdst, s.sbase, s.imm ? 1 : 0,
+                s.offset, inst.has_literal ? 1 : 0);
     if (trace) {
-      std::fprintf(stderr, "[eud] s_load x%u s%u <- [s%u=%#lx + %#lx] = %#lx\n",
-                   dwords, s.sdst, base, static_cast<unsigned long>(table),
-                   static_cast<unsigned long>(byte_off),
-                   static_cast<unsigned long>(address));
-      std::fprintf(stderr, "[eud]   data:");
+      base::String bytes;
+      base::FormatTo(bytes, "s_load x{} s{} <- [s{}={:#x} + {:#x}] = {:#x}",
+                     dwords, s.sdst, base, static_cast<unsigned long>(table),
+                     static_cast<unsigned long>(byte_off),
+                     static_cast<unsigned long>(address));
+      base::FormatTo(bytes, "   data:");
       for (uint32_t i = 0; i < dwords; i++)
-        std::fprintf(stderr, " %08x", mem[i]);
-      std::fprintf(stderr, "\n");
+        base::FormatTo(bytes, " {:08x}", mem[i]);
+      BASE_LOGI("eud", "{}", bytes.c_str());
     }
   }
 };
@@ -1048,12 +1048,12 @@ std::vector<VBuffer> TrackVertexBuffers(const Program& fetch_program,
     if (v.base >= kGuestLo && v.base < kGuestHi && v.stride &&
         v.stride <= 256 && v.num_records && v.num_records <= 0x100000) {
       if (kTrace)
-        std::fprintf(stderr,
-                     "[gcnres] VB sbase=sgpr%u table=%#lx off=%u -> base=%#lx "
-                     "stride=%u nrec=%u dfmt=%u nfmt=%u\n",
-                     base_sgpr, static_cast<unsigned long>(table), byte_off,
-                     static_cast<unsigned long>(v.base), v.stride,
-                     v.num_records, v.dfmt, v.nfmt);
+        BASE_LOGI("gcnres",
+                  "VB sbase=sgpr{} table={:#x} off={} -> base={:#x} "
+                  "stride={} nrec={} dfmt={} nfmt={}",
+                  base_sgpr, static_cast<unsigned long>(table), byte_off,
+                  static_cast<unsigned long>(v.base), v.stride,
+                  v.num_records, v.dfmt, v.nfmt);
       result.push_back(v);
     }
   }
@@ -1144,12 +1144,12 @@ std::vector<TImage> TrackTextures(
           if (std::all_of(w, w + 8, [](uint32_t v) { return v == 0; }))
             continue;
           const TImage probe_t = DecodeTImage(w);
-          std::fprintf(stderr,
-                       "[arena] null at %#lx: arena%+d (%#lx) holds %ux%u "
-                       "valid=%d raw=%08x/%08x\n",
-                       static_cast<unsigned long>(at), slot,
-                       static_cast<unsigned long>(probe), probe_t.width,
-                       probe_t.height, probe_t.valid, w[0], w[1]);
+          BASE_LOGI("arena",
+                    "null at {:#x}: arena{:+d} ({:#x}) holds {}x{} "
+                    "valid={:d} raw={:08x}/{:08x}",
+                    static_cast<unsigned long>(at), slot,
+                    static_cast<unsigned long>(probe), probe_t.width,
+                    probe_t.height, probe_t.valid, w[0], w[1]);
         }
       }
     }
@@ -1170,29 +1170,29 @@ std::vector<TImage> TrackTextures(
       const uint64_t root = UserDataPointer(ps_user_data, 0);
       if (!armed && root && GuestRange(root, 64)) {
         armed = true;
-        std::fprintf(stderr,
-                     "[nullwatch] arming on SRT %#lx (+0x18 held the pointer "
-                     "into the empty arena; T# read at %#lx)\n",
-                     static_cast<unsigned long>(root),
-                     static_cast<unsigned long>(eval.src[srsrc]));
+        BASE_LOGI("nullwatch",
+                  "arming on SRT {:#x} (+0x18 held the pointer "
+                  "into the empty arena; T# read at {:#x})",
+                  static_cast<unsigned long>(root),
+                  static_cast<unsigned long>(eval.src[srsrc]));
         // +0x18 is the slot the chain read the table pointer from.
         utl::setWriteWatchValueProbe(static_cast<uintptr_t>(root) + 0x18);
         utl::setWriteWatchChase(4);  // follow it back up to four copies
         if (!utl::armWriteWatch(static_cast<uintptr_t>(root), 64, 200))
-          std::fprintf(stderr, "[nullwatch] no armer registered\n");
+          BASE_LOGI("nullwatch", "no armer registered");
       }
     }
     if (kNullDis && t.null_descriptor) {
       static bool dumped = false;
       if (!dumped) {
         dumped = true;
-        std::fprintf(stderr,
-                     "[nulldis] PS %#lx binding %u read a null T# from %#lx "
-                     "(SRT root %#lx)\n",
-                     static_cast<unsigned long>(code_base), binding,
-                     static_cast<unsigned long>(eval.src[srsrc]),
-                     static_cast<unsigned long>(
-                         UserDataPointer(ps_user_data, 0)));
+        BASE_LOGI("nulldis",
+                  "PS {:#x} binding {} read a null T# from {:#x} "
+                  "(SRT root {:#x})",
+                  static_cast<unsigned long>(code_base), binding,
+                  static_cast<unsigned long>(eval.src[srsrc]),
+                  static_cast<unsigned long>(
+                      UserDataPointer(ps_user_data, 0)));
         DisassembleAt(code_base, "nulldis.PS");
       }
     }
@@ -1204,27 +1204,28 @@ std::vector<TImage> TrackTextures(
                            .count() >= kTscanAfter;
       if (!scanned && due) {
         scanned = true;
-        std::fprintf(stderr,
-                     "[tscan] triggered by null T# in PS %#lx binding %u, "
-                     "descriptor read from %#lx\n",
-                     static_cast<unsigned long>(code_base), binding,
-                     static_cast<unsigned long>(eval.src[srsrc]));
+        BASE_LOGI("tscan",
+                  "triggered by null T# in PS {:#x} binding {}, "
+                  "descriptor read from {:#x}",
+                  static_cast<unsigned long>(code_base), binding,
+                  static_cast<unsigned long>(eval.src[srsrc]));
         CensusBlock("descriptor read", eval.src[srsrc]);
         // One level up: the SRT block the draw's user data points at. If that
         // is empty too, the title never built the resource block at all and the
         // descriptor table below it is a red herring.
         const uint64_t srt = UserDataPointer(ps_user_data, 0);
-        std::fprintf(stderr, "[tscan] SRT root (user s[0:1]) = %#lx\n",
-                     static_cast<unsigned long>(srt));
+        BASE_LOGI("tscan", "SRT root (user s[0:1]) = {:#x}",
+                  static_cast<unsigned long>(srt));
         if (GuestRange(srt, 64)) {
           const uint32_t* p = reinterpret_cast<const uint32_t*>(srt);
-          std::fprintf(stderr, "[tscan]   SRT[0..15]:");
+          base::String srt_words;
+          base::FormatTo(srt_words, "  SRT[0..15]:");
           for (int i = 0; i < 16; i++)
-            std::fprintf(stderr, " %08x", p[i]);
-          std::fprintf(stderr, "\n");
+            base::FormatTo(srt_words, " {:08x}", p[i]);
+          BASE_LOGI("tscan", "{}", srt_words.c_str());
           CensusBlock("SRT root", srt);
         } else {
-          std::fprintf(stderr, "[tscan]   SRT root not mapped\n");
+          BASE_LOGI("tscan", "  SRT root not mapped");
         }
         const uint64_t good = ScanForDescriptor(kTscan);
         if (good)
@@ -1248,21 +1249,21 @@ std::vector<TImage> TrackTextures(
         static int announced = 0;
         if (announced < 8) {
           announced++;
-          std::fprintf(stderr,
-                       "[arena] substituted %#lx -> %#lx (arena%+d) %ux%u\n",
-                       static_cast<unsigned long>(at),
-                       static_cast<unsigned long>(probe), slot, t.width,
-                       t.height);
+          BASE_LOGI("arena",
+                    "substituted {:#x} -> {:#x} (arena{:+d}) {}x{}",
+                    static_cast<unsigned long>(at),
+                    static_cast<unsigned long>(probe), slot, t.width,
+                    t.height);
           // Disassemble the shader that produced the biased pointer once: a
           // constant arena bias is most likely an address our linear scalar
           // replay computed down a path the real wave would not have taken.
           static bool dumped = false;
           if (!dumped) {
             dumped = true;
-            std::fprintf(stderr, "[arena] SRT root = %#lx, T# read at %#lx\n",
-                         static_cast<unsigned long>(
-                             UserDataPointer(ps_user_data, 0)),
-                         static_cast<unsigned long>(at));
+            BASE_LOGI("arena", "SRT root = {:#x}, T# read at {:#x}",
+                      static_cast<unsigned long>(
+                          UserDataPointer(ps_user_data, 0)),
+                      static_cast<unsigned long>(at));
             DisassembleAt(code_base, "arena.PS");
           }
         }
@@ -1303,37 +1304,37 @@ std::vector<TImage> TrackTextures(
       static bool announced = false;
       if (!announced) {
         announced = true;
-        std::fprintf(stderr,
-                     "[sotc-composite] substituted null T# with %#lx 960x270 "
-                     "valid=%d\n",
-                     static_cast<unsigned long>(base), t.valid);
+        BASE_LOGI("sotc-composite",
+                  "substituted null T# with {:#x} 960x270 "
+                  "valid={:d}",
+                  static_cast<unsigned long>(base), t.valid);
       }
     }
     if (eval.trace)
-      std::fprintf(stderr,
-                   "[eud] MIMG pc=%#x bind=%u srsrc=s%u known=%d at=%#lx "
-                   "base=%#lx %ux%u valid=%d raw=%08x/%08x/%08x/%08x/%08x/%08x/"
-                   "%08x/%08x\n",
-                   inst.pc, binding, srsrc, image_ok,
-                   static_cast<unsigned long>(eval.src[srsrc]),
-                   static_cast<unsigned long>(t.base), t.width, t.height,
-                   t.valid, image_ok ? eval.sgpr[srsrc + 0] : 0,
-                   image_ok ? eval.sgpr[srsrc + 1] : 0,
-                   image_ok ? eval.sgpr[srsrc + 2] : 0,
-                   image_ok ? eval.sgpr[srsrc + 3] : 0,
-                   image_ok ? eval.sgpr[srsrc + 4] : 0,
-                   image_ok ? eval.sgpr[srsrc + 5] : 0,
-                   image_ok ? eval.sgpr[srsrc + 6] : 0,
-                   image_ok ? eval.sgpr[srsrc + 7] : 0);
+      BASE_LOGI("eud",
+                "MIMG pc={:#x} bind={} srsrc=s{} known={:d} at={:#x} "
+                "base={:#x} {}x{} valid={:d} raw={:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x}/"
+                "{:08x}/{:08x}",
+                inst.pc, binding, srsrc, image_ok,
+                static_cast<unsigned long>(eval.src[srsrc]),
+                static_cast<unsigned long>(t.base), t.width, t.height,
+                t.valid, image_ok ? eval.sgpr[srsrc + 0] : 0,
+                image_ok ? eval.sgpr[srsrc + 1] : 0,
+                image_ok ? eval.sgpr[srsrc + 2] : 0,
+                image_ok ? eval.sgpr[srsrc + 3] : 0,
+                image_ok ? eval.sgpr[srsrc + 4] : 0,
+                image_ok ? eval.sgpr[srsrc + 5] : 0,
+                image_ok ? eval.sgpr[srsrc + 6] : 0,
+                image_ok ? eval.sgpr[srsrc + 7] : 0);
     // DELTA_GPU_TEXSRC=<base>: where in guest memory the T# for this surface
     // lives. A surface the GPU samples but nothing ever fills is only
     // explainable from the code that publishes its address.
     if (kTexSrc && t.base >= (uint64_t)kTexSrc) {
       static std::set<uint64_t> seen;
       if (seen.size() < 64 && seen.insert(t.base).second)
-        std::fprintf(stderr, "[texsrc] base=%#lx T# at %#lx (sgpr%u)\n",
-                     static_cast<unsigned long>(t.base),
-                     static_cast<unsigned long>(eval.src[srsrc]), srsrc);
+        BASE_LOGI("texsrc", "base={:#x} T# at {:#x} (sgpr{})",
+                  static_cast<unsigned long>(t.base),
+                  static_cast<unsigned long>(eval.src[srsrc]), srsrc);
     }
     if (sampler_ok) {
       std::memcpy(t.sampler, sampler, sizeof(t.sampler));
@@ -1353,21 +1354,22 @@ std::vector<TImage> TrackTextures(
         if (t.pitch != t.width)
           pitch_ne++;
         if ((++n % 4000) == 0) {
-          std::fprintf(stderr, "[tilehist] n=%lu pitch!=width=%lu:",
-                       static_cast<unsigned long>(n),
-                       static_cast<unsigned long>(pitch_ne));
+          base::String line;
+          base::FormatTo(line, "n={} pitch!=width={}:",
+                         static_cast<unsigned long>(n),
+                         static_cast<unsigned long>(pitch_ne));
           for (int i = 0; i < 32; i++)
             if (hist[i])
-              std::fprintf(stderr, " idx%d=%u", i, hist[i]);
-          std::fprintf(stderr, "\n");
+              base::FormatTo(line, " idx{}={}", i, hist[i]);
+          BASE_LOGI("tilehist", "{}", line.c_str());
         }
       }
       if (kTrace)
-        std::fprintf(stderr,
-                     "[gcnres] T# (sgpr%u) base=%#lx %ux%u pitch=%u "
-                     "dfmt=%u nfmt=%u tiling=%u\n",
-                     srsrc, static_cast<unsigned long>(t.base), t.width,
-                     t.height, t.pitch, t.dfmt, t.nfmt, t.tiling_idx);
+        BASE_LOGI("gcnres",
+                  "T# (sgpr{}) base={:#x} {}x{} pitch={} "
+                  "dfmt={} nfmt={} tiling={}",
+                  srsrc, static_cast<unsigned long>(t.base), t.width,
+                  t.height, t.pitch, t.dfmt, t.nfmt, t.tiling_idx);
     }
     result.push_back(t);
   }
@@ -1419,9 +1421,9 @@ std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
       continue;
     result.emplace(key, v);
     if (eval.trace)
-      std::fprintf(stderr, "[eud] cbuf s%u -> base=%#lx stride=%u nrec=%u\n",
-                   base, static_cast<unsigned long>(v.base), v.stride,
-                   v.num_records);
+      BASE_LOGI("eud", "cbuf s{} -> base={:#x} stride={} nrec={}",
+                base, static_cast<unsigned long>(v.base), v.stride,
+                v.num_records);
   }
   return result;
 }
@@ -1450,18 +1452,18 @@ std::vector<VBuffer> ResolveDirectVertexBuffers(
         if (GuestRange(result[i].base, sizeof(data)))
           std::memcpy(data, reinterpret_cast<const void*>(result[i].base),
                       sizeof(data));
-        std::fprintf(stderr,
-                     "[eud] vattr%zu pc=%#x s%u -> base=%#lx stride=%u "
-                     "nrec=%u fmt=%u/%u inst=%u/%u ioff=%u "
-                     "V#=%08x/%08x/%08x/%08x data=%08x/%08x/%08x\n",
-                     i, inst.pc, attr.table_sgpr,
-                     static_cast<unsigned long>(result[i].base),
-                     result[i].stride, result[i].num_records, result[i].dfmt,
-                     result[i].nfmt, attr.inst_dfmt, attr.inst_nfmt,
-                     inst.raw[0] & 0xFFF, eval.sgpr[attr.table_sgpr],
-                     eval.sgpr[attr.table_sgpr + 1],
-                     eval.sgpr[attr.table_sgpr + 2],
-                     eval.sgpr[attr.table_sgpr + 3], data[0], data[1], data[2]);
+        BASE_LOGI("eud",
+                  "vattr{} pc={:#x} s{} -> base={:#x} stride={} "
+                  "nrec={} fmt={}/{} inst={}/{} ioff={} "
+                  "V#={:08x}/{:08x}/{:08x}/{:08x} data={:08x}/{:08x}/{:08x}",
+                  i, inst.pc, attr.table_sgpr,
+                  static_cast<unsigned long>(result[i].base),
+                  result[i].stride, result[i].num_records, result[i].dfmt,
+                  result[i].nfmt, attr.inst_dfmt, attr.inst_nfmt,
+                  inst.raw[0] & 0xFFF, eval.sgpr[attr.table_sgpr],
+                  eval.sgpr[attr.table_sgpr + 1],
+                  eval.sgpr[attr.table_sgpr + 2],
+                  eval.sgpr[attr.table_sgpr + 3], data[0], data[1], data[2]);
       }
     }
   }
@@ -1487,15 +1489,15 @@ std::vector<VBuffer> ResolveShaderBuffers(
         continue;
       result[i] = DecodeVBuffer(&eval.sgpr[buffer.srsrc_sgpr]);
       if (eval.trace)
-        std::fprintf(
-            stderr,
-            "[eud] rawbuf%zu pc=%#x s%u -> base=%#lx stride=%u "
-            "nrec=%u V#=%08x/%08x/%08x/%08x\n",
-            i, inst.pc, buffer.srsrc_sgpr,
-            static_cast<unsigned long>(result[i].base), result[i].stride,
-            result[i].num_records, eval.sgpr[buffer.srsrc_sgpr],
-            eval.sgpr[buffer.srsrc_sgpr + 1], eval.sgpr[buffer.srsrc_sgpr + 2],
-            eval.sgpr[buffer.srsrc_sgpr + 3]);
+        BASE_LOGI("eud",
+                  "rawbuf{} pc={:#x} s{} -> base={:#x} stride={} "
+                  "nrec={} V#={:08x}/{:08x}/{:08x}/{:08x}",
+                  i, inst.pc, buffer.srsrc_sgpr,
+                  static_cast<unsigned long>(result[i].base), result[i].stride,
+                  result[i].num_records, eval.sgpr[buffer.srsrc_sgpr],
+                  eval.sgpr[buffer.srsrc_sgpr + 1],
+                  eval.sgpr[buffer.srsrc_sgpr + 2],
+                  eval.sgpr[buffer.srsrc_sgpr + 3]);
     }
   }
   return result;

@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <logger/logger.h>
 #include <utl/mem.h>
 
@@ -145,7 +146,7 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
     // Worth seeing: a caller that walks its own heap this way reads the zeroed
     // struct as "not committed" and silently skips the range.
     if (kVqTrace)
-      std::printf("[vq] addr=%p NOT MAPPED\n", addr);
+      BASE_LOGI("vq", "addr={:p} NOT MAPPED", addr);
     return -SysError::eACCES;
   }
 
@@ -185,11 +186,12 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
     std::memcpy(vq + 0x1C, &memType, sizeof(int));
   }
   if (kVqTrace)
-    std::printf(
-        "[vq] addr=%p region=[%p..%p) sceProt=%#x memType=%d rsv=%d off=%#llx%s\n",
-        addr, start, end, region->sceProt, memType,
-        region->reserved ? 1 : 0, (unsigned long long)offset,
-        region->hasPhys ? " (dmem)" : "");
+    BASE_LOGI("vq",
+              "addr={:p} region=[{:p}..{:p}) sceProt={:#x} memType={} rsv={} "
+              "off={:#x}{}",
+              addr, start, end, region->sceProt, memType,
+              region->reserved ? 1 : 0, (unsigned long long)offset,
+              region->hasPhys ? " (dmem)" : "");
   if (infoSize >= 0x21) {
     // flexible(0x01) | direct(0x02, GPU mem) | committed(0x10). A MAP_VOID
     // reservation is none of these -- titles branch on isCommitted to decide
@@ -239,12 +241,12 @@ int PS4ABI sys_batch_map(uint32_t /*handle*/, uint32_t /*flags*/,
   for (; e && done < count; done++) {
     const auto &op = e[done];
     if (kDmemTrace)
-      std::fprintf(stderr,
-                   "[dmem] batch[%d/%d] op=%u start=%#llx off=%#llx len=%#llx "
-                   "prot=%#x type=%u\n",
-                   done, count, op.operation, (unsigned long long)op.start,
-                   (unsigned long long)op.offset, (unsigned long long)op.length,
-                   op.prot, op.type);
+      BASE_LOGI("dmem",
+                "batch[{}/{}] op={} start={:#x} off={:#x} len={:#x} prot={:#x} "
+                "type={}",
+                done, count, op.operation, (unsigned long long)op.start,
+                (unsigned long long)op.offset, (unsigned long long)op.length,
+                op.prot, op.type);
     switch (op.operation) {
     case 0:   // MAP_DIRECT: back the VA with the shared dmem store at op.offset,
               // so every VA mapping that physical offset aliases the same bytes
@@ -336,9 +338,11 @@ int64_t PS4ABI sys_mmap_dmem(void *addr, size_t len, int prot, int flags,
   const bool ps5 = active && active->getPlatform() == proc::platform::ps5;
   const int fd = ps5 ? dmemBackingFd() : -1;  // see the batch-map note above
   if (kDmemTrace)
-    std::fprintf(stderr,
-                 "[dmem] map628 va=%p len=%#zx prot=%#x flags=%#x physOff=%#llx fixed=%d\n",
-                 addr, len, prot, flags, (unsigned long long)physOffset, fixedReq ? 1 : 0);
+    BASE_LOGI("dmem",
+              "map628 va={:p} len={:#x} prot={:#x} flags={:#x} physOff={:#x} "
+              "fixed={}",
+              addr, len, prot, flags, (unsigned long long)physOffset,
+              fixedReq ? 1 : 0);
   if (fd >= 0 && physOffset >= 0 &&
       static_cast<uint64_t>(physOffset) + len <= dmemBackingSize()) {
     const int mflags = MAP_SHARED | (fixedReq ? MAP_FIXED : 0);

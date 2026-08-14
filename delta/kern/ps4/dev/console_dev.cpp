@@ -1,6 +1,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 
@@ -93,7 +94,7 @@ int32_t consoleDevice::ioctl(uint32_t cmd, void *data) {
       static uint32_t logged = 0;
       if (logged < 32) {
         logged++;
-        std::printf("[console] UNHANDLED ioctl(%#x) -> 0\n", cmd);
+        BASE_LOGI("console", "UNHANDLED ioctl({:#x}) -> 0", cmd);
       }
       if (data && (cmd & 0x40000000u)) {
         const uint32_t len = (cmd >> 16) & 0x1fff;

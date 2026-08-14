@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <base/logging.h>
 #include <utl/mem.h>
 
 #include "kern/proc.h"
@@ -35,7 +36,7 @@ void maybePrependCtor(proc &p) {
   // `lea rbx,[rip+disp32]` sits at module+0x45 in the stub (entry is +0x70).
   uint8_t *lea = base + 0x45;
   if (lea[0] != 0x48 || lea[1] != 0x8d || lea[2] != 0x1d) {
-    std::fprintf(stderr, "[ctorprobe] entry stub not recognised at +0x45\n");
+    BASE_LOGI("ctorprobe", "entry stub not recognised at +0x45");
     return;
   }
   const int32_t disp = *reinterpret_cast<int32_t *>(lea + 3);
@@ -45,8 +46,8 @@ void maybePrependCtor(proc &p) {
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(slot) & ~0xFFFull),
                   0x2000, utl::pageProtection::rwx);
   if (*slot) {
-    std::fprintf(stderr, "[ctorprobe] slot above the list is not free (%#lx)\n",
-                 (unsigned long)*slot);
+    BASE_LOGI("ctorprobe", "slot above the list is not free ({:#x})",
+              (unsigned long)*slot);
     return;
   }
   // A ctor is called with no arguments, so rdi holds whatever the previous one
@@ -69,10 +70,10 @@ void maybePrependCtor(proc &p) {
                   0x2000, utl::pageProtection::rwx);
   *reinterpret_cast<int32_t *>(lea + 3) = disp + 8;
 
-  std::fprintf(stderr,
-               "[ctorprobe] prepended module+%#lx (%p) via shim %p at slot %p\n",
-               (unsigned long)off, static_cast<void *>(base + off),
-               static_cast<void *>(shim), static_cast<void *>(slot));
+  BASE_LOGI("ctorprobe",
+            "prepended module+{:#x} ({:p}) via shim {:p} at slot {:p}",
+            (unsigned long)off, static_cast<void *>(base + off),
+            static_cast<void *>(shim), static_cast<void *>(slot));
 }
 
 } // namespace krnl::ps5

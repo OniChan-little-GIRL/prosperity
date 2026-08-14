@@ -1,4 +1,5 @@
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 
@@ -12,7 +13,7 @@ int32_t avControlDevice::ioctl(uint32_t cmd, void *data) {
   // The full set (crtc/pll/dp/fmt/blnd/dvo) configures display hardware the
   // emulator fakes on the gc device. Soft-succeed, zeroing any OUT payload so
   // the caller reads a benign result instead of stale stack bytes.
-  std::printf("[av_control] UNHANDLED ioctl(%#x)\n", cmd);
+  BASE_LOGI("av_control", "UNHANDLED ioctl({:#x})", cmd);
   if (data && (cmd & 0x40000000u)) {
     const uint32_t len = (cmd >> 16) & 0x1fff;
     if (len)

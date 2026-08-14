@@ -25,6 +25,9 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/mem.h>
 #include <utl/options.h>
 #include <unordered_map>
@@ -204,17 +207,18 @@ static_assert(rhi::DrawInfo::kMaxBuffers == kRawBufBindings,
 static void WhyDrop(const rhi::DrawInfo& d, const char* where) {
   if (!kWhyDrop || d.ps_addr != (uint64_t)kWhyDrop)
     return;
-  std::fprintf(stderr, "[whydrop] ps=%#lx exit=%s rt=%#lx mrt=%u depth=%#lx\n",
-               (unsigned long)d.ps_addr, where, (unsigned long)d.rt_base,
-               d.mrt_count, (unsigned long)d.depth_base);
+  BASE_LOGI("whydrop", "ps={:#x} exit={} rt={:#x} mrt={} depth={:#x}",
+            (unsigned long)d.ps_addr, where, (unsigned long)d.rt_base,
+            d.mrt_count, (unsigned long)d.depth_base);
 }
 
 void ReportDeclines() {
-  std::fprintf(stderr, "[gpuvk]   decline:");
+  base::String line;
+  base::FormatTo(line, "  decline:");
   for (int i = 0; i < kMaxDeclineReason; i++)
     if (g_decline[i])
-      std::fprintf(stderr, " %s=%u", kDeclineName[i], g_decline[i]);
-  std::fprintf(stderr, "\n");
+      base::FormatTo(line, " {}={}", kDeclineName[i], g_decline[i]);
+  BASE_LOGI("gpuvk", "{}", line.c_str());
 }
 
 // Issue a draw running the game's recompiled VS/PS. Returns false if the draw
@@ -223,24 +227,24 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // DELTA_GPU_WHYDROP=1: every draw as the renderer receives it, so a slot that
   // never reaches the seq log can be identified.
   if (kWhyDrop == 1)
-    std::fprintf(stderr,
-                 "[whydrop] draw#%u ps=%#lx vs=%#lx rt=%#lx mrt=%u tex=%#lx "
-                 "prim=%u cnt=%u\n",
-                 g_frame.draws, (unsigned long)d.ps_addr,
-                 (unsigned long)d.vs_addr, (unsigned long)d.rt_base,
-                 d.mrt_count, (unsigned long)d.tex_base, d.prim_type,
-                 d.index_data ? d.index_count : d.vertex_count);
+    BASE_LOGI("whydrop",
+              "draw#{} ps={:#x} vs={:#x} rt={:#x} mrt={} tex={:#x} "
+              "prim={} cnt={}",
+              g_frame.draws, (unsigned long)d.ps_addr,
+              (unsigned long)d.vs_addr, (unsigned long)d.rt_base,
+              d.mrt_count, (unsigned long)d.tex_base, d.prim_type,
+              d.index_data ? d.index_count : d.vertex_count);
   bool indexed = d.index_data && d.index_count >= 3;
   uint32_t draw_count = indexed ? d.index_count : d.vertex_count;
   if (kDrawTrace && draw_count >= 300) {
     static int n = 0;
     if (n++ < 40)
-      std::fprintf(stderr,
-                   "[dt] enter recomp count=%u rt=%#lx tex=%#lx num_texs=%u "
-                   "num_vattrs=%u ok=%d\n",
-                   draw_count, (unsigned long)d.rt_base,
-                   (unsigned long)d.tex_base, d.num_texs, d.num_vattrs,
-                   d.recomp ? d.recomp->ok : 0);
+      BASE_LOGI("dt",
+                "enter recomp count={} rt={:#x} tex={:#x} num_texs={} "
+                "num_vattrs={} ok={}",
+                draw_count, (unsigned long)d.rt_base,
+                (unsigned long)d.tex_base, d.num_texs, d.num_vattrs,
+                d.recomp ? d.recomp->ok : 0);
   }
   if (!d.recomp || !d.recomp->ok || draw_count < 3) {
     // DELTA_GPU_DECLTRACE: norecomp lumps together three unrelated causes --
@@ -250,14 +254,14 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kGpuDecltrace) {
       static int n = 0;
       if (n++ < 96)
-        std::fprintf(stderr,
-                     "[decl] norecomp why=%s vcount=%u icount=%u idx=%p "
-                     "vbufs=%u vattrs=%u prim=%#x rt=%#lx\n",
-                     !d.recomp       ? "no-program"
-                     : !d.recomp->ok ? "translate-failed"
-                                     : "count<3",
-                     d.vertex_count, d.index_count, d.index_data, d.num_vbufs,
-                     d.num_vattrs, d.prim_type, (unsigned long)d.rt_base);
+        BASE_LOGI("decl",
+                  "norecomp why={} vcount={} icount={} idx={:p} "
+                  "vbufs={} vattrs={} prim={:#x} rt={:#x}",
+                  !d.recomp       ? "no-program"
+                  : !d.recomp->ok ? "translate-failed"
+                                  : "count<3",
+                  d.vertex_count, d.index_count, d.index_data, d.num_vbufs,
+                  d.num_vattrs, d.prim_type, (unsigned long)d.rt_base);
     }
     return Decline(kNoRecomp);
   }
@@ -270,18 +274,18 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // which silently deletes real geometry.
     static int n = 0;
     if (kGpuDecltrace && n++ < 48)
-      std::fprintf(stderr,
-                   "[decl] no-target draw#%u vs=%#lx ps=%#lx tex=%#lx "
-                   "icount=%u vcount=%u mask=%#x pstex=%zu storage=%zu\n",
-                   g_frame.draws, (unsigned long)d.vs_addr,
-                   (unsigned long)d.ps_addr, (unsigned long)d.tex_base,
-                   d.index_count, d.vertex_count, d.target_mask,
-                   d.recomp->ps_texs.size(),
-                   (size_t)std::count_if(d.recomp->ps_texs.begin(),
-                                         d.recomp->ps_texs.end(),
-                                         [](const gcn::ShaderTex& t) {
-                                           return t.storage;
-                                         }));
+      BASE_LOGI("decl",
+                "no-target draw#{} vs={:#x} ps={:#x} tex={:#x} "
+                "icount={} vcount={} mask={:#x} pstex={} storage={}",
+                g_frame.draws, (unsigned long)d.vs_addr,
+                (unsigned long)d.ps_addr, (unsigned long)d.tex_base,
+                d.index_count, d.vertex_count, d.target_mask,
+                d.recomp->ps_texs.size(),
+                (size_t)std::count_if(d.recomp->ps_texs.begin(),
+                                      d.recomp->ps_texs.end(),
+                                      [](const gcn::ShaderTex& t) {
+                                        return t.storage;
+                                      }));
     WhyDrop(d, "no-target");
     g_frame.draws++;
     return true;
@@ -344,10 +348,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // produce stale.
     static int n = 0;
     if (kSelfTrace && n++ < 20)
-      std::fprintf(
-          stderr,
-          "[self] draw#%u ps=%#lx rt=%#lx tex=%#lx depth=%#lx dtest=%d "
-          "dwrite=%d ntex=%u\n",
+      BASE_LOGI(
+          "self",
+          "draw#{} ps={:#x} rt={:#x} tex={:#x} depth={:#x} dtest={} "
+          "dwrite={} ntex={}",
           g_frame.draws, (unsigned long)d.ps_addr, (unsigned long)d.rt_base,
           (unsigned long)tex_base, (unsigned long)d.depth_base,
           (int)d.depth_test_enable, (int)d.depth_write_enable, d.num_texs);
@@ -362,12 +366,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kGpuDecltrace) {
       static int t = 0;
       if (t++ < 32)
-        std::fprintf(stderr,
-                     "[decl] vtx why=%s n=%u vcount=%u icount=%u itype=%u "
-                     "vattrs=%u vdata=%p vstride=%u rt=%#lx\n",
-                     why, n, d.vertex_count, d.index_count, d.index_type,
-                     d.num_vattrs, d.vertex_data, d.vertex_stride,
-                     (unsigned long)d.rt_base);
+        BASE_LOGI("decl",
+                  "vtx why={} n={} vcount={} icount={} itype={} "
+                  "vattrs={} vdata={:p} vstride={} rt={:#x}",
+                  why, n, d.vertex_count, d.index_count, d.index_type,
+                  d.num_vattrs, d.vertex_data, d.vertex_stride,
+                  (unsigned long)d.rt_base);
     }
     return Decline(kNoRecomp);
   };
@@ -418,11 +422,11 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       if (kClearTrace) {
         static int n = 0;
         if (n++ < kClearTrace)
-          std::fprintf(stderr,
-                       "[clear] f%d draw#%u rect RT %#lx cc=%#x mode=%u "
-                       "NOT-A-CLEAR (CB metadata pass, content preserved)\n",
-                       g_frame.num, g_frame.draws, (unsigned long)d.rt_base,
-                       d.color_control, cb_mode);
+          BASE_LOGI("clear",
+                    "f{} draw#{} rect RT {:#x} cc={:#x} mode={} "
+                    "NOT-A-CLEAR (CB metadata pass, content preserved)",
+                    g_frame.num, g_frame.draws, (unsigned long)d.rt_base,
+                    d.color_control, cb_mode);
       }
       WhyDrop(d, "cb-metadata-pass");
       g_frame.draws++;
@@ -444,11 +448,11 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       if (kClearTrace) {
         static int n = 0;
         if (n++ < 16)
-          std::fprintf(stderr,
-                       "[clear] rect SKIPPED rt=%#lx scissor=(%u,%u)-(%u,%u) "
-                       "target=%ux%u\n",
-                       (unsigned long)d.rt_base, cx0, cy0, cx1, cy1, d.rt_w,
-                       d.rt_h);
+          BASE_LOGI("clear",
+                    "rect SKIPPED rt={:#x} scissor=({},{})-({},{}) "
+                    "target={}x{}",
+                    (unsigned long)d.rt_base, cx0, cy0, cx1, cy1, d.rt_w,
+                    d.rt_h);
       }
       WhyDrop(d, "clear-partial");
       g_frame.draws++;
@@ -466,18 +470,18 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       if (kClearTrace) {
         static int n = 0;
         if (n++ < kClearTrace)
-          std::fprintf(stderr,
-                       "[clear] f%d draw#%u rect RT %#lx info=%#x cc=%#x mode=%u gen="
-                       "(%u,%u)-(%u,%u) win=%#x/%#x scr=%#x/%#x target=%ux%u "
-                       "CLEAR_WORD %08x %08x -> (%g %g %g %g)\n",
-                       g_frame.num, g_frame.draws,
-                       (unsigned long)d.mrt_base[i], d.mrt_info[i],
-                       d.color_control, (d.color_control >> 4) & 7u, cx0, cy0,
-                       cx1, cy1, d.clear_window_tl, d.clear_window_br,
-                       d.clear_screen_tl, d.clear_screen_br, d.rt_w, d.rt_h,
-                       d.mrt_clear_word[i][0], d.mrt_clear_word[i][1],
-                       clear.float32[0], clear.float32[1], clear.float32[2],
-                       clear.float32[3]);
+          BASE_LOGI("clear",
+                    "f{} draw#{} rect RT {:#x} info={:#x} cc={:#x} mode={} gen="
+                    "({},{})-({},{}) win={:#x}/{:#x} scr={:#x}/{:#x} target={}x{} "
+                    "CLEAR_WORD {:08x} {:08x} -> ({:g} {:g} {:g} {:g})",
+                    g_frame.num, g_frame.draws,
+                    (unsigned long)d.mrt_base[i], d.mrt_info[i],
+                    d.color_control, (d.color_control >> 4) & 7u, cx0, cy0,
+                    cx1, cy1, d.clear_window_tl, d.clear_window_br,
+                    d.clear_screen_tl, d.clear_screen_br, d.rt_w, d.rt_h,
+                    d.mrt_clear_word[i][0], d.mrt_clear_word[i][1],
+                    clear.float32[0], clear.float32[1], clear.float32[2],
+                    clear.float32[3]);
       }
     }
     if (d.depth_base) {
@@ -518,15 +522,15 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           continue;  // only the faded-out ones are interesting
         armed = true;
         const uintptr_t at = reinterpret_cast<uintptr_t>(p) + attr.offset;
-        std::fprintf(stderr,
-                     "[uiwatch] arming on UI colour %#lx (rt=%#lx, %u verts, "
-                     "stride %u) -- it currently reads 00000000\n",
-                     (unsigned long)at, (unsigned long)d.rt_base,
-                     d.vertex_count, vb.stride);
+        BASE_LOGI("uiwatch",
+                  "arming on UI colour {:#x} (rt={:#x}, {} verts, "
+                  "stride {}) -- it currently reads 00000000",
+                  (unsigned long)at, (unsigned long)d.rt_base,
+                  d.vertex_count, vb.stride);
         utl::setWriteWatchValueProbe(at);
         utl::setWriteWatchChase(4);
         if (!utl::armWriteWatch(at & ~0xFFFull, 0x1000, 200))
-          std::fprintf(stderr, "[uiwatch] no armer registered\n");
+          BASE_LOGI("uiwatch", "no armer registered");
         break;
       }
     }
@@ -587,10 +591,11 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
             p++;
         }
       if (!out.empty()) {
-        std::fprintf(stderr, "[onlyps] keeping only %zu shader(s):", out.size());
+        base::String list;
+        base::FormatTo(list, "keeping only {} shader(s):", out.size());
         for (uint64_t v : out)
-          std::fprintf(stderr, " %#llx", (unsigned long long)v);
-        std::fprintf(stderr, "\n");
+          base::FormatTo(list, " {:#x}", (unsigned long long)v);
+        BASE_LOGI("onlyps", "{}", list.c_str());
       }
       return out;
     }();
@@ -605,9 +610,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       static std::vector<uint64_t> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
-        std::fprintf(stderr, "[onlyps] keeping ps=%#llx rt=%#llx %ux%u\n",
-                     (unsigned long long)d.ps_addr,
-                     (unsigned long long)d.rt_base, d.rt_w, d.rt_h);
+        BASE_LOGI("onlyps", "keeping ps={:#x} rt={:#x} {}x{}",
+                  (unsigned long long)d.ps_addr,
+                  (unsigned long long)d.rt_base, d.rt_w, d.rt_h);
       }
     }
   }
@@ -635,14 +640,15 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
             std::chrono::steady_clock::now() - kVtxStart)
                 .count() >= kVtxAfter) {
       vtx_n++;
-      std::fprintf(stderr, "[vtx] f%d draw#%u rt=%#lx nv=%u stride=%u attrs=%u",
-                   g_frame.num, g_frame.draws, (unsigned long)d.rt_base, nv,
-                   d.vertex_stride, d.num_vattrs);
+      base::String line;
+      base::FormatTo(line, "f{} draw#{} rt={:#x} nv={} stride={} attrs={}",
+                     g_frame.num, g_frame.draws, (unsigned long)d.rt_base, nv,
+                     d.vertex_stride, d.num_vattrs);
       for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
         const auto& va = d.vattrs[a];
-        std::fprintf(stderr, " |loc=%u dfmt=%u nfmt=%u nc=%u off=%u bind=%u",
-                     va.location, va.dfmt, va.nfmt, va.num_comps, va.offset,
-                     va.binding);
+        base::FormatTo(line, " |loc={} dfmt={} nfmt={} nc={} off={} bind={}",
+                       va.location, va.dfmt, va.nfmt, va.num_comps, va.offset,
+                       va.binding);
         const auto& vb = d.vbufs[va.binding];
         const uint64_t avail =
             static_cast<uint64_t>(vb.stride) * vb.num_records;
@@ -650,14 +656,15 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           const auto* p = static_cast<const uint8_t*>(vb.data) + va.offset;
           uint32_t w[4] = {};
           std::memcpy(w, p, sizeof(w));
-          std::fprintf(stderr, " raw=%08x %08x %08x %08x f=%g %g %g %g", w[0],
-                       w[1], w[2], w[3], *reinterpret_cast<const float*>(&w[0]),
-                       *reinterpret_cast<const float*>(&w[1]),
-                       *reinterpret_cast<const float*>(&w[2]),
-                       *reinterpret_cast<const float*>(&w[3]));
+          base::FormatTo(line, " raw={:08x} {:08x} {:08x} {:08x} f={:g} {:g} {:g} {:g}",
+                         w[0], w[1], w[2], w[3],
+                         *reinterpret_cast<const float*>(&w[0]),
+                         *reinterpret_cast<const float*>(&w[1]),
+                         *reinterpret_cast<const float*>(&w[2]),
+                         *reinterpret_cast<const float*>(&w[3]));
         }
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("vtx", "{}", line.c_str());
     }
   }
 
@@ -737,12 +744,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           if (kClearTrace) {
             static std::atomic<uint64_t> n{0};
             if ((n.fetch_add(1) % 500) == 0)
-              std::fprintf(stderr,
-                           "[clear] lazyclear-heuristic #%llu rt=%#lx mrt=%u "
-                           "mrt1=%#lx\n",
-                           (unsigned long long)n.load(),
-                           (unsigned long)d.rt_base, d.mrt_count,
-                           (unsigned long)(d.mrt_count > 1 ? d.mrt_base[1] : 0));
+              BASE_LOGI("clear",
+                        "lazyclear-heuristic #{} rt={:#x} mrt={} "
+                        "mrt1={:#x}",
+                        (unsigned long long)n.load(),
+                        (unsigned long)d.rt_base, d.mrt_count,
+                        (unsigned long)(d.mrt_count > 1 ? d.mrt_base[1] : 0));
           }
           rt->clear_pending = true;
           rt->clear_src = "lazyclear-heuristic";
@@ -755,14 +762,14 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           if (kClearTrace) {
             static int n = 0;
             if (n++ < kClearTrace)
-              std::fprintf(stderr,
-                           "[clear] f%d draw#%u LAZYCLEAR-HEURISTIC RT %#lx "
-                           "vs=%#lx ps=%#lx color=(%g %g %g %g) blend=%d/%#x\n",
-                           g_frame.num, g_frame.draws,
-                           (unsigned long)d.rt_base, (unsigned long)d.vs_addr,
-                           (unsigned long)d.ps_addr, clear_color[0],
-                           clear_color[1], clear_color[2], clear_color[3],
-                           (int)d.blend_enable, d.blend_control);
+              BASE_LOGI("clear",
+                        "f{} draw#{} LAZYCLEAR-HEURISTIC RT {:#x} "
+                        "vs={:#x} ps={:#x} color=({:g} {:g} {:g} {:g}) blend={}/{:#x}",
+                        g_frame.num, g_frame.draws,
+                        (unsigned long)d.rt_base, (unsigned long)d.vs_addr,
+                        (unsigned long)d.ps_addr, clear_color[0],
+                        clear_color[1], clear_color[2], clear_color[3],
+                        (int)d.blend_enable, d.blend_control);
           }
         }
         // This draw also performs the guest's reverse-Z clear (depth write
@@ -832,10 +839,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kGpuDecltrace) {
       static int n = 0;
       if (n++ < 32)
-        std::fprintf(stderr, "[decl] ring=VB need=%llu off=%llu end=%llu idx=%u\n",
-                     (unsigned long long)vneed,
-                     (unsigned long long)g_ring.vb_offset,
-                     (unsigned long long)g_ring.vb_end, d.index_count);
+        BASE_LOGI("decl", "ring=VB need={} off={} end={} idx={}",
+                  (unsigned long long)vneed,
+                  (unsigned long long)g_ring.vb_offset,
+                  (unsigned long long)g_ring.vb_end, d.index_count);
     }
     return Decline(kRing);
   }
@@ -858,10 +865,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kGpuDecltrace) {
       static int n = 0;
       if (n++ < 32)
-        std::fprintf(stderr, "[decl] ring=IB need=%llu off=%llu end=%llu idx=%u\n",
-                     (unsigned long long)index_bytes,
-                     (unsigned long long)aligned_ioff,
-                     (unsigned long long)g_ring.ib_end, d.index_count);
+        BASE_LOGI("decl", "ring=IB need={} off={} end={} idx={}",
+                  (unsigned long long)index_bytes,
+                  (unsigned long long)aligned_ioff,
+                  (unsigned long long)g_ring.ib_end, d.index_count);
     }
     return Decline(kRing);
   }
@@ -973,8 +980,8 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       if (kTexForce && t.base == (uint64_t)kTexForce) {
         static int forced = 0;
         if (forced++ < 6)
-          std::fprintf(stderr, "[texforce] ps=%#lx bind=%u base=%#lx -> white\n",
-                       (unsigned long)d.ps_addr, i, (unsigned long)t.base);
+          BASE_LOGI("texforce", "ps={:#x} bind={} base={:#x} -> white",
+                    (unsigned long)d.ps_addr, i, (unsigned long)t.base);
         base = 0;  // resolves to nothing -> the white fallback is bound
         multi_color[i] = 0;
         multi_feedback[i] = 0;
@@ -1031,15 +1038,15 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       static int n = 0;
       if (n++ < 24) {
         for (uint32_t i = 0; i < multi_n; i++)
-          std::fprintf(stderr,
-                       "[bind] ps=%#lx b%u base=%#lx %ux%u -> %s\n",
-                       (unsigned long)d.ps_addr, i,
-                       (unsigned long)d.texs[i].base, d.texs[i].w, d.texs[i].h,
-                       multi_storage[i]  ? "storage"
-                       : multi_feedback[i] ? "feedback"
-                       : multi_color[i]  ? "rt-color"
-                       : multi_depth[i]  ? "rt-depth"
-                                         : "GUEST-TEXTURE");
+          BASE_LOGI("bind",
+                    "ps={:#x} b{} base={:#x} {}x{} -> {}",
+                    (unsigned long)d.ps_addr, i,
+                    (unsigned long)d.texs[i].base, d.texs[i].w, d.texs[i].h,
+                    multi_storage[i]  ? "storage"
+                    : multi_feedback[i] ? "feedback"
+                    : multi_color[i]  ? "rt-color"
+                    : multi_depth[i]  ? "rt-depth"
+                                      : "GUEST-TEXTURE");
       }
     }
     // A shader may sample an image through one binding and write the same image
@@ -1061,25 +1068,25 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // moment one of those lands on guest memory.
   {
     if (kTexBindFrame >= 0 && (int)g_frame.num == kTexBindFrame)
-      std::fprintf(stderr,
-                   "[blend] draw#%u rt=%#lx blend=%u ctl=%#x mask=%#x mrt=%u\n",
-                   g_frame.draws, (unsigned long)d.rt_base, d.blend_enable,
-                   d.blend_control, d.target_mask, d.mrt_count);
+      BASE_LOGI("blend",
+                "draw#{} rt={:#x} blend={} ctl={:#x} mask={:#x} mrt={}",
+                g_frame.draws, (unsigned long)d.rt_base, (int)d.blend_enable,
+                d.blend_control, d.target_mask, d.mrt_count);
     if (kTexBindFrame >= 0 && (int)g_frame.num == kTexBindFrame &&
         !rp->multi_tex)
-      std::fprintf(stderr,
-                   "[texbind] draw#%u rt=%#lx %ux%u LEGACY tex=%#lx %ux%u "
-                   "rtAsTex=%u color=%u feedback=%u depth=%u set=%u\n",
-                   g_frame.draws, (unsigned long)d.rt_base, d.rt_w, d.rt_h,
-                   (unsigned long)d.tex_base, d.tex_w, d.tex_h,
-                   (unsigned)rt_as_tex, (unsigned)color_as_tex,
-                   (unsigned)feedback_as_tex, (unsigned)depth_as_tex,
-                   (unsigned)(tex_set != VK_NULL_HANDLE));
+      BASE_LOGI("texbind",
+                "draw#{} rt={:#x} {}x{} LEGACY tex={:#x} {}x{} "
+                "rtAsTex={} color={} feedback={} depth={} set={}",
+                g_frame.draws, (unsigned long)d.rt_base, d.rt_w, d.rt_h,
+                (unsigned long)d.tex_base, d.tex_w, d.tex_h,
+                (unsigned)rt_as_tex, (unsigned)color_as_tex,
+                (unsigned)feedback_as_tex, (unsigned)depth_as_tex,
+                (unsigned)(tex_set != VK_NULL_HANDLE));
     if (kTexBindFrame >= 0 && (int)g_frame.num == kTexBindFrame && multi_n &&
         rp->multi_tex) {
-      std::fprintf(stderr,
-                   "[texbind] draw#%u rt=%#lx %ux%u ntex=%u:", g_frame.draws,
-                   (unsigned long)d.rt_base, d.rt_w, d.rt_h, multi_n);
+      base::String line;
+      base::FormatTo(line, "draw#{} rt={:#x} {}x{} ntex={}:", g_frame.draws,
+                     (unsigned long)d.rt_base, d.rt_w, d.rt_h, multi_n);
       for (uint32_t i = 0; i < multi_n; i++) {
         const char* how = multi_color[i]      ? "RT"
                           : multi_feedback[i] ? "feedback"
@@ -1087,9 +1094,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
                           : multi_storage[i]  ? "storage"
                           : multi_views[i]    ? "guest"
                                               : "WHITE";
-        std::fprintf(
-            stderr,
-            " [%u]%s@%#lx %ux%u layers=%u mips=%u fmt=%u/%u rt?=%u er=%u", i,
+        base::FormatTo(
+            line,
+            " [{}]{}@{:#x} {}x{} layers={} mips={} fmt={}/{} rt?={} er={}", i,
             how, (unsigned long)d.texs[i].base, d.texs[i].w, d.texs[i].h,
             d.texs[i].layers, d.texs[i].mip_levels, d.texs[i].dfmt,
             d.texs[i].nfmt, (unsigned)g_rts.count(d.texs[i].base),
@@ -1097,7 +1104,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
                            ? g_rts[d.texs[i].base].ever_rendered
                            : 0));
       }
-      std::fprintf(stderr, "\n");
+      BASE_LOGI("texbind", "{}", line.c_str());
     }
   }
 
@@ -1214,12 +1221,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           if (kBindTrace && d.ps_addr == (uint64_t)kBindTrace) {
             static int bn = 0;
             if (bn++ < 8)
-              std::fprintf(stderr,
-                           "[bindbar] b%u %#lx layout=%d desired=%d dirty=%d "
-                           "region_restarted=%d\n",
-                           i, (unsigned long)multi_color[i], (int)src.layout,
-                           (int)desired, (int)src.dirty_for_read,
-                           (int)restart_region);
+              BASE_LOGI("bindbar",
+                        "b{} {:#x} layout={} desired={} dirty={} "
+                        "region_restarted={}",
+                        i, (unsigned long)multi_color[i], (int)src.layout,
+                        (int)desired, (int)src.dirty_for_read,
+                        (int)restart_region);
           }
           if (src.layout != desired || src.dirty_for_read) {
             const VkAccessFlags access =
@@ -1420,9 +1427,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kGpuDecltrace) {
       static int n = 0;
       if (n++ < 32)
-        std::fprintf(stderr, "[decl] ring=UBO off=%llu stride=%llu end=%llu\n",
-                     (unsigned long long)cb_off, (unsigned long long)cb_stride,
-                     (unsigned long long)g_ring.ubo_end);
+        BASE_LOGI("decl", "ring=UBO off={} stride={} end={}",
+                  (unsigned long long)cb_off, (unsigned long long)cb_stride,
+                  (unsigned long long)g_ring.ubo_end);
     }
     return Decline(kRing);
   }
@@ -1488,22 +1495,22 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       static int shown = 0;
       if (shown++ < 40) {
         const float* f = reinterpret_cast<const float*>(cb_dst);
-        std::fprintf(stderr,
-                     "[cbinfo] vs=%#lx bind=%u base=%#lx n=%u @0:", 
-                     (unsigned long)d.vs_addr, i, (unsigned long)cb.base, n);
+        base::String line;
+        base::FormatTo(line, "vs={:#x} bind={} base={:#x} n={} @0: ",
+                       (unsigned long)d.vs_addr, i, (unsigned long)cb.base, n);
         // Sixteen, for the same reason as the drawrt dump: the window walk
         // below starts at 0x40, so eight left bytes 32..63 unprintable.
         for (uint32_t k = 0; k < 16 && k * 4 < n; k++)
-          std::fprintf(stderr, " %g", f[k]);
+          base::FormatTo(line, " {:g}", f[k]);
         // Every 0x40 window, not a chosen few: the value a shader actually
         // multiplies by is as likely to sit at byte 376 (P.T.'s light pass
         // scales every light colour by a scalar there) as at 0x40 or 0xc0.
         for (uint32_t off = 0x40u; off + 4 <= n; off += 0x40u) {
-          std::fprintf(stderr, " | @%#x:", off);
+          base::FormatTo(line, " | @{:#x}:", off);
           for (uint32_t k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= n; k++)
-            std::fprintf(stderr, " %g", f[k]);
+            base::FormatTo(line, " {:g}", f[k]);
         }
-        std::fprintf(stderr, "\n");
+        BASE_LOGI("cbinfo", "{}", line.c_str());
       }
     }
     const size_t window = static_cast<size_t>(next / cb_stride);
@@ -1580,12 +1587,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     if (kRawBufTrace) {
       static int n = 0;
       if (n++ < 64)
-        std::fprintf(stderr,
-                     "[rawbuf] draw#%u vs=%#lx nbufs=%u staged=%#x "
-                     "sizes=%u/%u/%u/%u\n",
-                     g_frame.draws, (unsigned long)d.vs_addr, d.num_bufs,
-                     rawbuf_mask, d.bufs[0].size, d.bufs[1].size,
-                     d.bufs[2].size, d.bufs[3].size);
+        BASE_LOGI("rawbuf",
+                  "draw#{} vs={:#x} nbufs={} staged={:#x} "
+                  "sizes={}/{}/{}/{}",
+                  g_frame.draws, (unsigned long)d.vs_addr, d.num_bufs,
+                  rawbuf_mask, d.bufs[0].size, d.bufs[1].size,
+                  d.bufs[2].size, d.bufs[3].size);
     }
   }
   if (tex_set)
@@ -1632,9 +1639,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   if (kDrawTrace && draw_count >= 300) {
     static int n = 0;
     if (n++ < 40)
-      std::fprintf(stderr,
-                   "[dt] RECOMP DREW count=%u rt=%#lx nv=%u multi_tex=%d\n",
-                   draw_count, (unsigned long)d.rt_base, nv, rp->multi_tex);
+      BASE_LOGI("dt",
+                "RECOMP DREW count={} rt={:#x} nv={} multi_tex={}",
+                draw_count, (unsigned long)d.rt_base, nv, (int)rp->multi_tex);
   }
   CmdInsertLabel(g_frame.cmd, "recomp vs=%#llx ps=%#llx n=%u%s",
                  (unsigned long long)d.vs_addr, (unsigned long long)d.ps_addr,
@@ -1652,9 +1659,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   {
     static int seq = 0;
     if (seq < kSeqN) {
-      std::fprintf(stderr, "[seq] %d f%d draw#%u rt=%#lx tex=%#lx%s\n", seq++,
-                   g_frame.num, g_frame.draws, (unsigned long)d.rt_base,
-                   (unsigned long)tex_base, color_as_tex ? " RT-AS-TEX" : "");
+      BASE_LOGI("seq", "{} f{} draw#{} rt={:#x} tex={:#x}{}", seq++,
+                g_frame.num, g_frame.draws, (unsigned long)d.rt_base,
+                (unsigned long)tex_base, color_as_tex ? " RT-AS-TEX" : "");
     }
   }
   // DELTA_GPU_DRAWRT=<base>: report what was actually issued for one target.
@@ -1679,51 +1686,51 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         (!kWantFrame || (int)g_frame.num == kWantFrame) &&
         (int)g_frame.draws >= kBusy) {
       shown++;
-      std::fprintf(stderr,
-                   "[drawrt] f%d #%u rt=%#lx %ux%u indexed=%d vcount=%u "
-                   "icount=%u prim=%u tmask=%#x num_vbufs=%u stride=%u mrt=%u "
-                   "vp=%g,%g scale %g,%g off vs=%#lx ps=%#lx\n",
-                   g_frame.num, g_frame.draws,
-                   (unsigned long)g_region.cur_rt, d.rt_w, d.rt_h, (int)indexed,
-                   d.vertex_count, d.index_count, d.prim_type, d.target_mask,
-                   d.num_vbufs, d.vertex_stride, d.mrt_count,
-                   d.viewport_x_scale, d.viewport_y_scale, d.viewport_x_offset,
-                   d.viewport_y_offset, (unsigned long)d.vs_addr,
-                   (unsigned long)d.ps_addr);
-      std::fprintf(stderr,
-                   "[drawrt]  blend en=%d ctrl=%#x tmask=%#x surf=%ux%u "
-                   "zscale=%g zoff=%g scissor=(%u,%u)-(%u,%u)\n",
-                   (int)d.blend_enable, d.blend_control, d.target_mask,
-                   d.rt_surf_w, d.rt_surf_h, d.viewport_z_scale,
-                   d.viewport_z_offset, d.scissor_tl & 0x7FFF,
-                   (d.scissor_tl >> 16) & 0x7FFF, d.scissor_br & 0x7FFF,
-                   (d.scissor_br >> 16) & 0x7FFF);
+      BASE_LOGI("drawrt",
+                "f{} #{} rt={:#x} {}x{} indexed={} vcount={} "
+                "icount={} prim={} tmask={:#x} num_vbufs={} stride={} mrt={} "
+                "vp={:g},{:g} scale {:g},{:g} off vs={:#x} ps={:#x}",
+                g_frame.num, g_frame.draws,
+                (unsigned long)g_region.cur_rt, d.rt_w, d.rt_h, (int)indexed,
+                d.vertex_count, d.index_count, d.prim_type, d.target_mask,
+                d.num_vbufs, d.vertex_stride, d.mrt_count,
+                d.viewport_x_scale, d.viewport_y_scale, d.viewport_x_offset,
+                d.viewport_y_offset, (unsigned long)d.vs_addr,
+                (unsigned long)d.ps_addr);
+      BASE_LOGI("drawrt",
+                " blend en={} ctrl={:#x} tmask={:#x} surf={}x{} "
+                "zscale={:g} zoff={:g} scissor=({},{})-({},{})",
+                (int)d.blend_enable, d.blend_control, d.target_mask,
+                d.rt_surf_w, d.rt_surf_h, d.viewport_z_scale,
+                d.viewport_z_offset, d.scissor_tl & 0x7FFF,
+                (d.scissor_tl >> 16) & 0x7FFF, d.scissor_br & 0x7FFF,
+                (d.scissor_br >> 16) & 0x7FFF);
       // Every bound target's own CB_COLORn_INFO. The colour FORMAT and
       // NUMBER_TYPE decide whether the hardware clamps a write at 1.0 or keeps
       // it, which is the difference between a highlight and a blown one.
       for (uint32_t m = 0; m < d.mrt_count && m < 8; m++)
-        std::fprintf(stderr,
-                     "[drawrt]  mrt%u base=%#lx info=%#x fmt=%u ntype=%u\n", m,
-                     (unsigned long)d.mrt_base[m], d.mrt_info[m],
-                     (d.mrt_info[m] >> 2) & 0x1F, (d.mrt_info[m] >> 8) & 0x7);
+        BASE_LOGI("drawrt",
+                  " mrt{} base={:#x} info={:#x} fmt={} ntype={}", m,
+                  (unsigned long)d.mrt_base[m], d.mrt_info[m],
+                  (d.mrt_info[m] >> 2) & 0x1F, (d.mrt_info[m] >> 8) & 0x7);
       // Every bound target's own CB_BLENDn_CONTROL. An MRT pass whose second
       // attachment blends differently from its first is invisible in the
       // single-target line above, and a wrong enable there accumulates over a
       // pass that draws the same target dozens of times.
       for (uint32_t m = 1; m < d.mrt_count && m < 8; m++)
-        std::fprintf(stderr, "[drawrt]  blend%u en=%d ctrl=%#x base=%#lx\n", m,
-                     (int)((d.mrt_blend_mask >> m) & 1u), d.mrt_blend[m],
-                     (unsigned long)d.mrt_base[m]);
+        BASE_LOGI("drawrt", " blend{} en={} ctrl={:#x} base={:#x}", m,
+                  (int)((d.mrt_blend_mask >> m) & 1u), d.mrt_blend[m],
+                  (unsigned long)d.mrt_base[m]);
       // Whether this pass writes depth, and into what, decides whether a later
       // depth-sampling pass has anything to read.
-      std::fprintf(stderr,
-                   "[drawrt]  depth base=%#lx valid=%d test=%d write=%d "
-                   "func=%u clear=%g stencil=%d cleardraw=%d/%d rc=%#x sbase=%#lx\n",
-                   (unsigned long)d.depth_base, (int)d.depth_valid,
-                   (int)d.depth_test_enable, (int)d.depth_write_enable,
-                   d.depth_func, d.depth_clear, (int)d.stencil_enable,
-                   (int)d.depth_clear_draw, (int)d.stencil_clear_draw,
-                   d.render_control, (unsigned long)d.stencil_base);
+      BASE_LOGI("drawrt",
+                " depth base={:#x} valid={} test={} write={} "
+                "func={} clear={:g} stencil={} cleardraw={}/{} rc={:#x} sbase={:#x}",
+                (unsigned long)d.depth_base, (int)d.depth_valid,
+                (int)d.depth_test_enable, (int)d.depth_write_enable,
+                d.depth_func, d.depth_clear, (int)d.stencil_enable,
+                (int)d.depth_clear_draw, (int)d.stencil_clear_draw,
+                d.render_control, (unsigned long)d.stencil_base);
       // A single-texture pipeline never fills the multi_* arrays -- it binds
       // through color_as_tex/depth_as_tex below -- so reading them here would
       // report every such draw as a MISS that resolved fine.
@@ -1747,43 +1754,43 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       // a shader with several image_samples that took the single-texture path
       // reads only the first, and the trace would look identical to a genuine
       // one-texture blit.
-      std::fprintf(stderr, "[drawrt]  texs=%zu multi=%d n=%u\n",
-                   d.recomp->ps_texs.size(), (int)rp->multi_tex, multi_n);
+      BASE_LOGI("drawrt", " texs={} multi={} n={}",
+                d.recomp->ps_texs.size(), (int)rp->multi_tex, multi_n);
       for (uint32_t i = 0; i < shown_n; i++) {
         const auto& t = d.texs[i];
         if (!t.base)
           continue;
-        std::fprintf(stderr,
-                     "[drawrt]  tex%u mips=%u basemip=%u viewmips=%u "
-                     "minlod=%u layers=%u arr=%d lod0=%d cmp=%d sto=%d "
-                     "swz=%#x smp=%d %08x %08x %08x %08x\n",
-                     i, t.mip_levels, t.base_mip, t.view_mips, t.min_lod,
-                     t.layers, (int)t.arrayed, (int)t.force_lod_zero,
-                     (int)t.depth_compare, (int)t.storage, t.swizzle,
-                     (int)t.sampler_valid, t.sampler[0], t.sampler[1],
-                     t.sampler[2], t.sampler[3]);
+        BASE_LOGI("drawrt",
+                  " tex{} mips={} basemip={} viewmips={} "
+                  "minlod={} layers={} arr={} lod0={} cmp={} sto={} "
+                  "swz={:#x} smp={} {:08x} {:08x} {:08x} {:08x}",
+                  i, t.mip_levels, t.base_mip, t.view_mips, t.min_lod,
+                  t.layers, (int)t.arrayed, (int)t.force_lod_zero,
+                  (int)t.depth_compare, (int)t.storage, t.swizzle,
+                  (int)t.sampler_valid, t.sampler[0], t.sampler[1],
+                  t.sampler[2], t.sampler[3]);
         if (t.src && gpu::IsReadableRange(t.src, 32)) {
           const uint32_t* tw = reinterpret_cast<const uint32_t*>(t.src);
-          std::fprintf(stderr,
-                       "[drawrt]  tex%u T# src=%#lx [%08x %08x %08x %08x "
-                       "%08x %08x %08x %08x]\n",
-                       i, (unsigned long)t.src, tw[0], tw[1], tw[2], tw[3],
-                       tw[4], tw[5], tw[6], tw[7]);
+          BASE_LOGI("drawrt",
+                    " tex{} T# src={:#x} [{:08x} {:08x} {:08x} {:08x} "
+                    "{:08x} {:08x} {:08x} {:08x}]",
+                    i, (unsigned long)t.src, tw[0], tw[1], tw[2], tw[3],
+                    tw[4], tw[5], tw[6], tw[7]);
         }
         const bool resolved_guest =
             rp->multi_tex ? multi_views[i] != VK_NULL_HANDLE : legacy_resolved;
-        std::fprintf(stderr,
-                     "[drawrt]  tex%u %#lx %ux%u dfmt=%u tiling=%u -> %s%#lx\n",
-                     i, (unsigned long)t.base, t.w, t.h, t.dfmt, t.tiling,
-                     rc[i]           ? "rt "
-                     : rf[i]         ? "fb "
-                     : rd[i]         ? "depth "
-                     : resolved_guest ? "guest "
-                                      : "MISS ",
-                     (unsigned long)(rc[i]   ? rc[i]
-                                     : rf[i] ? rf[i]
-                                     : rd[i] ? rd[i]
-                                             : 0));
+        BASE_LOGI("drawrt",
+                  " tex{} {:#x} {}x{} dfmt={} tiling={} -> {}{:#x}",
+                  i, (unsigned long)t.base, t.w, t.h, t.dfmt, t.tiling,
+                  rc[i]           ? "rt "
+                  : rf[i]         ? "fb "
+                  : rd[i]         ? "depth "
+                  : resolved_guest ? "guest "
+                                   : "MISS ",
+                  (unsigned long)(rc[i]   ? rc[i]
+                                  : rf[i] ? rf[i]
+                                  : rd[i] ? rd[i]
+                                          : 0));
         // A MISS is the interesting case and says nothing on its own: name the
         // render-target state the binding was matched against.
         // Also report a binding that fell through to guest memory while its
@@ -1793,27 +1800,27 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         if (resolved_guest && !rc[i] && !rf[i] && !rd[i] &&
             g_rts.count(t.base)) {
           const auto& rt = g_rts[t.base];
-          std::fprintf(stderr,
-                       "[drawrt]  tex%u GUEST-OVER-RT: live=%ux%u "
-                       "ever_rendered=%d variants=%zu\n",
-                       i, rt.w, rt.h, (int)rt.ever_rendered,
-                       g_rt_variants.count(t.base)
-                           ? g_rt_variants[t.base].size()
-                           : 0);
+          BASE_LOGI("drawrt",
+                    " tex{} GUEST-OVER-RT: live={}x{} "
+                    "ever_rendered={} variants={}",
+                    i, rt.w, rt.h, (int)rt.ever_rendered,
+                    g_rt_variants.count(t.base)
+                        ? g_rt_variants[t.base].size()
+                        : 0);
         }
         if (!rc[i] && !rf[i] && !rd[i] && !resolved_guest) {
           auto rt = g_rts.find(t.base);
-          std::fprintf(stderr,
-                       "[drawrt]  tex%u MISS why: in_rts=%d live=%ux%u "
-                       "ever_rendered=%d depth=%d arrayed=%d is_3d=%d "
-                       "resolved=%#lx\n",
-                       i, rt != g_rts.end() ? 1 : 0,
-                       rt != g_rts.end() ? rt->second.w : 0,
-                       rt != g_rts.end() ? rt->second.h : 0,
-                       rt != g_rts.end() ? (int)rt->second.ever_rendered : -1,
-                       g_depths.count(t.base) ? 1 : 0, (int)t.arrayed,
-                       (int)t.is_3d,
-                       (unsigned long)ResolveSampledRT(t.base, t.w, t.h));
+          BASE_LOGI("drawrt",
+                    " tex{} MISS why: in_rts={} live={}x{} "
+                    "ever_rendered={} depth={} arrayed={} is_3d={} "
+                    "resolved={:#x}",
+                    i, rt != g_rts.end() ? 1 : 0,
+                    rt != g_rts.end() ? rt->second.w : 0,
+                    rt != g_rts.end() ? rt->second.h : 0,
+                    rt != g_rts.end() ? (int)rt->second.ever_rendered : -1,
+                    g_depths.count(t.base) ? 1 : 0, (int)t.arrayed,
+                    (int)t.is_3d,
+                    (unsigned long)ResolveSampledRT(t.base, t.w, t.h));
         }
       }
       // Only the slots this draw actually declared: the rest are unused
@@ -1826,20 +1833,21 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           // pass with fewer constant buffers than it has, and a shader whose
           // transform lives in the missing one draws with a zero matrix.
           if (cb.base || cb.size)
-            std::fprintf(stderr, "[drawrt]  cb%u %#lx sz=%u UNREADABLE\n", c,
-                         (unsigned long)cb.base, cb.size);
+            BASE_LOGI("drawrt", " cb{} {:#x} sz={} UNREADABLE", c,
+                      (unsigned long)cb.base, cb.size);
           else
-            std::fprintf(stderr, "[drawrt]  cb%u UNBOUND\n", c);
+            BASE_LOGI("drawrt", " cb{} UNBOUND", c);
           continue;
         }
         const uint32_t* w = reinterpret_cast<const uint32_t*>(cb.base);
-        std::fprintf(stderr, "[drawrt]  cb%u %#lx sz=%u:", c,
-                     (unsigned long)cb.base, cb.size);
+        base::String line;
+        base::FormatTo(line, " cb{} {:#x} sz={}:", c,
+                       (unsigned long)cb.base, cb.size);
         // Sixteen, not eight: with the window walk below starting at 0x40,
         // eight left bytes 32..63 unprintable -- and P.T.'s draw #38 scales its
         // whole extinction by a scalar at byte 44.
         for (uint32_t k = 0; k < 16 && k * 4 < cb.size; k++)
-          std::fprintf(stderr, " %g", *reinterpret_cast<const float*>(&w[k]));
+          base::FormatTo(line, " {:g}", *reinterpret_cast<const float*>(&w[k]));
         // A shader loads its constants with s_buffer_load at whatever offset
         // the compiler chose, so show EVERY 4x4-sized window the binding is big
         // enough to hold. Showing only 0x40 and 0x80 printed a plausible matrix
@@ -1850,12 +1858,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         // to alpha-test its cookie on a scalar at byte 200 of a 208-byte
         // buffer, which every whole-window walk stops just short of.
         for (uint32_t off = 0x40u; off + 4 <= cb.size; off += 0x40u) {
-          std::fprintf(stderr, "\n[drawrt]   @%#x:", off);
+          base::FormatTo(line, "\n  @{:#x}:", off);
           for (uint32_t k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= cb.size;
                k++)
-            std::fprintf(stderr, " %g", *reinterpret_cast<const float*>(&w[k]));
+            base::FormatTo(line, " {:g}", *reinterpret_cast<const float*>(&w[k]));
         }
-        std::fprintf(stderr, "\n");
+        BASE_LOGI("drawrt", "{}", line.c_str());
       }
     }
   }

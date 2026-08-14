@@ -44,6 +44,8 @@ bool RecompileComputeSpirv(const uint32_t*,
 #include <string>
 #include <unordered_set>
 
+#include <base/logging.h>
+
 #include "gpu/gcn/gcn_audit.h"
 #include "gpu/gcn/gcn_disasm.h"
 #include "gpu/gcn/spirv/spv_post.h"
@@ -127,7 +129,7 @@ void NoteApproximated(const char* enc, uint32_t op) {
       (static_cast<uint64_t>(op) << 40);
   if (seen.size() > 512 || !seen.insert(key).second)
     return;
-  std::fprintf(stderr, "[gcnspv] APPROXIMATED %s op=%#x\n", enc, op);
+  BASE_LOGI("gcnspv", "APPROXIMATED {} op={:#x}", enc, op);
 }
 
 void WarnUnsupported(const char* enc, uint32_t op, uint32_t w0, uint32_t w1) {
@@ -150,9 +152,8 @@ void WarnUnsupported(const char* enc, uint32_t op, uint32_t w0, uint32_t w1) {
       (static_cast<uint64_t>(op) << 40);
   if (seen.size() > 512 || !seen.insert(key).second)
     return;
-  std::fprintf(stderr,
-               "[gcnspv] UNSUPPORTED %s op=%#x (w0=%#x w1=%#x) -> rejected\n",
-               enc, op, w0, w1);
+  BASE_LOGI("gcnspv", "UNSUPPORTED {} op={:#x} (w0={:#x} w1={:#x}) -> rejected",
+            enc, op, w0, w1);
 }
 
 // ---- stage-io helpers -------------------------------------------------------
@@ -548,8 +549,7 @@ std::vector<FetchAttr> ParseFetch(uint64_t fetch_addr) {
   if (out.empty() && kGpuShdis) {
     static int n = 0;
     if (n++ < 8) {
-      std::fprintf(stderr, "[gcnspv] fetch shader parsed empty @%#lx\n",
-                   static_cast<unsigned long>(fetch_addr));
+      BASE_LOGI("gcnspv", "fetch shader parsed empty @{:#x}", fetch_addr);
       DisassembleAt(fetch_addr, "fetch");
     }
   }
@@ -2305,9 +2305,9 @@ bool TranslateCs(const Program& program,
 }
 
 void DumpProgram(const char* tag, const Program& program) {
-  std::fprintf(stderr, "[shdis] %s, %zu insts:\n", tag, program.size());
+  BASE_LOGI("shdis", "{}, {} insts:", tag, program.size());
   for (const Inst& inst : program)
-    std::fprintf(stderr, "[shdis]  %s\n", DisasmLine(inst).c_str());
+    BASE_LOGI("shdis", "  {}", DisasmLine(inst).c_str());
 }
 
 // One-shot disassembly (DELTA_GPU_SHDIS): for the first branchy shaders, list
@@ -2319,7 +2319,7 @@ void MaybeDumpBranchy(const char* tag, const Program& program) {
   if (!HasControlFlow(program) || dumped >= 2)
     return;
   dumped++;
-  std::fprintf(stderr, "[shdis] (branchy)\n");
+  BASE_LOGI("shdis", "(branchy)");
   DumpProgram(tag, program);
 }
 
@@ -2334,7 +2334,7 @@ void MaybeDumpByAddr(const char* tag,
   if (dumped)
     return;
   dumped = true;
-  std::fprintf(stderr, "[shdis] @%p:\n", code);
+  BASE_LOGI("shdis", "@{}:", static_cast<const void*>(code));
   DumpProgram(tag, program);
 }
 
@@ -2574,8 +2574,8 @@ bool RecompileSpirv(const uint32_t* vs_code,
   }
   if (!vs_ok) {
     if (TraceEnabled())
-      std::fprintf(stderr, "[gcnspv] VS translation rejected @%p\n",
-                   static_cast<const void*>(vs_code));
+      BASE_LOGI("gcnspv", "VS translation rejected @{}",
+                static_cast<const void*>(vs_code));
     return false;
   }
 
@@ -2604,8 +2604,8 @@ bool RecompileSpirv(const uint32_t* vs_code,
   }
   if (!ps_ok) {
     if (TraceEnabled())
-      std::fprintf(stderr, "[gcnspv] PS translation rejected @%p\n",
-                   static_cast<const void*>(ps_code));
+      BASE_LOGI("gcnspv", "PS translation rejected @{}",
+                static_cast<const void*>(ps_code));
     return false;
   }
 
@@ -2620,17 +2620,17 @@ bool RecompileSpirv(const uint32_t* vs_code,
   // uncached diagnostic path, which is the point of that switch.
   if (NoOpt()) {
     if (!spirv::Validate(vs, &err)) {
-      std::fprintf(stderr, "[gcnspv] VS invalid @%p: %s\n",
-                   static_cast<const void*>(vs_code), err.c_str());
+      BASE_LOGI("gcnspv", "VS invalid @{}: {}",
+                static_cast<const void*>(vs_code), err.c_str());
       return false;
     }
     if (!spirv::Validate(ps, &err)) {
-      std::fprintf(stderr, "[gcnspv] PS invalid @%p: %s\n",
-                   static_cast<const void*>(ps_code), err.c_str());
+      BASE_LOGI("gcnspv", "PS invalid @{}: {}",
+                static_cast<const void*>(ps_code), err.c_str());
       return false;
     }
     if (!spirv::Validate(gs, &err)) {
-      std::fprintf(stderr, "[gcnspv] RECTLIST GS invalid: %s\n", err.c_str());
+      BASE_LOGI("gcnspv", "RECTLIST GS invalid: {}", err.c_str());
       return false;
     }
     r.vs_spirv = vs;
@@ -2638,17 +2638,17 @@ bool RecompileSpirv(const uint32_t* vs_code,
     r.fs_spirv = ps;
   } else {
     if (!spirv::Finalize(vs, &r.vs_spirv, &err)) {
-      std::fprintf(stderr, "[gcnspv] VS invalid @%p: %s\n",
-                   static_cast<const void*>(vs_code), err.c_str());
+      BASE_LOGI("gcnspv", "VS invalid @{}: {}",
+                static_cast<const void*>(vs_code), err.c_str());
       return false;
     }
     if (!spirv::Finalize(ps, &r.fs_spirv, &err)) {
-      std::fprintf(stderr, "[gcnspv] PS invalid @%p: %s\n",
-                   static_cast<const void*>(ps_code), err.c_str());
+      BASE_LOGI("gcnspv", "PS invalid @{}: {}",
+                static_cast<const void*>(ps_code), err.c_str());
       return false;
     }
     if (!spirv::Finalize(gs, &r.gs_spirv, &err)) {
-      std::fprintf(stderr, "[gcnspv] RECTLIST GS invalid: %s\n", err.c_str());
+      BASE_LOGI("gcnspv", "RECTLIST GS invalid: {}", err.c_str());
       return false;
     }
   }
@@ -2671,9 +2671,8 @@ bool RecompileSpirv(const uint32_t* vs_code,
       if (FILE* f = std::fopen(path, "wb")) {
         std::fwrite(r.fs_spirv.data(), 4, r.fs_spirv.size(), f);
         std::fclose(f);
-        std::fprintf(stderr, "[spvdump] ps %#lx -> %s (%zu words)\n",
-                     (unsigned long)kSpvDumpAddr.get(), path,
-                     r.fs_spirv.size());
+        BASE_LOGI("spvdump", "ps {:#x} -> {} ({} words)",
+                  kSpvDumpAddr.get(), path, r.fs_spirv.size());
       }
     }
   }
@@ -2687,9 +2686,8 @@ bool RecompileSpirv(const uint32_t* vs_code,
       cfg_count++;
     if (logged < 12) {
       logged++;
-      std::fprintf(stderr,
-                   "[gcnspv] recompiled ok=%d (cfg-shaders=%d) this=%s\n",
-                   ok_count, cfg_count, r.ok ? "spirv" : "FALLBACK");
+      BASE_LOGI("gcnspv", "recompiled ok={} (cfg-shaders={}) this={}",
+                ok_count, cfg_count, r.ok ? "spirv" : "FALLBACK");
     }
   }
   return r.ok;
@@ -2733,14 +2731,14 @@ bool RecompileComputeSpirv(const uint32_t* cs_code,
   std::string err;
   if (NoOpt()) {
     if (!spirv::Validate(spv_bin, &err)) {
-      std::fprintf(stderr, "[gcnspv] CS invalid @%p: %s\n",
-                   static_cast<const void*>(cs_code), err.c_str());
+      BASE_LOGI("gcnspv", "CS invalid @{}: {}",
+                static_cast<const void*>(cs_code), err.c_str());
       return false;
     }
     tmp.spirv = spv_bin;
   } else if (!spirv::Finalize(spv_bin, &tmp.spirv, &err)) {
-    std::fprintf(stderr, "[gcnspv] CS invalid @%p: %s\n",
-                 static_cast<const void*>(cs_code), err.c_str());
+    BASE_LOGI("gcnspv", "CS invalid @{}: {}",
+              static_cast<const void*>(cs_code), err.c_str());
     return false;
   }
   if (tmp.spirv.empty())

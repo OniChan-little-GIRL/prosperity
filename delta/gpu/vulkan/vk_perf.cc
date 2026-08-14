@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -347,26 +348,27 @@ void ReportFps() {
   double dt = std::chrono::duration<double>(now - last).count();
   if (dt >= 2.0) {
     double f = frames ? frames : 1;
-    std::fprintf(
-        stderr,
-        "[fps] %.1f fps | per-frame gpu-code: draw=%.2fms end=%.2fms "
-        "(wait=%.2fms exec=%.2fms "
-        "submit=%.2fms present=%.2fms) texup=%.2fms x%.1f cs=%.2fms x%.1f "
-        "(in=%.2f gpu=%.2f out=%.2f stage=%.1fx%.1fMB flush=%.1f) "
-        "sh=%.2fms x%.1f dcb=%.2fms x%.1f (lock=%.2fms) wb=%.0f%%\n",
-        frames / dt, g_ns_draw / f / 1e6, g_ns_end / f / 1e6,
-        g_ns_readback / f / 1e6,
-        g_gpu_exec_samples ? g_ns_gpu_exec / g_gpu_exec_samples / 1e6 : 0.0,
-        g_ns_submit / f / 1e6, g_ns_present / f / 1e6, g_ns_tex_up / f / 1e6,
-        g_tex_ups / f, g_ns_cs / f / 1e6, g_cs_count / f, g_ns_cs_in / f / 1e6,
-        g_ns_cs_gpu / f / 1e6, g_ns_cs_out / f / 1e6, g_cs_stage_n / f,
-        g_cs_stage_bytes / f / 1e6, g_cs_flush_n / f,
-        gcn::g_ns_recomp / f / 1e6, gcn::g_recomp_n / f,
-        rhi::g_ns_dcb / f / 1e6, rhi::g_dcb_n / f,
-        rhi::g_ns_dcb_lock / f / 1e6,
-        g_cs_wb_bytes_total ? 100.0 * double(g_cs_wb_bytes_written) /
-                                  double(g_cs_wb_bytes_total)
-                            : 0.0);
+    BASE_LOGI("fps", "{:.1f} fps | per-frame gpu-code: draw={:.2f}ms end={:.2f}ms "
+                     "(wait={:.2f}ms exec={:.2f}ms "
+                     "submit={:.2f}ms present={:.2f}ms) texup={:.2f}ms x{:.1f} "
+                     "cs={:.2f}ms x{:.1f} "
+                     "(in={:.2f} gpu={:.2f} out={:.2f} stage={:.1f}x{:.1f}MB "
+                     "flush={:.1f}) "
+                     "sh={:.2f}ms x{:.1f} dcb={:.2f}ms x{:.1f} (lock={:.2f}ms) "
+                     "wb={:.0f}%",
+              frames / dt, g_ns_draw / f / 1e6, g_ns_end / f / 1e6,
+              g_ns_readback / f / 1e6,
+              g_gpu_exec_samples ? g_ns_gpu_exec / g_gpu_exec_samples / 1e6 : 0.0,
+              g_ns_submit / f / 1e6, g_ns_present / f / 1e6, g_ns_tex_up / f / 1e6,
+              g_tex_ups / f, g_ns_cs / f / 1e6, g_cs_count / f, g_ns_cs_in / f / 1e6,
+              g_ns_cs_gpu / f / 1e6, g_ns_cs_out / f / 1e6, g_cs_stage_n / f,
+              g_cs_stage_bytes / f / 1e6, g_cs_flush_n / f,
+              gcn::g_ns_recomp / f / 1e6, gcn::g_recomp_n / f,
+              rhi::g_ns_dcb / f / 1e6, rhi::g_dcb_n / f,
+              rhi::g_ns_dcb_lock / f / 1e6,
+              g_cs_wb_bytes_total ? 100.0 * double(g_cs_wb_bytes_written) /
+                                        double(g_cs_wb_bytes_total)
+                                  : 0.0);
     CsSyncReport(f);
     // Feed the on-screen overlay gauge (gpuMs = GPU end/present-dominated
     // cost).

@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <cstring>
 
@@ -168,7 +169,7 @@ int PS4ABI sys_getdtablesize() { return static_cast<int>(kMaxFiles); }
 
 // We deliver no real signals; log the attempt and pretend it landed.
 int PS4ABI sys_kill(uint32_t pid, int sig) {
-  std::printf("[procid] kill(pid=%u, sig=%d) ignored\n", pid, sig);
+  BASE_LOGI("procid", "kill(pid={}, sig={}) ignored", pid, sig);
   return 0;
 }
 
@@ -190,11 +191,11 @@ int PS4ABI sys_sigaltstack(const void *ss, void *oss) {
 // No signal ever arrives, so the timed/blocking waits report "nothing pending"
 // rather than hanging forever.
 int PS4ABI sys_sigtimedwait(const void *set, void *info, const void *timeout) {
-  std::printf("[procid] sigtimedwait -> EAGAIN (no signals)\n");
+  BASE_LOGI("procid", "sigtimedwait -> EAGAIN (no signals)");
   return -SysError::eAGAIN;
 }
 int PS4ABI sys_sigwaitinfo(const void *set, void *info) {
-  std::printf("[procid] sigwaitinfo -> EAGAIN (no signals)\n");
+  BASE_LOGI("procid", "sigwaitinfo -> EAGAIN (no signals)");
   return -SysError::eAGAIN;
 }
 

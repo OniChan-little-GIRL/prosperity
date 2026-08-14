@@ -10,6 +10,9 @@
 #include <thread>
 #include <chrono>
 #include <base.h>
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
 #include <utl/file.h>
 #include <utl/mem.h>
 #include <utl/path.h>
@@ -735,10 +738,9 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     // container types.
     if (firstSeen || n <= 40 || std::strstr(path, ".calt") ||
         std::strstr(path, "recacheList") || std::strstr(path, "PrecacheList")) {
-      std::fprintf(stderr, "[fios] FHOpen path='%s' pOutFH=%#llx op=%#llx (#%llu)\n",
-                   path, (unsigned long long)a1, (unsigned long long)ret,
-                   (unsigned long long)n);
-      std::fflush(stderr);
+      BASE_LOGI("fios", "FHOpen path='{}' pOutFH={:#x} op={:#x} (#{})", path,
+                (unsigned long long)a1, (unsigned long long)ret,
+                (unsigned long long)n);
     }
     break;
   }
@@ -746,22 +748,20 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     if ((int64_t)ret <= 0) {
       std::lock_guard lk(g_fiosMx);
       if (g_zeroSizeFh.insert(a0).second) {
-        std::fprintf(stderr,
-          "[fios] *** FHGetSize ZERO fh=%#llx -> size=%lld  path='%s'\n",
-          (unsigned long long)a0, (long long)ret, pathForFh(a0).c_str());
-        std::fflush(stderr);
+        BASE_LOGI("fios",
+                  "*** FHGetSize ZERO fh={:#x} -> size={}  path='{}'",
+                  (unsigned long long)a0, (long long)ret, pathForFh(a0).c_str());
       } else if ((++g_zeroSizeChurn % 500000) == 0) {
-        std::fprintf(stderr, "[fios] (FHGetSize-zero churn count=%llu)\n",
-                     (unsigned long long)g_zeroSizeChurn.load());
-        std::fflush(stderr);
+        BASE_LOGI("fios", "(FHGetSize-zero churn count={})",
+                  (unsigned long long)g_zeroSizeChurn.load());
       }
     } else if (kFiosAllopen && (int64_t)ret > (4 << 20)) {
       // Large files (>4MB) are candidates for the world container; log once/fh.
       std::lock_guard lk(g_fiosMx);
       if (g_zeroSizeFh.insert(a0 ^ 0x5A5A5A5Aull).second)
-        std::fprintf(stderr, "[fios] FHGetSize BIG fh=%#llx -> size=%lld path='%s'\n",
-                     (unsigned long long)a0, (long long)ret, pathForFh(a0).c_str()),
-        std::fflush(stderr);
+        BASE_LOGI("fios", "FHGetSize BIG fh={:#x} -> size={} path='{}'",
+                  (unsigned long long)a0, (long long)ret,
+                  pathForFh(a0).c_str());
     }
     break;
   }
@@ -769,11 +769,11 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
   case 4: { // FHRead / FHPread ; log zero-length reads (the container's read)
     if (a3 == 0) {
       std::lock_guard lk(g_fiosMx);
-      std::fprintf(stderr,
-        "[fios] *** %s ZERO-LEN fh=%#llx buf=%#llx len=0 op=%#llx path='%s'\n",
-        hookId == 3 ? "FHRead" : "FHPread", (unsigned long long)a1,
-        (unsigned long long)a2, (unsigned long long)ret, pathForFh(a1).c_str());
-      std::fflush(stderr);
+      BASE_LOGI("fios",
+                "*** {} ZERO-LEN fh={:#x} buf={:#x} len=0 op={:#x} path='{}'",
+                hookId == 3 ? "FHRead" : "FHPread", (unsigned long long)a1,
+                (unsigned long long)a2, (unsigned long long)ret,
+                pathForFh(a1).c_str());
     }
     break;
   }
@@ -781,14 +781,11 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     if ((int64_t)ret <= 0) {
       std::lock_guard lk(g_fiosMx);
       if (g_zeroActOp.insert(a0).second) {
-        std::fprintf(stderr,
-          "[fios] *** OpGetActualCount ZERO op=%#llx -> count=%lld\n",
-          (unsigned long long)a0, (long long)ret);
-        std::fflush(stderr);
+        BASE_LOGI("fios", "*** OpGetActualCount ZERO op={:#x} -> count={}",
+                  (unsigned long long)a0, (long long)ret);
       } else if ((++g_zeroActChurn % 500000) == 0) {
-        std::fprintf(stderr, "[fios] (OpGetActualCount-zero churn count=%llu)\n",
-                     (unsigned long long)g_zeroActChurn.load());
-        std::fflush(stderr);
+        BASE_LOGI("fios", "(OpGetActualCount-zero churn count={})",
+                  (unsigned long long)g_zeroActChurn.load());
       }
     }
     break;
@@ -849,13 +846,11 @@ static void probeFiosPaths() {
                                               : comma - start);
     if (!path.empty()) {
       utl::File f = vfs::openRead(path.c_str());
-      if (f.Exists())
-        std::fprintf(stderr, "[fiosprobe] '%s' EXISTS size=%llu\n", path.c_str(),
-                     (unsigned long long)f.GetSize());
-      else
-        std::fprintf(stderr, "[fiosprobe] '%s' MISSING (openRead empty)\n",
-                     path.c_str());
-      std::fflush(stderr);
+       if (f.Exists())
+         BASE_LOGI("fiosprobe", "'{}' EXISTS size={}", path.c_str(),
+                   (unsigned long long)f.GetSize());
+       else
+         BASE_LOGI("fiosprobe", "'{}' MISSING (openRead empty)", path.c_str());
     }
     if (comma == std::string::npos)
       break;
@@ -897,13 +892,13 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
       uint64_t v = tcb ? *reinterpret_cast<uint64_t *>(tcb - 0x10) : 0;
       int64_t ord = (v & 0x8000) ? (int64_t)(v & ~0x8000ULL) : -1;
       static std::mutex m; std::lock_guard lk(m);
-      std::fprintf(stderr,
-        "[jobclaim] worker fsbase=%#llx tcb=%#llx [tcb-0x10]=%#llx -> ordinal=%lld "
-        "(1<<ord=%#x) firstClaim->%#llx\n",
-        (unsigned long long)fsb, (unsigned long long)tcb, (unsigned long long)v,
-        (long long)ord, (ord >= 0 && ord < 32) ? (1u << (unsigned)ord) : 0u,
-        (unsigned long long)ret);
-      std::fflush(stderr);
+      BASE_LOGI("jobclaim",
+                "worker fsbase={:#x} tcb={:#x} [tcb-0x10]={:#x} -> ordinal={} "
+                "(1<<ord={:#x}) firstClaim->{:#x}",
+                (unsigned long long)fsb, (unsigned long long)tcb,
+                (unsigned long long)v, (long long)ord,
+                (ord >= 0 && ord < 32) ? (1u << (unsigned)ord) : 0u,
+                (unsigned long long)ret);
     }
     ++g_jobClaims;
     if (ret == 0) ++g_jobFails;
@@ -927,15 +922,13 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     std::lock_guard lk(m);
     calls++;
     if (seen.insert(a3).second && seen.size() <= 256)
-      std::fprintf(stderr,
-                   "[mattrace] block=%#llx elems=%llu (distinct=%zu of %llu "
-                   "updates)\n",
-                   (unsigned long long)a3, (unsigned long long)a2, seen.size(),
-                   (unsigned long long)calls);
+      BASE_LOGI("mattrace",
+                "block={:#x} elems={} (distinct={} of {} updates)",
+                (unsigned long long)a3, (unsigned long long)a2, seen.size(),
+                (unsigned long long)calls);
     else if ((calls % 2000) == 0)
-      std::fprintf(stderr, "[mattrace] %llu updates over %zu distinct blocks\n",
-                   (unsigned long long)calls, seen.size());
-    std::fflush(stderr);
+      BASE_LOGI("mattrace", "{} updates over {} distinct blocks",
+                (unsigned long long)calls, seen.size());
     break;
   }
   case 14: { // the DISPATCH_DIRECT emitter (0x883870).
@@ -955,12 +948,11 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     std::lock_guard lk(m);
     n++;
     if (seen.insert(wp >> 20).second && seen.size() <= 64)
-      std::fprintf(stderr,
-                   "[matcb] fill dispatch -> cmdbuf write=%#llx end=%#llx "
-                   "(obj=%#llx, %zu regions of %llu fills)\n",
-                   (unsigned long long)wp, (unsigned long long)end,
-                   (unsigned long long)a0, seen.size(), (unsigned long long)n);
-    std::fflush(stderr);
+      BASE_LOGI("matcb",
+                "fill dispatch -> cmdbuf write={:#x} end={:#x} "
+                "(obj={:#x}, {} regions of {} fills)",
+                (unsigned long long)wp, (unsigned long long)end,
+                (unsigned long long)a0, seen.size(), (unsigned long long)n);
     break;
   }
   case 11: { // CTOR 0x36210 -> a0 = rdi = the JobSystem object being built.
@@ -977,9 +969,8 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     // loop. Entry detours are only safe on functions whose arguments never
     // come off the caller's stack.
     if (a0 > 0x10000) {
-      std::fprintf(stderr, "[jobctor] JobSystem ctor this=%#llx\n",
-                   (unsigned long long)a0);
-      std::fflush(stderr);
+      BASE_LOGI("jobctor", "JobSystem ctor this={:#x}",
+                (unsigned long long)a0);
       spawnJobWatcher(a0);
     }
     break;
@@ -1009,14 +1000,15 @@ void spawnJobWatcher(uint64_t base) {
           uint64_t slot[8];
           for (int i = 0; i < 8; i++)
             slot[i] = *reinterpret_cast<volatile uint64_t *>(base + (uint64_t)i * 0x120 + 0xeb0);
-          std::fprintf(stderr,
-                       "[jobwatch] claims=%llu fails=%llu directAssign[0..7]= "
-                       "0:%#llx 1:%#llx 2:%#llx 3:%#llx 4:%#llx 5:%#llx 6:%#llx 7:%#llx\n",
-                       (unsigned long long)g_jobClaims.load(), (unsigned long long)g_jobFails.load(),
-                       (unsigned long long)slot[0], (unsigned long long)slot[1],
-                       (unsigned long long)slot[2], (unsigned long long)slot[3],
-                       (unsigned long long)slot[4], (unsigned long long)slot[5],
-                       (unsigned long long)slot[6], (unsigned long long)slot[7]);
+          BASE_LOGI("jobwatch",
+                    "claims={} fails={} directAssign[0..7]= "
+                    "0:{:#x} 1:{:#x} 2:{:#x} 3:{:#x} 4:{:#x} 5:{:#x} 6:{:#x} 7:{:#x}",
+                    (unsigned long long)g_jobClaims.load(),
+                    (unsigned long long)g_jobFails.load(),
+                    (unsigned long long)slot[0], (unsigned long long)slot[1],
+                    (unsigned long long)slot[2], (unsigned long long)slot[3],
+                    (unsigned long long)slot[4], (unsigned long long)slot[5],
+                    (unsigned long long)slot[6], (unsigned long long)slot[7]);
           // Context dump of any occupied block: the direct-assign descriptor
           // is the 0x40 bytes at block+0xea8 (claim copies +0xea8/+0xeb8 ymm
           // pair; +0xeb0 is the occupancy discriminator).
@@ -1024,12 +1016,13 @@ void spawnJobWatcher(uint64_t base) {
             if (!slot[i])
               continue;
             const uint64_t *q = reinterpret_cast<const uint64_t *>(base + (uint64_t)i * 0x120 + 0xea8);
-            std::fprintf(stderr,
-                         "[jobwatch]   block%d desc@+0xea8: %#llx %#llx %#llx %#llx %#llx %#llx %#llx %#llx\n",
-                         i, (unsigned long long)q[0], (unsigned long long)q[1],
-                         (unsigned long long)q[2], (unsigned long long)q[3],
-                         (unsigned long long)q[4], (unsigned long long)q[5],
-                         (unsigned long long)q[6], (unsigned long long)q[7]);
+            BASE_LOGI("jobwatch",
+                      "  block{} desc@+0xea8: {:#x} {:#x} {:#x} {:#x} "
+                      "{:#x} {:#x} {:#x} {:#x}",
+                      i, (unsigned long long)q[0], (unsigned long long)q[1],
+                      (unsigned long long)q[2], (unsigned long long)q[3],
+                      (unsigned long long)q[4], (unsigned long long)q[5],
+                      (unsigned long long)q[6], (unsigned long long)q[7]);
           }
           // The decisive post-drain read: live entries in the 1024-slot job
           // table ([jobsys+0xb60], stride 0x9b8, alloc bitmap at +0xac0).
@@ -1073,9 +1066,9 @@ void spawnJobWatcher(uint64_t base) {
                     *reinterpret_cast<volatile uint64_t *>(bucket);
                 if (!acount && !nodes)
                   continue;
-                std::fprintf(
-                    stderr,
-                    "[jobwatch] bucket L%d scanA-slots=%llu scanB-nodes=%llu\n",
+                BASE_LOGI(
+                    "jobwatch",
+                    "bucket L{} scanA-slots={} scanB-nodes={}",
                     lvl, (unsigned long long)acount, (unsigned long long)nodes);
                 const uint64_t slots =
                     *reinterpret_cast<volatile uint64_t *>(bucket + 0x2070);
@@ -1083,12 +1076,12 @@ void spawnJobWatcher(uint64_t base) {
                   for (uint64_t i = 0; i < acount && i < 16; i++) {
                     const uint32_t mask = *reinterpret_cast<volatile uint32_t *>(
                         slots + i * 0x120 + 0xf0);
-                    std::fprintf(stderr,
-                                 "[jobwatch]   L%d slot%llu mask=%#x -> %s\n",
-                                 lvl, (unsigned long long)i, mask,
-                                 (mask & 0xf)
-                                     ? "claimable"
-                                     : "*** MASK EXCLUDES EVERY WORKER ***");
+                    BASE_LOGI("jobwatch",
+                              "  L{} slot{} mask={:#x} -> {}",
+                              lvl, (unsigned long long)i, mask,
+                              (mask & 0xf)
+                                  ? "claimable"
+                                  : "*** MASK EXCLUDES EVERY WORKER ***");
                   }
                 }
                 for (uint64_t i = 0; i < nodes && i < 32; i++) {
@@ -1122,11 +1115,11 @@ void spawnJobWatcher(uint64_t base) {
                       !dep || (depread && (mode == 0
                                                ? (uint64_t)depval == thresh
                                                : depval > (long long)thresh));
-                  std::fprintf(
-                      stderr,
-                      "[jobwatch]   L%d node%llu @%#llx head=%#llx tail=%#llx "
-                      "dep=%#llx *dep=%lld thresh=%lld mode=%u aff=%#x prio=%d "
-                      "-> %s%s\n",
+                  BASE_LOGI(
+                      "jobwatch",
+                      "  L{} node{} @{:#x} head={:#x} tail={:#x} "
+                      "dep={:#x} *dep={} thresh={} mode={} aff={:#x} prio={} "
+                      "-> {}{}",
                       lvl, (unsigned long long)i, (unsigned long long)n,
                       (unsigned long long)head, (unsigned long long)tail,
                       (unsigned long long)dep, depval, (long long)thresh, mode,
@@ -1166,9 +1159,9 @@ void spawnJobWatcher(uint64_t base) {
                 list += b;
               }
             }
-            std::fprintf(stderr,
-                         "[jobwatch] threads=%zu withOrdinal=%d ordinals={ %s} claimable-mask=%#x\n",
-                         fsb.size(), valid, list.c_str(), present);
+            BASE_LOGI("jobwatch",
+                      "threads={} withOrdinal={} ordinals={ {} } claimable-mask={:#x}",
+                      fsb.size(), valid, list.c_str(), present);
           }
           // The real claim gate is a DEPENDENCY, not affinity. Claim
           // (0x39130..) walks a queue node, and after finding head != tail it
@@ -1215,20 +1208,21 @@ void spawnJobWatcher(uint64_t base) {
                 const uint64_t obj = 0;
                 uint32_t mask = 0;
                 bool mask_read = false;
-                std::fprintf(stderr,
-                             "[jobwatch] node[%d] head=%#llx tail=%#llx dep=%#llx *dep=%lld "
-                             "thresh=%lld mode=%u aff=%#x obj=%#llx mask=%s%#x -> %s%s\n",
-                             j, (unsigned long long)head, (unsigned long long)tail,
-                             (unsigned long long)dep, depval, (long long)thresh, mode, aff,
-                             (unsigned long long)obj, mask_read ? "" : "?", mask,
-                             satisfied ? "dep-ok" : "*** BLOCKED ON DEPENDENCY ***",
-                             (mask_read && !(mask & 0xf))
-                                 ? " *** MASK EXCLUDES EVERY WORKER ***"
-                                 : "");
+                BASE_LOGI("jobwatch",
+                          "node[{}] head={:#x} tail={:#x} dep={:#x} *dep={} "
+                          "thresh={} mode={} aff={:#x} obj={:#x} mask={}{:#x} -> "
+                          "{}{}",
+                          j, (unsigned long long)head, (unsigned long long)tail,
+                          (unsigned long long)dep, depval, (long long)thresh, mode,
+                          aff, (unsigned long long)obj, mask_read ? "" : "?", mask,
+                          satisfied ? "dep-ok" : "*** BLOCKED ON DEPENDENCY ***",
+                          (mask_read && !(mask & 0xf))
+                              ? " *** MASK EXCLUDES EVERY WORKER ***"
+                              : "");
                 shown++;
               }
               if (!shown)
-                std::fprintf(stderr, "[jobwatch] no queue node has pending work\n");
+                BASE_LOGI("jobwatch", "no queue node has pending work");
             }
           }
           static int tableDumps = 0;
@@ -1238,10 +1232,12 @@ void spawnJobWatcher(uint64_t base) {
           uint64_t used = 0;
           for (int w = 0; w < 16; w++) used += __builtin_popcountll(~bm[w]);
           if (tableDumps < 200) {
-            std::fprintf(stderr, "[jobwatch] jobsys=%#llx defaultAffinity[+0x3c]=%#llx table=%#llx bitmapFreeInv=%llu bm0=%#llx\n",
-                         (unsigned long long)base, (unsigned long long)defAff,
-                         (unsigned long long)tab, (unsigned long long)used,
-                         (unsigned long long)bm[0]);
+            BASE_LOGI("jobwatch",
+                      "jobsys={:#x} defaultAffinity[+0x3c]={:#x} table={:#x} "
+                      "bitmapFreeInv={} bm0={:#x}",
+                      (unsigned long long)base, (unsigned long long)defAff,
+                      (unsigned long long)tab, (unsigned long long)used,
+                      (unsigned long long)bm[0]);
             if (tab > 0x10000) {
               int shown = 0;
               for (int j = 0; j < 1024 && shown < 12; j++) {
@@ -1257,10 +1253,11 @@ void spawnJobWatcher(uint64_t base) {
                 uint64_t q0 = *reinterpret_cast<const uint64_t *>(job);
                 if (!aff && !q0)
                   continue;
-                std::fprintf(stderr,
-                             "[jobwatch]   job[%d] q0=%#llx claimMask[+0xf0]=%#x aff[+0x998]=%#x prio=%#x q+0x9a8=%#llx\n",
-                             j, (unsigned long long)q0, mask, aff, prio,
-                             (unsigned long long)*reinterpret_cast<const uint64_t *>(job + 0x9a8));
+                BASE_LOGI("jobwatch",
+                          "  job[{}] q0={:#x} claimMask[+0xf0]={:#x} "
+                          "aff[+0x998]={:#x} prio={:#x} q+0x9a8={:#x}",
+                          j, (unsigned long long)q0, mask, aff, prio,
+                          (unsigned long long)*reinterpret_cast<const uint64_t *>(job + 0x9a8));
                 shown++;
               }
               tableDumps++;
@@ -1282,13 +1279,12 @@ void spawnJobWatcher(uint64_t base) {
               uint64_t v = *src;
               *dst = v;
               *src = 0;
-              std::fprintf(stderr,
-                           "[jobwatch] JOBMOVE: moved direct-assign marker %#llx block%d -> block2\n",
-                           (unsigned long long)v, i);
+              BASE_LOGI("jobwatch",
+                        "JOBMOVE: moved direct-assign marker {:#x} block{} -> block2",
+                        (unsigned long long)v, i);
             }
             persist = 0;
           }
-          std::fflush(stderr);
         }
   }).detach();
 }
@@ -1437,16 +1433,16 @@ static void heapRouteReport() {
   for (auto &t : g_routeTabs) {
     const uint64_t st = t.state.load(std::memory_order_relaxed);
     if (!st) continue;
-    std::fprintf(stderr, "[heaproute] state %#llx: %llu inserts, chunks %#llx..%#llx, 256MB buckets:",
-                 (unsigned long long)st, (unsigned long long)t.inserts,
-                 (unsigned long long)t.lo, (unsigned long long)t.hi);
+    base::String bytes;
+    base::FormatTo(bytes, "state {:#x}: {} inserts, chunks {:#x}..{:#x}, 256MB buckets:",
+                  (unsigned long long)st, (unsigned long long)t.inserts,
+                  (unsigned long long)t.lo, (unsigned long long)t.hi);
     for (auto &e : t.b)
       if (e.count)
-        std::fprintf(stderr, " %#llx0000000(x%llu)",
-                     (unsigned long long)e.prefix, (unsigned long long)e.count);
-    std::fprintf(stderr, "\n");
+        base::FormatTo(bytes, " {:#x}0000000(x{})",
+                       (unsigned long long)e.prefix, (unsigned long long)e.count);
+    BASE_LOGI("heaproute", "{}", bytes.c_str());
   }
-  std::fflush(stderr);
 }
 
 struct LockHolder {
@@ -1491,14 +1487,13 @@ static void reportContention(int site, uint64_t a0) {
                 : (owner == 0)
                       ? "SAME state, guest mutex UNOWNED -- neither holds it"
                       : "SAME state, guest mutex owned by a THIRD thread";
-  std::fprintf(stderr,
-               "[contend] me: gtid=%u site=%s a0=%#llx | holder: gtid=%u site=%s "
-               "a0=%#llx | umtx@%#llx word=%#x owner=%u contested=%d -> %s\n",
-               myGtid, g_allocSites[site].name, (unsigned long long)a0, hg,
-               hs < kAllocLockSites ? g_allocSites[hs].name : "?",
-               (unsigned long long)ha, (unsigned long long)kSotcUmtxAddr, ow, owner,
-               (ow & 0x80000000u) ? 1 : 0, verdict);
-  std::fflush(stderr);
+  BASE_LOGI("contend",
+            "me: gtid={} site={} a0={:#x} | holder: gtid={} site={} "
+            "a0={:#x} | umtx@{:#x} word={:#x} owner={} contested={} -> {}",
+            myGtid, g_allocSites[site].name, (unsigned long long)a0, hg,
+            hs < kAllocLockSites ? g_allocSites[hs].name : "?",
+            (unsigned long long)ha, (unsigned long long)kSotcUmtxAddr, ow, owner,
+            (ow & 0x80000000u) ? 1 : 0, verdict);
 }
 
 struct AllocEvt { uint32_t site; uint32_t tid; uint64_t a0, a1; };
@@ -1605,13 +1600,12 @@ static void treeWatchArm() {
       if (mincore(page, 1, &vec) != 0 || mincore(spage, 1, &vec) != 0)
         continue;
       const uint64_t own = *reinterpret_cast<const uint64_t *>(kSotcTreeNode - 8) & ~7ull;
-      std::fprintf(stderr,
-                   "[treewatch] armed on node %#llx (its own size word reads "
-                   "%#llx) state %#llx sentinel %#llx\n",
-                   (unsigned long long)kSotcTreeNode, (unsigned long long)own,
-                   (unsigned long long)kSotcTreeState,
-                   (unsigned long long)(kSotcTreeState + 0x80));
-      std::fflush(stderr);
+      BASE_LOGI("treewatch",
+                "armed on node {:#x} (its own size word reads "
+                "{:#x}) state {:#x} sentinel {:#x}",
+                (unsigned long long)kSotcTreeNode, (unsigned long long)own,
+                (unsigned long long)kSotcTreeState,
+                (unsigned long long)(kSotcTreeState + 0x80));
       g_treeArmed.store(true, std::memory_order_release);
       return;
     }
@@ -1659,14 +1653,13 @@ static void treeWatchAt(int site, bool onExit) {
     return;  // already bad on the way in: some earlier call did it
   g_treeWentBad.fetch_add(1, std::memory_order_relaxed);
   if (g_treeReported.fetch_add(1) < 8) {
-    std::fprintf(stderr,
-                 "[treewatch] node %#llx child[0] WENT BAD inside %s (tid %ld): "
-                 "now %#llx, its size word reads %#llx -- this call contained the "
-                 "corrupting store\n",
-                 (unsigned long long)kSotcTreeNode, g_allocSites[site].name,
-                 (long)syscall(SYS_gettid), (unsigned long long)val,
-                 (unsigned long long)sz);
-    std::fflush(stderr);
+    BASE_LOGI("treewatch",
+              "node {:#x} child[0] WENT BAD inside {} (tid {}): "
+              "now {:#x}, its size word reads {:#x} -- this call contained the "
+              "corrupting store",
+              (unsigned long long)kSotcTreeNode, g_allocSites[site].name,
+              (long)syscall(SYS_gettid), (unsigned long long)val,
+              (unsigned long long)sz);
   }
 }
 
@@ -1720,25 +1713,24 @@ static void treeWalkPeriodic() {
     if (bad) {
       if (g_treeWalkTripped.exchange(true))
         return;
-      std::fprintf(stderr,
-                   "\n[treewalk] TRIPPED after %llu allocator calls, %d nodes "
-                   "visited: the link at %#llx points at %#llx, whose size word "
-                   "reads %#llx -- no longer a free chunk\n",
-                   (unsigned long long)g_allocCallSeq.load(), visited,
-                   (unsigned long long)field, (unsigned long long)cur,
-                   (unsigned long long)sz);
+      BASE_LOGI("treewalk",
+                "\nTRIPPED after {} allocator calls, {} nodes "
+                "visited: the link at {:#x} points at {:#x}, whose size word "
+                "reads {:#x} -- no longer a free chunk",
+                (unsigned long long)g_allocCallSeq.load(), visited,
+                (unsigned long long)field, (unsigned long long)cur,
+                (unsigned long long)sz);
       const uint64_t pos = g_allocRingPos.load(std::memory_order_relaxed);
       const int have = (int)(pos < kAllocRing ? pos : kAllocRing);
-      std::fprintf(stderr,
-                   "[treewalk] the last %d allocator calls, oldest first (the "
-                   "corruption happened inside this window):\n", have);
+      BASE_LOGI("treewalk",
+                "the last {} allocator calls, oldest first (the "
+                "corruption happened inside this window):", have);
       for (int k = have; k > 0; k--) {
         const AllocEvt &e = g_allocRing[(pos - k) % kAllocRing];
-        std::fprintf(stderr, "[treewalk]   %-24s tid=%u a0=%#llx a1=%#llx\n",
-                     e.site < kAllocLockSites ? g_allocSites[e.site].name : "?",
-                     e.tid, (unsigned long long)e.a0, (unsigned long long)e.a1);
+        BASE_LOGI("treewalk", "  {:<24} tid={} a0={:#x} a1={:#x}",
+                  e.site < kAllocLockSites ? g_allocSites[e.site].name : "?",
+                  e.tid, (unsigned long long)e.a0, (unsigned long long)e.a1);
       }
-      std::fflush(stderr);
       return;
     }
     for (int c = 0; c < 2 && sp < 254; c++) {
@@ -1886,21 +1878,20 @@ static void installAllocLock(smodule &m) {
       if (kSotcHeapRoute)
         heapRouteReport();
       if (kSotcTreeWatch)
-        std::fprintf(stderr,
-                     "[treewatch] %llu checks, %llu found it already bad on "
-                     "entry, %llu caught it GOING bad\n",
-                     (unsigned long long)g_treeChecks.load(),
-                     (unsigned long long)g_treeBadAtEntry.load(),
-                     (unsigned long long)g_treeWentBad.load());
+        BASE_LOGI("treewatch",
+                  "{} checks, {} found it already bad on "
+                  "entry, {} caught it GOING bad",
+                  (unsigned long long)g_treeChecks.load(),
+                  (unsigned long long)g_treeBadAtEntry.load(),
+                  (unsigned long long)g_treeWentBad.load());
       for (int i = 0; i < kAllocLockSites; i++)
-        std::fprintf(stderr,
-                     "[alloclock] %-24s %llu calls, %llu CONTENDED (another "
-                     "thread was inside), max wait %llu ns\n",
-                     g_allocSites[i].name,
-                     (unsigned long long)g_allocSites[i].calls.load(),
-                     (unsigned long long)g_allocSites[i].contended.load(),
-                     (unsigned long long)g_allocSites[i].maxWaitNs.load());
-      std::fflush(stderr);
+        BASE_LOGI("alloclock",
+                  "{:<24} {} calls, {} CONTENDED (another "
+                  "thread was inside), max wait {} ns",
+                  g_allocSites[i].name,
+                  (unsigned long long)g_allocSites[i].calls.load(),
+                  (unsigned long long)g_allocSites[i].contended.load(),
+                  (unsigned long long)g_allocSites[i].maxWaitNs.load());
     }
   }).detach();
 }
@@ -2014,8 +2005,8 @@ static void investigateDcbGate(smodule &m) {
           expAddr = a;
           break;
         }
-    std::printf("[dcbimp] %s got=%s+%#llx exportedBy=%s(%#llx)\n", g.nid, mod,
-                (unsigned long long)off, expMod, (unsigned long long)expAddr);
+    BASE_LOGI("dcbimp", "{} got={}+{:#x} exportedBy={}({:#x})", g.nid, mod,
+              (unsigned long long)off, expMod, (unsigned long long)expAddr);
   }
   auto *slot = reinterpret_cast<volatile uint64_t *>(base + 0x985a00);
   std::thread([slot] {
@@ -2023,8 +2014,8 @@ static void investigateDcbGate(smodule &m) {
     for (int i = 0; i < 400000; i++) {
       uint64_t v = *slot;
       if (v != last) {
-        std::printf("[dcbwatch t=%dms] manager[0] (eboot+0x985a00) = %#llx\n",
-                    i / 2, (unsigned long long)v);
+        BASE_LOGI("dcbwatch", "t={}ms manager[0] (eboot+0x985a00) = {:#x}",
+                  i / 2, (unsigned long long)v);
         last = v;
       }
       std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -2097,8 +2088,8 @@ static void bringUpRebirthSurfaceRegistry(smodule &m) {
       for (int i = 0; i < 200000; i++) {
         uint64_t v = *slot;
         if (v != last) {
-          std::printf("[gfxctx] +0x38 = %#llx  (t=%dms)\n",
-                      (unsigned long long)v, i / 2);
+          BASE_LOGI("gfxctx", "+0x38 = {:#x}  (t={}ms)",
+                    (unsigned long long)v, i / 2);
           last = v;
         }
         std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -2176,9 +2167,10 @@ static void watchVideoOutState(smodule &m) {
       static uint32_t lpo = 0xdead, lp48 = 0xdead;
       if (c != lc || idx != li || f[0] != lf[0] || f[1] != lf[1] || f[2] != lf[2] ||
           portOpen != lpo || port48 != lp48) {
-        std::printf("[vowatch t=%dms] count=%d idx=%d cfg.f0=[%#x %#x %#x] "
-                    "port0.open=%u port0.f48=%#x\n",
-                    i / 2, c, idx, f[0], f[1], f[2], portOpen, port48);
+        BASE_LOGI("vowatch",
+                  "t={}ms count={} idx={} cfg.f0=[{:#x} {:#x} {:#x}] "
+                  "port0.open={} port0.f48={:#x}",
+                  i / 2, c, idx, f[0], f[1], f[2], portOpen, port48);
         lc = c; li = idx; lf[0] = f[0]; lf[1] = f[1]; lf[2] = f[2]; lpo = portOpen;
         lp48 = port48;
       }
@@ -2194,7 +2186,7 @@ static void watchVideoOutState(smodule &m) {
         std::memcpy(cfgi, cfg0, 0x140);                 // copy ops/vtable
         *reinterpret_cast<uint32_t *>(cfgi) = 4;        // f0 = connected
         patched = true;
-        std::printf("[vowatch] FORCE_CONNECT: cfg[%d] <- cfg[0], f0=4\n", idx);
+        BASE_LOGI("vowatch", "FORCE_CONNECT: cfg[{}] <- cfg[0], f0=4", idx);
       }
       std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
@@ -2211,10 +2203,11 @@ static uint64_t PS4ABI voOpMapLog(uint64_t a1, uint64_t userId, uint64_t busType
   uint32_t pv = 0;
   if (param > 0x10000 && param < 0x800000000000ull)
     pv = *reinterpret_cast<uint32_t *>(param);
-  std::printf("[voop] sceVideoOutOpen(userId=%#lx busType=%ld index=%ld param=%#lx "
-              "[param]=%#x [param]&0xf=%#x) -> map-op returns 0\n",
-              (unsigned long)userId, (long)busType, (long)index,
-              (unsigned long)param, pv, pv & 0xf);
+  BASE_LOGI("voop",
+            "sceVideoOutOpen(userId={:#x} busType={} index={} param={:#x} "
+            "[param]={:#x} [param]&0xf={:#x}) -> map-op returns 0",
+            (unsigned long)userId, (long)busType, (long)index,
+            (unsigned long)param, pv, pv & 0xf);
   return 0;
 }
 
@@ -2228,8 +2221,8 @@ static void patchVideoOutDiag(smodule &m) {
     o[0] = 0x48; o[1] = 0xb8;                       // mov rax, imm64
     *reinterpret_cast<uint64_t *>(o + 2) = thunk;
     o[10] = 0xff; o[11] = 0xe0;                     // jmp rax
-    std::printf("[voop] hooked map-op @ +0x1020 -> thunk %#lx\n",
-                (unsigned long)thunk);
+    BASE_LOGI("voop", "hooked map-op @ +0x1020 -> thunk {:#x}",
+              (unsigned long)thunk);
   }
   // TEST (DELTA_VO_SKIP_580): nop the `js error` after Open's `call op@0x580`
   // (config-validate op). If Open then progresses, op@0x580's return was a gate.
@@ -2239,9 +2232,9 @@ static void patchVideoOutDiag(smodule &m) {
                     0x2000, utl::pageProtection::rwx);
     if (c[0] == 0x78) {  // js rel8
       c[0] = 0x90; c[1] = 0x90;
-      std::printf("[votest] nop'd op@0x580 error-js @ +0xaeb8\n");
+      BASE_LOGI("votest", "nop'd op@0x580 error-js @ +0xaeb8");
     } else {
-      std::printf("[votest] op@0x580 js bytes mismatch: %#x %#x\n", c[0], c[1]);
+      BASE_LOGI("votest", "op@0x580 js bytes mismatch: {:#x} {:#x}", c[0], c[1]);
     }
   }
   const char *list = kVoPatch;
@@ -2259,7 +2252,7 @@ static void patchVideoOutDiag(smodule &m) {
                     0x2000, utl::pageProtection::rwx);
     c[0] = 0xb8; c[1] = fn.ret; c[2] = 0; c[3] = 0; c[4] = 0;  // mov eax, imm32
     c[5] = 0xc3;                                               // ret
-    std::printf("[vopatch] libSceVideoOut!%s -> return %d\n", fn.name, fn.ret);
+    BASE_LOGI("vopatch", "libSceVideoOut!{} -> return {}", fn.name, fn.ret);
   }
 }
 

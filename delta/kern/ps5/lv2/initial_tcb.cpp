@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <base/logging.h>
+
 #include "kern/proc.h"
 #include "kern/ps4/lv2/sys_mem.h"
 #include <utl/options.h>
@@ -72,9 +74,8 @@ uint64_t makeInitialTcb() {
   }
 
   if (kProcparamTrace)
-    std::fprintf(stderr,
-                 "[tcb] initial thread: tcb=%p thread=%p static-tls=%#zx\n",
-                 static_cast<void *>(tcb), static_cast<void *>(thread), tls);
+    BASE_LOGI("tcb", "initial thread: tcb={:p} thread={:p} static-tls={:#x}",
+              static_cast<void *>(tcb), static_cast<void *>(thread), tls);
   return reinterpret_cast<uint64_t>(tcb);
 }
 

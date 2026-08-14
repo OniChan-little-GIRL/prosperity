@@ -3,6 +3,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstring>
 #include <cstdlib>
 #include "sys_generic.h"
@@ -29,7 +30,7 @@ int PS4ABI sys_ioctl(uint32_t fd, uint32_t cmd, void *data) {
   // bundled FMOD aborts audio init on the EBADF). Zero the IOC_OUT payload so
   // the caller reads a benign result instead of stack garbage.
   if (kIoctlTrace)
-    std::printf("[ioctl] soft-ok: fd=%u cmd=%#x\n", fd, cmd);
+    BASE_LOGI("ioctl", "soft-ok: fd={} cmd={:#x}", fd, cmd);
   if (data) {
     uint32_t sz = (cmd >> 16) & 0x1fff;
     if (cmd & 0x40000000u) // IOC_OUT

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 
 /*
@@ -37,12 +38,12 @@ public:
   // Unknown map/ioctl on a device: soft-fail (and log) instead of trapping, so
   // the boot keeps advancing and we can see what the guest actually wanted.
   virtual uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) {
-    std::printf("[dev] UNHANDLED map on %s\n", name.c_str());
+    BASE_LOGI("dev", "UNHANDLED map on {}", name.c_str());
     return reinterpret_cast<uint8_t *>(-1);
   }
   virtual int32_t ioctl(uint32_t command, void *args) {
-    std::printf("[dev] UNHANDLED ioctl(%#x) on %s -> 0\n", command,
-                name.c_str());
+    BASE_LOGI("dev", "UNHANDLED ioctl({:#x}) on {} -> 0", command,
+              name.c_str());
     return 0;
   }
 

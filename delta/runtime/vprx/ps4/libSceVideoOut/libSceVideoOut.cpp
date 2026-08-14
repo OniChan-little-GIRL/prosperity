@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 
+#include <base/logging.h>
+
 #include "gfx/gfx.h"
 #include "gpu/ps4/cmd_processor.h"
 #include "kern/proc.h"
@@ -178,13 +180,13 @@ bool ensureGfx(uint32_t w, uint32_t h) {
   if (st != 0)
     return st == 1;
   if (!gfx::init("prosperity", w, h)) {
-    std::printf("[videoout] gfx::init FAILED (no window this run)\n");
+    BASE_LOGI("videoout", "gfx::init FAILED (no window this run)");
     g_gfxState.store(2);
     return false;
   }
   g_gfxState.store(1);
   g_gfxUp.store(true);
-  std::printf("[videoout] gfx window up (%ux%u)\n", w, h);
+  BASE_LOGI("videoout", "gfx window up ({}x{})", w, h);
   return true;
 }
 
@@ -229,7 +231,7 @@ void startFlipPump() {
   bool expected = false;
   if (!g_flipPumpStarted.compare_exchange_strong(expected, true))
     return;
-  std::printf("[videoout] flip pump started (60 Hz)\n");
+  BASE_LOGI("videoout", "flip pump started (60 Hz)");
   std::thread([] {
     for (;;) {
       std::this_thread::sleep_for(std::chrono::microseconds(16667));
@@ -279,8 +281,8 @@ static int failInject(const char *name) {
 extern "C" {
 
 int PS4ABI sceVideoOutOpen(int userId, int busType, int index, const void *param) {
-  std::printf("[videoout] open user=%d bus=%d idx=%d\n", userId, busType, index);
-  if (int r = failInject("open")) { std::printf("[vofail] open -> %d\n", r); return r; }
+  BASE_LOGI("videoout", "open user={} bus={} idx={}", userId, busType, index);
+  if (int r = failInject("open")) { BASE_LOGI("vofail", "open -> {}", r); return r; }
   std::lock_guard<std::mutex> lk(g_mtx);
   g_port.open = true;
   // bring the window up early so the user sees something while the game inits.
@@ -289,7 +291,7 @@ int PS4ABI sceVideoOutOpen(int userId, int busType, int index, const void *param
 }
 
 int PS4ABI sceVideoOutClose(int handle) {
-  std::printf("[videoout] close h=%d\n", handle);
+  BASE_LOGI("videoout", "close h={}", handle);
   std::lock_guard<std::mutex> lk(g_mtx);
   g_port.open = false;
   return 0;
@@ -324,15 +326,15 @@ int PS4ABI sceVideoOutSetBufferAttribute(void *attribute, uint32_t pixelFormat,
   a->width = width;
   a->height = height;
   a->pitchInPixel = pitchInPixel;
-  std::printf("[videoout] setBufferAttribute fmt=%#x tiling=%u %ux%u pitch=%u\n",
-              pixelFormat, tilingMode, width, height, pitchInPixel);
+  BASE_LOGI("videoout", "setBufferAttribute fmt={:#x} tiling={} {}x{} pitch={}",
+            pixelFormat, tilingMode, width, height, pitchInPixel);
   return 0;
 }
 
 int PS4ABI sceVideoOutRegisterBuffers(int handle, int startIndex,
                                      void *const *addresses, int bufferNum,
                                      const void *attribute) {
-  if (int r = failInject("regbuf")) { std::printf("[vofail] regbuf -> %d\n", r); return r; }
+  if (int r = failInject("regbuf")) { BASE_LOGI("vofail", "regbuf -> {}", r); return r; }
   std::lock_guard<std::mutex> lk(g_mtx);
   if (attribute) {
     auto *a = static_cast<const BufferAttribute *>(attribute);
@@ -347,29 +349,30 @@ int PS4ABI sceVideoOutRegisterBuffers(int handle, int startIndex,
     n++;
   }
   g_port.bufferCount = startIndex + n;
-  std::printf("[videoout] registerBuffers start=%d num=%d -> %ux%u pitch=%u "
-              "fmt=%#x (buf0=%p)\n",
-              startIndex, bufferNum, g_port.width, g_port.height, g_port.pitch,
-              g_port.pixelFormat, addresses ? addresses[0] : nullptr);
+  BASE_LOGI("videoout",
+            "registerBuffers start={} num={} -> {}x{} pitch={} fmt={:#x} "
+            "(buf0={:p})",
+            startIndex, bufferNum, g_port.width, g_port.height, g_port.pitch,
+            g_port.pixelFormat, addresses ? addresses[0] : nullptr);
   return 0;
 }
 
 int PS4ABI sceVideoOutUnregisterBuffers(int handle, int attributeIndex) {
-  std::printf("[videoout] unregisterBuffers idx=%d\n", attributeIndex);
+  BASE_LOGI("videoout", "unregisterBuffers idx={}", attributeIndex);
   return 0;
 }
 
 int PS4ABI sceVideoOutSetFlipRate(int handle, int rate) {
-  std::printf("[videoout] setFlipRate %d\n", rate);
-  if (int r = failInject("fliprate")) { std::printf("[vofail] fliprate -> %d\n", r); return r; }
+  BASE_LOGI("videoout", "setFlipRate {}", rate);
+  if (int r = failInject("fliprate")) { BASE_LOGI("vofail", "fliprate -> {}", r); return r; }
   g_port.flipRate = rate;
   return 0;
 }
 
 int PS4ABI sceVideoOutAddFlipEvent(int eqHandle, int handle, void *udata) {
-  std::printf("[videoout] addFlipEvent eq=%d h=%d udata=%p\n", eqHandle, handle,
-              udata);
-  if (int r = failInject("addflip")) { std::printf("[vofail] addflip -> %d\n", r); return r; }
+  BASE_LOGI("videoout", "addFlipEvent eq={} h={} udata={:p}", eqHandle, handle,
+            udata);
+  if (int r = failInject("addflip")) { BASE_LOGI("vofail", "addflip -> {}", r); return r; }
   auto *eq = findEqueue(eqHandle);
   if (!eq)
     return -1;
@@ -381,7 +384,7 @@ int PS4ABI sceVideoOutAddFlipEvent(int eqHandle, int handle, void *udata) {
 }
 
 int PS4ABI sceVideoOutDeleteFlipEvent(int eqHandle, int handle) {
-  std::printf("[videoout] deleteFlipEvent eq=%d h=%d\n", eqHandle, handle);
+  BASE_LOGI("videoout", "deleteFlipEvent eq={} h={}", eqHandle, handle);
   auto *eq = findEqueue(eqHandle);
   if (eq)
     eq->removeEvent(static_cast<uint64_t>(kEventFlip), kFilterFlip);
@@ -390,8 +393,8 @@ int PS4ABI sceVideoOutDeleteFlipEvent(int eqHandle, int handle) {
 }
 
 int PS4ABI sceVideoOutAddVblankEvent(int eqHandle, int handle, void *udata) {
-  std::printf("[videoout] addVblankEvent eq=%d h=%d udata=%p\n", eqHandle, handle,
-              udata);
+  BASE_LOGI("videoout", "addVblankEvent eq={} h={} udata={:p}", eqHandle,
+            handle, udata);
   auto *eq = findEqueue(eqHandle);
   if (!eq)
     return -1;

@@ -16,6 +16,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <base/logging.h>
 #include <utl/options.h>
 
 namespace {
@@ -43,7 +44,7 @@ extern "C" int prosperity_audio_open(uint32_t freq, uint32_t channels, int isFlo
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!g_init) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-      std::fprintf(stderr, "[audio] SDL_InitSubSystem(AUDIO) failed: %s\n", SDL_GetError());
+      BASE_LOGI("audio", "SDL_InitSubSystem(AUDIO) failed: {}", SDL_GetError());
       return -1;
     }
     g_init = true;
@@ -55,7 +56,7 @@ extern "C" int prosperity_audio_open(uint32_t freq, uint32_t channels, int isFlo
   SDL_AudioStream *s = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
                                                  &spec, nullptr, nullptr);
   if (!s) {
-    std::fprintf(stderr, "[audio] open stream failed: %s\n", SDL_GetError());
+    BASE_LOGI("audio", "open stream failed: {}", SDL_GetError());
     return -1;
   }
   SDL_ResumeAudioStreamDevice(s);
@@ -66,8 +67,8 @@ extern "C" int prosperity_audio_open(uint32_t freq, uint32_t channels, int isFlo
   int h = static_cast<int>(g_ports.size());
   g_ports.push_back(p);
   if (kAudioTrace)
-    std::fprintf(stderr, "[audio] open h=%d %uHz %uch %s\n", h, freq, channels,
-                 isFloat ? "f32" : "s16");
+    BASE_LOGI("audio", "open h={} {}Hz {}ch {}", h, freq, channels,
+              isFloat ? "f32" : "s16");
   return h;
 }
 
@@ -180,8 +181,8 @@ extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t
       const int16_t *s = static_cast<const int16_t *>(samples);
       for (uint32_t i = 0; i < n; i++) { float a = (s[i] < 0 ? -s[i] : s[i]) / 32768.f; if (a > peak) peak = a; }
     }
-    std::fprintf(stderr, "[audio] h=%d ~%lu frames out, queued=%d peak=%.3f\n", handle,
-                 (unsigned long)g_framesOut, queued, peak);
+    BASE_LOGI("audio", "h={} ~{} frames out, queued={} peak={:.3f}", handle,
+              (unsigned long)g_framesOut, queued, peak);
   }
   return static_cast<int>(frames);
 }

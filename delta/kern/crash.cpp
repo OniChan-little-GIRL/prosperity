@@ -27,6 +27,10 @@
 #include <string>
 #include <vector>
 
+#include <base/logging.h>
+#include <base/strings/format.h>
+#include <base/strings/xstring.h>
+
 #include "crash.h"
 
 #include <utl/mem.h>
@@ -85,7 +89,7 @@ void symbolize(uintptr_t addr, char *out, size_t n) {
 // Works for both backends: guest frames are x86-64 frames in identity-mapped
 // memory, so the walk is plain pointer reads on either host arch.
 static void backtrace(uintptr_t rbp) {
-  std::fprintf(stderr, "  --- backtrace ---\n");
+  BASE_LOGI("crashHandler", "  --- backtrace ---");
   for (int i = 0; i < 32; i++) {
     if (rbp < 0x10000 || (rbp & 7))
       break;
@@ -96,7 +100,7 @@ static void backtrace(uintptr_t rbp) {
       break;
     char sym[256];
     symbolize(ret, sym, sizeof(sym));
-    std::fprintf(stderr, "  #%-2d %016lx  %s\n", i, ret, sym);
+    BASE_LOGI("crashHandler", "  #{:<2} {:016x}  {}", i, ret, sym);
     if (next <= rbp)  // frames grow upward; stop if it doesn't
       break;
     rbp = next;
@@ -147,62 +151,62 @@ inline bool trkRd64(uint64_t va, uint64_t &out) {
 // is `newsz < cursz ? 0 : 1`, and an exact size match ends the walk.
 void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
   const uint64_t sentinel = state + 0x80;
-  std::fprintf(stderr,
-               "  [freetree] state=%#llx sentinel=%#llx newsz=%#llx\n",
-               (unsigned long long)state, (unsigned long long)sentinel,
-               (unsigned long long)newsz);
+  BASE_LOGI("freetree", "  state={:#x} sentinel={:#x} newsz={:#x}",
+            (unsigned long long)state, (unsigned long long)sentinel,
+            (unsigned long long)newsz);
   uint64_t cur = 0;
   if (!trkRd64(sentinel, cur)) {
-    std::fprintf(stderr, "  [freetree] head not mapped -- nothing to walk\n");
+    BASE_LOGI("freetree", "  head not mapped -- nothing to walk");
     return;
   }
   uint64_t field = sentinel;  // where `cur` was loaded from
   for (int step = 0; step < 64; step++) {
     if (cur == sentinel) {
-      std::fprintf(stderr, "  [freetree] step %d: back at the sentinel, the "
-                          "tree is intact -- the bad pointer is NOT here\n", step);
+      BASE_LOGI("freetree",
+                "  step {}: back at the sentinel, the tree is intact -- the "
+                "bad pointer is NOT here", step);
       return;
     }
     uint64_t sz = 0;
     if (!trkRd64(cur - 8, sz)) {
-      std::fprintf(stderr,
-                   "  [freetree] step %d: node %#llx is UNMAPPED (its size word "
-                   "at %#llx cannot be read) -- THIS IS THE FAULT\n",
-                   step, (unsigned long long)cur, (unsigned long long)(cur - 8));
-      std::fprintf(stderr,
-                   "  [freetree] the bad pointer was loaded FROM %#llx  <== arm "
-                   "the write census here (DELTA_GUEST_WHIST=%llx:8:8)\n",
-                   (unsigned long long)field, (unsigned long long)field);
+      BASE_LOGI("freetree",
+                "  step {}: node {:#x} is UNMAPPED (its size word at {:#x} "
+                "cannot be read) -- THIS IS THE FAULT",
+                step, (unsigned long long)cur, (unsigned long long)(cur - 8));
+      BASE_LOGI("freetree",
+                "  the bad pointer was loaded FROM {:#x}  <== arm the write "
+                "census here (DELTA_GUEST_WHIST={:x}:8:8)",
+                (unsigned long long)field, (unsigned long long)field);
       // What surrounds the corrupt field: its neighbours often show the intact
       // originals, which says whether the whole node or just one word was hit.
       const uint64_t win = field & ~0x3full;
+      base::String winwords;
       for (int i = 0; i < 8; i++) {
         uint64_t v = 0;
         if ((i % 4) == 0)
-          std::fprintf(stderr, "\n  [freetree] %#llx:",
-                       (unsigned long long)(win + i * 8));
-        std::fprintf(stderr, " %016llx",
-                     (unsigned long long)(trkRd64(win + i * 8, v) ? v : 0));
+          base::FormatTo(winwords, "\n  {:#x}:", (unsigned long long)(win + i * 8));
+        base::FormatTo(winwords, " {:016x}",
+                       (unsigned long long)(trkRd64(win + i * 8, v) ? v : 0));
       }
+      BASE_LOGI("freetree", "{}", winwords.c_str());
       // Split the value: SotC's stale links read as a valid 40-bit guest
       // pointer with rubbish above it, because the word is not a pointer at all
       // -- it is whatever the new owner of the reused chunk stored there, and
       // the arrays in question hold packed descriptors.
-      std::fprintf(stderr, "\n  [freetree] bad value %#llx: low40=%#llx, "
-                          "bits40+=%#llx (so probably not a pointer)\n",
-                   (unsigned long long)cur,
-                   (unsigned long long)(cur & 0xffffffffffull),
-                   (unsigned long long)(cur >> 40));
+      BASE_LOGI("freetree", "\n  bad value {:#x}: low40={:#x}, "
+                            "bits40+={:#x} (so probably not a pointer)",
+                (unsigned long long)cur,
+                (unsigned long long)(cur & 0xffffffffffull),
+                (unsigned long long)(cur >> 40));
       // Is the corrupt word inside guest memory the GPU module snapshots and
       // copies back? If it is, the compute writeback is reverting the
       // allocator's own stores and this is our corruption, not the title's.
       char csr[256];
       if (gpu::rhi::DescribeCsRangeCovering(field, csr, sizeof(csr)))
-        std::fprintf(stderr, "  [freetree] the field IS inside a compute "
-                            "staging range: %s\n", csr);
+        BASE_LOGI("freetree", "  the field IS inside a compute staging range: {}",
+                  csr);
       else
-        std::fprintf(stderr, "  [freetree] no compute staging range covers the "
-                            "field\n");
+        BASE_LOGI("freetree", "  no compute staging range covers the field");
       return;
     }
     sz &= ~7ull;
@@ -217,59 +221,63 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
     // free chunk of 0x158 turned up in a later crash, which a 16-alignment test
     // flagged as "no longer a free chunk" and blamed the wrong link for.
     const bool plausible = sz && sz < 0x8000000ull && (sz & 7) == 0;
-    std::fprintf(stderr,
-                 "  [freetree] step %d: node=%#llx size=%#llx -> child[%d]%s\n",
-                 step, (unsigned long long)cur, (unsigned long long)sz, idx,
-                 plausible ? "" : "   <== NOT A FREE CHUNK ANY MORE");
+    BASE_LOGI("freetree",
+              "  step {}: node={:#x} size={:#x} -> child[{}]{}",
+              step, (unsigned long long)cur, (unsigned long long)sz, idx,
+              plausible ? "" : "   <== NOT A FREE CHUNK ANY MORE");
     if (!plausible) {
-      std::fprintf(stderr,
-                   "  [freetree] the tree left itself here: the link at %#llx "
-                   "still points at %#llx, which is no longer a free chunk\n",
-                   (unsigned long long)field, (unsigned long long)cur);
+      BASE_LOGI("freetree",
+                "  the tree left itself here: the link at {:#x} still points "
+                "at {:#x}, which is no longer a free chunk",
+                (unsigned long long)field, (unsigned long long)cur);
       char csr1[256];
       if (gpu::rhi::DescribeCsRangeCovering(field, csr1, sizeof(csr1)))
-        std::fprintf(stderr, "  [freetree]   the STALE LINK is inside a compute "
-                            "staging range: %s\n", csr1);
+        BASE_LOGI("freetree",
+                  "    the STALE LINK is inside a compute staging range: {}",
+                  csr1);
       else
-        std::fprintf(stderr, "  [freetree]   no compute staging range covers "
-                            "the stale link at %#llx\n",
-                     (unsigned long long)field);
+        BASE_LOGI("freetree",
+                  "    no compute staging range covers the stale link at {:#x}",
+                  (unsigned long long)field);
       if (gpu::rhi::DescribeCsRangeCovering(cur, csr1, sizeof(csr1)))
-        std::fprintf(stderr, "  [freetree]   the reused CHUNK is inside a "
-                            "compute staging range: %s\n", csr1);
+        BASE_LOGI("freetree",
+                  "    the reused CHUNK is inside a compute staging range: {}",
+                  csr1);
       const uint64_t win2 = (field & ~0x1full) - 0x20;
+      base::String win2words;
       for (int i = 0; i < 12; i++) {
         uint64_t v = 0;
         if ((i % 4) == 0)
-          std::fprintf(stderr, "\n  [freetree] %#llx:",
-                       (unsigned long long)(win2 + i * 8));
-        std::fprintf(stderr, " %016llx",
-                     (unsigned long long)(trkRd64(win2 + i * 8, v) ? v : 0));
+          base::FormatTo(win2words, "\n  {:#x}:",
+                         (unsigned long long)(win2 + i * 8));
+        base::FormatTo(win2words, " {:016x}",
+                       (unsigned long long)(trkRd64(win2 + i * 8, v) ? v : 0));
       }
-      std::fprintf(stderr, "\n");
+      base::FormatTo(win2words, "\n");
+      BASE_LOGI("freetree", "{}", win2words.c_str());
     }
     if (newsz == sz) {
-      std::fprintf(stderr, "  [freetree] exact size match, walk ends here\n");
+      BASE_LOGI("freetree", "  exact size match, walk ends here");
       return;
     }
     field = cur + (uint64_t)idx * 8;
     if (!trkRd64(field, cur)) {
-      std::fprintf(stderr, "  [freetree] child field %#llx unmapped -- stop\n",
-                   (unsigned long long)field);
+      BASE_LOGI("freetree", "  child field {:#x} unmapped -- stop",
+                (unsigned long long)field);
       return;
     }
   }
-  std::fprintf(stderr, "  [freetree] 64 steps without terminating (a cycle?)\n");
+  BASE_LOGI("freetree", "  64 steps without terminating (a cycle?)");
 }
 
 // Walk one tracker's circular record list; report count/bytes, whether `key`
 // is covered by a record, and the 8 records nearest to `key` by |base-key|.
 // Returns true if `key` fell inside some record's [base,base+size).
 bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
-  std::fprintf(stderr, "  [trkwalk:%s] tracker=%#llx key=%#llx\n", tag,
-               (unsigned long long)tracker, (unsigned long long)key);
+  BASE_LOGI("trkwalk", "{}  tracker={:#x} key={:#x}", tag,
+            (unsigned long long)tracker, (unsigned long long)key);
   if (!trkMincore(tracker) || !trkMincore(tracker + 0x98)) {
-    std::fprintf(stderr, "  [trkwalk:%s]   tracker not mapped -- skip\n", tag);
+    BASE_LOGI("trkwalk", "{}    tracker not mapped -- skip", tag);
     return false;
   }
   uint64_t sentinel = tracker + 0x38;
@@ -278,11 +286,11 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
   trkRd64(tracker + 0x90, hdrCount);
   trkRd64(tracker + 0x80, hdrBytes);
   trkRd64(tracker + 0x28, listener);
-  std::fprintf(stderr,
-               "  [trkwalk:%s]   listener=%#llx first=%#llx count(+0x90)=%llu "
-               "bytes(+0x80)=%#llx\n",
-               tag, (unsigned long long)listener, (unsigned long long)first,
-               (unsigned long long)hdrCount, (unsigned long long)hdrBytes);
+  BASE_LOGI("trkwalk",
+            "{}    listener={:#x} first={:#x} count(+0x90)={} "
+            "bytes(+0x80)={:#x}",
+            tag, (unsigned long long)listener, (unsigned long long)first,
+            (unsigned long long)hdrCount, (unsigned long long)hdrBytes);
   // Nearest-8 online selection by absolute distance from key.
   uint64_t nb[8], ns[8], nd[8];
   for (int i = 0; i < 8; i++) { nb[i] = ns[i] = 0; nd[i] = ~0ull; }
@@ -291,8 +299,8 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
   for (; walked < 200000; walked++) {
     if (node == sentinel || node == 0) break;
     if (!trkMincore(node) || !trkMincore(node + 0x60 + 7)) {
-      std::fprintf(stderr, "  [trkwalk:%s]   node %#llx unmapped -- stop\n", tag,
-                   (unsigned long long)node);
+      BASE_LOGI("trkwalk", "{}    node {:#x} unmapped -- stop", tag,
+                (unsigned long long)node);
       break;
     }
     uint64_t base = 0, size = 0, next = 0;
@@ -303,11 +311,11 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
     if (base <= key && key < base + size) {
       covered = true;
       if (!coverPrinted) {
-        std::fprintf(stderr,
-                     "  [trkwalk:%s]   *** COVER: rec %#llx base=%#llx size=%#llx "
-                     "end=%#llx contains key ***\n",
-                     tag, (unsigned long long)node, (unsigned long long)base,
-                     (unsigned long long)size, (unsigned long long)(base + size));
+        BASE_LOGI("trkwalk",
+                  "{}    *** COVER: rec {:#x} base={:#x} size={:#x} "
+                  "end={:#x} contains key ***",
+                  tag, (unsigned long long)node, (unsigned long long)base,
+                  (unsigned long long)size, (unsigned long long)(base + size));
         coverPrinted = true;
       }
     }
@@ -318,10 +326,10 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
     if (d < nd[worst]) { nd[worst] = d; nb[worst] = base; ns[worst] = size; }
     node = next;
   }
-  std::fprintf(stderr,
-               "  [trkwalk:%s]   walked %llu records, sum(size)=%#llx, key %s\n",
-               tag, (unsigned long long)walked, (unsigned long long)sumSize,
-               covered ? "IS COVERED" : "is NOT covered by any record");
+  BASE_LOGI("trkwalk",
+            "{}    walked {} records, sum(size)={:#x}, key {}",
+            tag, (unsigned long long)walked, (unsigned long long)sumSize,
+            covered ? "IS COVERED" : "is NOT covered by any record");
   // sort nearest-8 by distance (tiny insertion sort)
   for (int i = 0; i < 8; i++)
     for (int j = i + 1; j < 8; j++)
@@ -331,15 +339,15 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
         t = nb[i]; nb[i] = nb[j]; nb[j] = t;
         t = ns[i]; ns[i] = ns[j]; ns[j] = t;
       }
-  std::fprintf(stderr, "  [trkwalk:%s]   8 nearest records to key (by |base-key|):\n", tag);
+  BASE_LOGI("trkwalk", "{}    8 nearest records to key (by |base-key|):", tag);
   for (int i = 0; i < 8; i++) {
     if (nd[i] == ~0ull) break;
     long long signedDelta = (long long)(nb[i] - key);
-    std::fprintf(stderr,
-                 "  [trkwalk:%s]     base=%#llx size=%#llx end=%#llx  base-key=%+lld (%#llx)\n",
-                 tag, (unsigned long long)nb[i], (unsigned long long)ns[i],
-                 (unsigned long long)(nb[i] + ns[i]), signedDelta,
-                 (unsigned long long)nd[i]);
+    BASE_LOGI("trkwalk",
+              "{}     base={:#x} size={:#x} end={:#x}  base-key={:+} ({:#x})",
+              tag, (unsigned long long)nb[i], (unsigned long long)ns[i],
+              (unsigned long long)(nb[i] + ns[i]), signedDelta,
+              (unsigned long long)nd[i]);
   }
   return covered;
 }
@@ -361,20 +369,20 @@ static void probeHandler(int, siginfo_t *, void *ucv) {
   auto *gr = uc->uc_mcontext.gregs;
   char rip[256];
   symbolize(gr[REG_RIP], rip, sizeof(rip));
-  std::fprintf(stderr, "[probe] tid=%ld rip=%016llx %s\n", (long)gettid(),
-               (unsigned long long)gr[REG_RIP], rip);
+  BASE_LOGI("probe", "tid={} rip={:016x} {}", (long)gettid(),
+            (unsigned long long)gr[REG_RIP], rip);
   // GPRs too: a thread caught in a busy-wait only makes sense with the address
   // and value it is polling.
-  std::fprintf(stderr,
-               "[probe]   rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n"
-               "[probe]   rsi=%016llx rdi=%016llx r8 =%016llx r9 =%016llx\n"
-               "[probe]   r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
-               (unsigned long long)gr[REG_RAX], (unsigned long long)gr[REG_RBX],
-               (unsigned long long)gr[REG_RCX], (unsigned long long)gr[REG_RDX],
-               (unsigned long long)gr[REG_RSI], (unsigned long long)gr[REG_RDI],
-               (unsigned long long)gr[REG_R8], (unsigned long long)gr[REG_R9],
-               (unsigned long long)gr[REG_R12], (unsigned long long)gr[REG_R13],
-               (unsigned long long)gr[REG_R14], (unsigned long long)gr[REG_R15]);
+  BASE_LOGI("probe",
+            "  rax={:016x} rbx={:016x} rcx={:016x} rdx={:016x}\n"
+            "  rsi={:016x} rdi={:016x} r8 ={:016x} r9 ={:016x}\n"
+            "  r12={:016x} r13={:016x} r14={:016x} r15={:016x}",
+            (unsigned long long)gr[REG_RAX], (unsigned long long)gr[REG_RBX],
+            (unsigned long long)gr[REG_RCX], (unsigned long long)gr[REG_RDX],
+            (unsigned long long)gr[REG_RSI], (unsigned long long)gr[REG_RDI],
+            (unsigned long long)gr[REG_R8], (unsigned long long)gr[REG_R9],
+            (unsigned long long)gr[REG_R12], (unsigned long long)gr[REG_R13],
+            (unsigned long long)gr[REG_R14], (unsigned long long)gr[REG_R15]);
   // The frame chain first: a stack scan finds stale return addresses too, which
   // is misleading when the question is "what is this thread blocked in".
   backtrace(gr[REG_RBP]);
@@ -386,7 +394,7 @@ static void probeHandler(int, siginfo_t *, void *ucv) {
       char sym[256];
       symbolize(sp[i], sym, sizeof(sym));
       if (std::strstr(sym, "(.text)")) {
-        std::fprintf(stderr, "[probe]   sp+%-4x %s\n", i * 8, sym);
+        BASE_LOGI("probe", "  sp+{:<4x} {}", i * 8, sym);
         printed++;
       }
     }
@@ -398,9 +406,9 @@ static void probeHandler(int, siginfo_t *, void *ucv) {
   bool any = false;
   for (int i = 0; i < 1024; i++) {
     if (g_sysHist[i] > 100) {  // skip noise
-      if (!any) { std::fprintf(stderr, "[schist] syscall counts:\n"); any = true; }
-      std::fprintf(stderr, "[schist]   %4d %-28s %llu\n", i, syscall_getname(i),
-                   (unsigned long long)g_sysHist[i]);
+      if (!any) { BASE_LOGI("schist", "syscall counts:"); any = true; }
+      BASE_LOGI("schist", "  {:4} {:<28} {}", i, syscall_getname(i),
+                (unsigned long long)g_sysHist[i]);
     }
   }
   if (g_heapProfAddr)
@@ -506,20 +514,21 @@ void heapProfRecord(uintptr_t caller, uint64_t size, bool unscoped) {
       .fetch_add(size, std::memory_order_relaxed);
 }
 void heapProfDump() {
-  std::fprintf(stderr, "[heapprof] total=%llu bytes (%.1f MB) across sites; top by bytes:\n",
-               (unsigned long long)g_heapProfTotal.load(),
-               g_heapProfTotal.load() / 1048576.0);
+  BASE_LOGI("heapprof",
+            "total={} bytes ({:.1f} MB) across sites; top by bytes:",
+            (unsigned long long)g_heapProfTotal.load(),
+            g_heapProfTotal.load() / 1048576.0);
   if (g_heapProfScopeSlot)
-    std::fprintf(stderr,
-                 "[heapprof] scoped=%.1f MB  unscoped=%.1f MB (no scoped "
-                 "allocator live on the calling thread)\n",
-                 g_heapProfScoped.load() / 1048576.0,
-                 g_heapProfUnscoped.load() / 1048576.0);
+    BASE_LOGI("heapprof",
+              "scoped={:.1f} MB  unscoped={:.1f} MB (no scoped "
+              "allocator live on the calling thread)",
+              g_heapProfScoped.load() / 1048576.0,
+              g_heapProfUnscoped.load() / 1048576.0);
   for (int i = 0; i < g_heapProfHookCount; i++) {
     uint64_t b = g_heapProfHookBytes[i].load(std::memory_order_relaxed);
-    std::fprintf(stderr, "[heapprof]  hook[%d] %#lx: %8.1f MB  %8llu calls\n", i,
-                 (unsigned long)g_heapProfHooks[i], b / 1048576.0,
-                 (unsigned long long)g_heapProfHookCalls[i].load(std::memory_order_relaxed));
+    BASE_LOGI("heapprof", "  hook[{}] {:#x}: {:8.1f} MB  {:8} calls", i,
+              (unsigned long)g_heapProfHooks[i], b / 1048576.0,
+              (unsigned long long)g_heapProfHookCalls[i].load(std::memory_order_relaxed));
   }
   // Select top 20 by bytes without allocating (linear passes).
   uint64_t prevBytes = ~0ull;
@@ -539,12 +548,12 @@ void heapProfDump() {
     uint64_t uns = g_heapProf[bestS].unscoped.load(std::memory_order_relaxed);
     char sym[200];
     symbolize(c, sym, sizeof(sym));
-    std::fprintf(stderr, "[heapprof]  %8.1f MB  %8llu calls  %s%s\n",
-                 bestB / 1048576.0, (unsigned long long)cnt, sym,
-                 g_heapProfScopeSlot
-                     ? (uns == bestB ? "  [all unscoped]"
-                                     : uns ? "  [part unscoped]" : "  [scoped]")
-                     : "");
+    BASE_LOGI("heapprof", "  {:8.1f} MB  {:8} calls  {}{}",
+              bestB / 1048576.0, (unsigned long long)cnt, sym,
+              g_heapProfScopeSlot
+                  ? (uns == bestB ? "  [all unscoped]"
+                                  : uns ? "  [part unscoped]" : "  [scoped]")
+                  : "");
     prevBytes = bestB; prevCaller = c;
   }
   std::fflush(stderr);
@@ -730,9 +739,9 @@ static void probeHandler(int, siginfo_t *, void *ucv) {
   else
     std::snprintf(sym, sizeof(sym), "<unattributed FEX host pc>");
   const auto host_pc = static_cast<ucontext_t *>(ucv)->uc_mcontext.pc;
-  std::fprintf(stderr, "[probe] tid=%ld host_pc=%#llx guest_pc=%#lx %s\n",
-               (long)gettid(), (unsigned long long)host_pc,
-               (unsigned long)rip, sym);
+  BASE_LOGI("probe", "tid={} host_pc={:#x} guest_pc={:#x} {}",
+            (long)gettid(), (unsigned long long)host_pc,
+            (unsigned long)rip, sym);
   if (const uintptr_t sp = watchFaultGuestRsp(ucv))
     guestStackTraceFrom(sp, "probe", 8, (long)syscall(SYS_gettid));
   std::fflush(stderr);
@@ -882,13 +891,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
 #endif
       if (const uintptr_t probe = utl::writeWatchValueProbe();
           probe && utl::isMemoryRangeMapped(reinterpret_cast<void *>(probe), 8))
-        std::fprintf(stderr, "[wprot] %s %#llx from %s | probe %#lx = %#llx\n",
-                     kind, (unsigned long long)at, sym,
-                     (unsigned long)probe,
-                     (unsigned long long)*reinterpret_cast<uint64_t *>(probe));
+        BASE_LOGI("wprot", "{} {:#x} from {} | probe {:#x} = {:#x}", kind,
+                  (unsigned long long)at, sym, (unsigned long)probe,
+                  (unsigned long long)*reinterpret_cast<uint64_t *>(probe));
       else
-        std::fprintf(stderr, "[wprot] %s %#llx from %s\n", kind,
-                     (unsigned long long)at, sym);
+        BASE_LOGI("wprot", "{} {:#x} from {}", kind, (unsigned long long)at,
+                  sym);
       // The writer of a descriptor/command ring is nearly always libc memcpy,
       // which names no subsystem -- so the CALLER is the whole point of the
       // report, not an extra for the reads-too mode. Reading the single qword at
@@ -929,18 +937,18 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         if (g) {
           enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI,
                  R8, R9, R10, R11, R12, R13, R14, R15 };
-          std::fprintf(stderr,
-                       "[wprot]  ax=%lx bx=%lx cx=%lx dx=%lx si=%lx di=%lx "
-                       "bp=%lx sp=%lx r8=%lx r9=%lx r10=%lx r11=%lx r12=%lx "
-                       "r13=%lx r14=%lx r15=%lx%s\n",
-                       (long)g[RAX], (long)g[RBX], (long)g[RCX], (long)g[RDX],
-                       (long)g[RSI], (long)g[RDI], (long)g[RBP], (long)g[RSP],
-                       (long)g[R8], (long)g[R9], (long)g[R10], (long)g[R11],
-                       (long)g[R12], (long)g[R13], (long)g[R14], (long)g[R15],
+          BASE_LOGI("wprot",
+                    "  ax={:x} bx={:x} cx={:x} dx={:x} si={:x} di={:x} "
+                    "bp={:x} sp={:x} r8={:x} r9={:x} r10={:x} r11={:x} "
+                    "r12={:x} r13={:x} r14={:x} r15={:x}{}",
+                    (long)g[RAX], (long)g[RBX], (long)g[RCX], (long)g[RDX],
+                    (long)g[RSI], (long)g[RDI], (long)g[RBP], (long)g[RSP],
+                    (long)g[R8], (long)g[R9], (long)g[R10], (long)g[R11],
+                    (long)g[R12], (long)g[R13], (long)g[R14], (long)g[R15],
 #if defined(__x86_64__)
-                       "");
+                    "");
 #else
-                       exact ? "" : "  (guest regs may lag the faulting insn)");
+                    exact ? "" : "  (guest regs may lag the faulting insn)");
 #endif
 #if !defined(__x86_64__)
           // Chase the probed word upstream. With exact registers a block copy
@@ -958,12 +966,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
             if (looks_like_copy &&
                 utl::isMemoryRangeMapped(reinterpret_cast<void *>(src), 8)) {
               utl::writeWatchChaseTook();
-              std::fprintf(stderr,
-                           "[wprot] chase: probe %#lx came from %#lx "
-                           "(copy %#lx <- %#lx len %#lx); watching the source\n",
-                           (unsigned long)probe, (unsigned long)src,
-                           (unsigned long)rdi, (unsigned long)rsi,
-                           (unsigned long)rcx);
+              BASE_LOGI("wprot",
+                        "chase: probe {:#x} came from {:#x} (copy {:#x} <- "
+                        "{:#x} len {:#x}); watching the source",
+                        (unsigned long)probe, (unsigned long)src,
+                        (unsigned long)rdi, (unsigned long)rsi,
+                        (unsigned long)rcx);
               utl::setWriteWatchValueProbe(src);
               utl::armWriteWatch(src, 8, 200);
             }
@@ -1465,12 +1473,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         char sym[256];
         symbolize(uc->uc_mcontext.gregs[REG_RIP], sym, sizeof(sym));
         auto *g = uc->uc_mcontext.gregs;
-        std::fprintf(stderr,
-                     "[assert] skipped guest int 0x%02x @ %s "
-                     "rsi=%lld rdx=%lld r15=%lld rax=%lld rcx=%lld\n",
-                     ip[1], sym, (long long)g[REG_RSI], (long long)g[REG_RDX],
-                     (long long)g[REG_R15], (long long)g[REG_RAX],
-                     (long long)g[REG_RCX]);
+        BASE_LOGI("assert",
+                  "skipped guest int 0x{:02x} @ {} "
+                  "rsi={} rdx={} r15={} rax={} rcx={}",
+                  ip[1], sym, (long long)g[REG_RSI], (long long)g[REG_RDX],
+                  (long long)g[REG_R15], (long long)g[REG_RAX],
+                  (long long)g[REG_RCX]);
       }
       uc->uc_mcontext.gregs[REG_RIP] += 2;
       return;
@@ -1509,12 +1517,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
 
   char fault[256];
   symbolize((uintptr_t)si->si_addr, fault, sizeof(fault));
-  std::fprintf(stderr, "\n=== GUEST FAULT: %s (signal %d) ===\n",
-               strsignal(sig), sig);
+  BASE_LOGI("crashHandler", "\n=== GUEST FAULT: {} (signal {}) ===",
+            strsignal(sig), sig);
   if (int sc = cpu::faultingSyscall(); sc >= 0)
-    std::fprintf(stderr, "  in syscall %d (%s)\n", sc, syscall_getname((uint32_t)sc));
-  std::fprintf(stderr, "  fault = %016llx  %s\n",
-               (unsigned long long)si->si_addr, fault);
+    BASE_LOGI("crashHandler", "  in syscall {} ({})", sc,
+              syscall_getname((uint32_t)sc));
+  BASE_LOGI("crashHandler", "  fault = {:016x}  {}",
+            (unsigned long long)si->si_addr, fault);
   // A fault inside the host-thunk pool is the guest calling an HLE import slot
   // we bound but cannot actually service. Name it: the raw address is inside
   // FEX's reserved heap and looks like unrelated garbage otherwise.
@@ -1522,9 +1531,9 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     uint32_t ti = 0;
     if (const char *tn =
             cpu::hostThunkNameForAddr((uintptr_t)si->si_addr, &ti))
-      std::fprintf(stderr,
-                   "  ^ inside the HLE host-thunk pool: thunk #%u %s\n", ti,
-                   *tn ? tn : "(bound without a name)");
+      BASE_LOGI("crashHandler",
+                "  ^ inside the HLE host-thunk pool: thunk #{} {}", ti,
+                *tn ? tn : "(bound without a name)");
   }
   // Show what the host VA space holds around the fault: which mapping it hit,
   // or which two mappings it fell between. Async-signal-safe (read+write only).
@@ -1563,7 +1572,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           char *line = buf + start;
           start = (size_t)(nl - buf) + 1;
           if (after >= 0) {  // trailing context after the hit
-            std::fprintf(stderr, "  maps  +%d : %s\n", after + 1, line);
+            BASE_LOGI("crashHandler", "  maps  +{} : {}", after + 1, line);
             if (++after >= 3) { after = -1; found = true; }
             continue;
           }
@@ -1572,11 +1581,11 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           const uint64_t hi = dash ? strtoull(dash + 1, nullptr, 16) : 0;
           if (fa < hi) {
             if (havePrev)
-              std::fprintf(stderr, "  maps prev: %s\n", prev);
-            std::fprintf(stderr, "  maps %s : %s\n",
-                         (fa >= lo && fa < hi) ? "HIT " : "next (fault is in a "
-                                                         "GAP -- unmapped)",
-                         line);
+              BASE_LOGI("crashHandler", "  maps prev: {}", prev);
+            BASE_LOGI("crashHandler", "  maps {} : {}",
+                      (fa >= lo && fa < hi) ? "HIT " : "next (fault is in a "
+                                                       "GAP -- unmapped)",
+                      line);
             after = 0;
             continue;
           }
@@ -1592,9 +1601,9 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           held = 0;
         if (eof && held == 0) {
           if (!found && after < 0)
-            std::fprintf(stderr,
-                         "  maps: fault is above every mapping (last was %s)\n",
-                         havePrev ? prev : "(none)");
+            BASE_LOGI("crashHandler",
+                      "  maps: fault is above every mapping (last was {})",
+                      havePrev ? prev : "(none)");
           break;
         }
       }
@@ -1607,20 +1616,20 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   auto *gr = uc->uc_mcontext.gregs;
   char rip[256];
   symbolize(gr[REG_RIP], rip, sizeof(rip));
-  std::fprintf(stderr, "  rip   = %016llx  %s\n",
-               (unsigned long long)gr[REG_RIP], rip);
-  std::fprintf(stderr, "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n",
-               (unsigned long long)gr[REG_RAX], (unsigned long long)gr[REG_RBX],
-               (unsigned long long)gr[REG_RCX], (unsigned long long)gr[REG_RDX]);
-  std::fprintf(stderr, "  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
-               (unsigned long long)gr[REG_RSI], (unsigned long long)gr[REG_RDI],
-               (unsigned long long)gr[REG_RBP], (unsigned long long)gr[REG_RSP]);
-  std::fprintf(stderr, "  r8 =%016llx r9 =%016llx r10=%016llx r11=%016llx\n",
-               (unsigned long long)gr[REG_R8], (unsigned long long)gr[REG_R9],
-               (unsigned long long)gr[REG_R10], (unsigned long long)gr[REG_R11]);
-  std::fprintf(stderr, "  r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
-               (unsigned long long)gr[REG_R12], (unsigned long long)gr[REG_R13],
-               (unsigned long long)gr[REG_R14], (unsigned long long)gr[REG_R15]);
+  BASE_LOGI("crashHandler", "  rip   = {:016x}  {}",
+            (unsigned long long)gr[REG_RIP], rip);
+  BASE_LOGI("crashHandler", "  rax={:016x} rbx={:016x} rcx={:016x} rdx={:016x}",
+            (unsigned long long)gr[REG_RAX], (unsigned long long)gr[REG_RBX],
+            (unsigned long long)gr[REG_RCX], (unsigned long long)gr[REG_RDX]);
+  BASE_LOGI("crashHandler", "  rsi={:016x} rdi={:016x} rbp={:016x} rsp={:016x}",
+            (unsigned long long)gr[REG_RSI], (unsigned long long)gr[REG_RDI],
+            (unsigned long long)gr[REG_RBP], (unsigned long long)gr[REG_RSP]);
+  BASE_LOGI("crashHandler", "  r8 ={:016x} r9 ={:016x} r10={:016x} r11={:016x}",
+            (unsigned long long)gr[REG_R8], (unsigned long long)gr[REG_R9],
+            (unsigned long long)gr[REG_R10], (unsigned long long)gr[REG_R11]);
+  BASE_LOGI("crashHandler", "  r12={:016x} r13={:016x} r14={:016x} r15={:016x}",
+            (unsigned long long)gr[REG_R12], (unsigned long long)gr[REG_R13],
+            (unsigned long long)gr[REG_R14], (unsigned long long)gr[REG_R15]);
   // A jump into unmapped memory faults with rip THERE, so the opcode dump would
   // fault again and bury the report -- check the page first.
   if (gr[REG_RIP] && [&] {
@@ -1631,10 +1640,11 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                        1, &vec) == 0;
       }()) {
     auto *b = reinterpret_cast<const uint8_t *>(gr[REG_RIP]);
-    std::fprintf(stderr, "  insn bytes:");
+    base::String insn;
+    base::FormatTo(insn, "  insn bytes:");
     for (int i = 0; i < 16; i++)
-      std::fprintf(stderr, " %02x", b[i]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(insn, " {:02x}", b[i]);
+    BASE_LOGI("crashHandler", "{}", insn.c_str());
   }
   // The host TLS base the faulting code was using. A fault in host library code
   // reached from the guest is usually this: something left the host fs base
@@ -1642,7 +1652,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   {
     unsigned long fsb = 0;
     if (::syscall(SYS_arch_prctl, 0x1003 /*ARCH_GET_FS*/, &fsb) == 0)
-      std::fprintf(stderr, "  host fs base = %#lx\n", fsb);
+      BASE_LOGI("crashHandler", "  host fs base = {:#x}", fsb);
   }
   // A rip in HOST code symbolizes to nothing above; name the library and the
   // nearest exported symbol so the handler that was running is identifiable.
@@ -1652,12 +1662,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     if (std::strstr(sym, "(??)")) {
       Dl_info di{};
       if (dladdr(reinterpret_cast<void *>(gr[REG_RIP]), &di) && di.dli_fname)
-        std::fprintf(stderr, "  host rip = %s+%#lx  %s+%#lx\n", di.dli_fname,
-                     (unsigned long)(gr[REG_RIP] - (uintptr_t)di.dli_fbase),
-                     di.dli_sname ? di.dli_sname : "?",
-                     di.dli_saddr
-                         ? (unsigned long)(gr[REG_RIP] - (uintptr_t)di.dli_saddr)
-                         : 0ul);
+        BASE_LOGI("crashHandler", "  host rip = {}+{:#x}  {}+{:#x}",
+                  di.dli_fname,
+                  (unsigned long)(gr[REG_RIP] - (uintptr_t)di.dli_fbase),
+                  di.dli_sname ? di.dli_sname : "?",
+                  di.dli_saddr
+                      ? (unsigned long)(gr[REG_RIP] - (uintptr_t)di.dli_saddr)
+                      : 0ul);
     }
   }
   // DELTA_GUEST_BRK_DUMP=<reg>|all: follow an argument register one level. A
@@ -1681,25 +1692,28 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       // it: "all" is the mode used when the interesting register is unknown.
       if (base < 0x10000 || !trkMincore(base))
         continue;
-      std::fprintf(stderr, "  --- %s = %#llx ---", r.name,
-                   (unsigned long long)base);
+      base::String qwords;
+      base::FormatTo(qwords, "  --- {} = {:#x} ---", r.name,
+                     (unsigned long long)base);
       const auto *q = reinterpret_cast<const uint64_t *>(base);
       for (int i = 0; i < 16; i++) {
         if (i % 4 == 0)
-          std::fprintf(stderr, "\n  %s+%03x:", r.name, i * 8);
-        std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+          base::FormatTo(qwords, "\n  {}+{:03x}:", r.name, i * 8);
+        base::FormatTo(qwords, " {:016x}", (unsigned long long)q[i]);
       }
-      std::fprintf(stderr, "\n");
+      base::FormatTo(qwords, "\n");
+      BASE_LOGI("crashHandler", "{}", qwords.c_str());
       for (int i = 0; i < 16; i++) {
         const uintptr_t p = q[i];
         if (p < 0x8000000000ull || p >= 0x8100000000ull)
           continue;
         const auto *b8 = reinterpret_cast<const uint8_t *>(p);
-        std::fprintf(stderr, "  %s+%03x -> %#llx:", r.name, i * 8,
-                     (unsigned long long)p);
+        base::String b8bytes;
+        base::FormatTo(b8bytes, "  {}+{:03x} -> {:#x}:", r.name, i * 8,
+                       (unsigned long long)p);
         for (int k = 0; k < 48; k++)
-          std::fprintf(stderr, " %02x", b8[k]);
-        std::fprintf(stderr, "\n");
+          base::FormatTo(b8bytes, " {:02x}", b8[k]);
+        BASE_LOGI("crashHandler", "{}", b8bytes.c_str());
       }
     }
     std::fflush(stderr);
@@ -1727,8 +1741,8 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       for (int i = 0; i < 0x1000; i++)
         nz += b[i] != 0;
       if (nz)
-        std::fprintf(stderr, "  scan %#llx: %u/4096 non-zero\n",
-                     (unsigned long long)a, nz);
+        BASE_LOGI("crashHandler", "  scan {:#x}: {}/4096 non-zero",
+                  (unsigned long long)a, nz);
     }
     std::fflush(stderr);
   // "find:<hex base>:<hex size>:<hex value>" reports every 8-byte slot in the
@@ -1750,13 +1764,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       const auto *q = reinterpret_cast<const uint64_t *>(a);
       for (long i = 0; i < pgsz / 8 && hits < 32; i++)
         if (q[i] == want) {
-          std::fprintf(stderr, "  find %#llx at %#llx\n",
-                       (unsigned long long)want,
-                       (unsigned long long)(a + i * 8));
+          BASE_LOGI("crashHandler", "  find {:#x} at {:#x}",
+                    (unsigned long long)want,
+                    (unsigned long long)(a + i * 8));
           hits++;
         }
     }
-    std::fprintf(stderr, "  find: %d hit(s)\n", hits);
+    BASE_LOGI("crashHandler", "  find: {} hit(s)", hits);
     std::fflush(stderr);
   } else if (const char *pk = kBrkPeek) {
     // "deref:<hex addr>:<bytes>" dumps what the POINTER at addr points at, for
@@ -1774,8 +1788,8 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                 &vec) == 0) {
       const uintptr_t via = at;
       at = *reinterpret_cast<const uintptr_t *>(via);
-      std::fprintf(stderr, "  peek deref %#llx -> %#llx\n",
-                   (unsigned long long)via, (unsigned long long)at);
+      BASE_LOGI("crashHandler", "  peek deref {:#x} -> {:#x}",
+                (unsigned long long)via, (unsigned long long)at);
     }
     if (at >= 0x10000 &&
         mincore(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)), 1,
@@ -1786,22 +1800,25 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           unsigned long lo = 0, hi = 0;
           if (std::sscanf(line, "%lx-%lx", &lo, &hi) == 2 && at >= lo &&
               at < hi) {
-            std::fprintf(stderr, "  peek maps: %s", line);
+            BASE_LOGI("crashHandler", "  peek maps: {}", line);
             break;
           }
         }
         std::fclose(m);
       }
       const auto *b = reinterpret_cast<const uint8_t *>(at);
+      base::String peekbytes;
       for (size_t i = 0; i < n; i++) {
         if (i % 32 == 0)
-          std::fprintf(stderr, "\n  peek %#llx:", (unsigned long long)(at + i));
-        std::fprintf(stderr, " %02x", b[i]);
+          base::FormatTo(peekbytes, "\n  peek {:#x}:",
+                         (unsigned long long)(at + i));
+        base::FormatTo(peekbytes, " {:02x}", b[i]);
       }
-      std::fprintf(stderr, "\n");
+      base::FormatTo(peekbytes, "\n");
+      BASE_LOGI("crashHandler", "{}", peekbytes.c_str());
     } else {
-      std::fprintf(stderr, "  peek %#llx: not mapped\n",
-                   (unsigned long long)at);
+      BASE_LOGI("crashHandler", "  peek {:#x}: not mapped",
+                (unsigned long long)at);
     }
     std::fflush(stderr);
   }
@@ -1817,14 +1834,16 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // control transfer came through.
   if (kCrashPeek && gr[REG_RSP] >= 0x10000) {
     auto *q = reinterpret_cast<const uint64_t *>(gr[REG_RSP] & ~7ull);
+    base::String rspwords;
     for (int i = 0; i < 16; i++) {
       if (i % 4 == 0)
-        std::fprintf(stderr, "\n  rsp+%02x:", i * 8);
-      std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+        base::FormatTo(rspwords, "\n  rsp+{:02x}:", i * 8);
+      base::FormatTo(rspwords, " {:016x}", (unsigned long long)q[i]);
     }
-    std::fprintf(stderr, "\n");
+    base::FormatTo(rspwords, "\n");
+    BASE_LOGI("crashHandler", "{}", rspwords.c_str());
   }
-  std::fprintf(stderr, "  --- stack scan ---\n");
+  BASE_LOGI("crashHandler", "  --- stack scan ---");
   if (uintptr_t rsp = gr[REG_RSP]; rsp >= 0x10000) {
     auto *sp = reinterpret_cast<uintptr_t *>(rsp);
     for (int i = 0; i < 512; i++) {
@@ -1832,13 +1851,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       char sym[256];
       symbolize(v, sym, sizeof(sym));
       if (std::strstr(sym, "(.text)")) {
-        std::fprintf(stderr, "  sp+%-5x %016lx  %s\n", i * 8, v, sym);
+        BASE_LOGI("crashHandler", "  sp+{:<5x} {:016x}  {}", i * 8, v, sym);
       } else if (v >= 0x4000000000ull && v < 0x4100000000ull) {
         auto *s = reinterpret_cast<const char *>(v);
         int n = 0;
         while (n < 40 && s[n] >= 0x20 && s[n] <= 0x7e) n++;
         if (n >= 5 && s[n] == 0)
-          std::fprintf(stderr, "  sp+%-5x %016lx  str=\"%.40s\"\n", i * 8, v, s);
+          BASE_LOGI("crashHandler", "  sp+{:<5x} {:016x}  str=\"{:.40}\"", i * 8,
+                    v, s);
       }
     }
   }
@@ -1853,18 +1873,20 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
 #endif
   uint64_t recon = cpu::reconstructGuestRip(hostpc);
   uint64_t grip = recon ? recon : cpu::currentGuestRip(); // fall back to block rip
-  std::fprintf(stderr, "  host pc in JIT: %s\n", recon ? "yes" : "no (FEX/HLE C++)");
+  BASE_LOGI("crashHandler", "  host pc in JIT: {}",
+            recon ? "yes" : "no (FEX/HLE C++)");
   char ripsym[256];
   symbolize(grip, ripsym, sizeof(ripsym));
-  std::fprintf(stderr, "  host pc   = %016llx\n", (unsigned long long)hostpc);
-  std::fprintf(stderr, "  guest rip = %016llx  %s\n",
-               (unsigned long long)grip, ripsym);
+  BASE_LOGI("crashHandler", "  host pc   = {:016x}", (unsigned long long)hostpc);
+  BASE_LOGI("crashHandler", "  guest rip = {:016x}  {}",
+            (unsigned long long)grip, ripsym);
   if (grip) {
     auto *b = reinterpret_cast<const uint8_t *>(grip);
-    std::fprintf(stderr, "  insn bytes:");
+    base::String insnb;
+    base::FormatTo(insnb, "  insn bytes:");
     for (int i = 0; i < 16; i++)
-      std::fprintf(stderr, " %02x", b[i]);
-    std::fprintf(stderr, "\n");
+      base::FormatTo(insnb, " {:02x}", b[i]);
+    BASE_LOGI("crashHandler", "{}", insnb.c_str());
   }
   // Guest GPR dump + rbp backtrace (parity with the native x86 dump above).
   // gregs order is FEXCore::X86State::REG_* (RAX,RCX,RDX,RBX,RSP,RBP,RSI,RDI,
@@ -1883,23 +1905,23 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   uint64_t sig_gregs[16];
   const bool gexact = cpu::guestGregsFromSignal(ucv, sig_gregs);
   if (!gexact)
-    std::fprintf(stderr,
-                 "  [regs] NOT from the fault: host pc is outside the JIT, so "
-                 "these are the last spilled CPUState values (STALE)\n");
+    BASE_LOGI("crashHandler",
+              "  [regs] NOT from the fault: host pc is outside the JIT, so "
+              "these are the last spilled CPUState values (STALE)");
   if (const uint64_t *g = gexact ? sig_gregs : cpu::currentGuestGregs()) {
     enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15 };
-    std::fprintf(stderr, "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n",
-                 (unsigned long long)g[RAX], (unsigned long long)g[RBX],
-                 (unsigned long long)g[RCX], (unsigned long long)g[RDX]);
-    std::fprintf(stderr, "  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
-                 (unsigned long long)g[RSI], (unsigned long long)g[RDI],
-                 (unsigned long long)g[RBP], (unsigned long long)g[RSP]);
-    std::fprintf(stderr, "  r8 =%016llx r9 =%016llx r10=%016llx r11=%016llx\n",
-                 (unsigned long long)g[R8], (unsigned long long)g[R9],
-                 (unsigned long long)g[R10], (unsigned long long)g[R11]);
-    std::fprintf(stderr, "  r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
-                 (unsigned long long)g[R12], (unsigned long long)g[R13],
-                 (unsigned long long)g[R14], (unsigned long long)g[R15]);
+    BASE_LOGI("crashHandler", "  rax={:016x} rbx={:016x} rcx={:016x} rdx={:016x}",
+              (unsigned long long)g[RAX], (unsigned long long)g[RBX],
+              (unsigned long long)g[RCX], (unsigned long long)g[RDX]);
+    BASE_LOGI("crashHandler", "  rsi={:016x} rdi={:016x} rbp={:016x} rsp={:016x}",
+              (unsigned long long)g[RSI], (unsigned long long)g[RDI],
+              (unsigned long long)g[RBP], (unsigned long long)g[RSP]);
+    BASE_LOGI("crashHandler", "  r8 ={:016x} r9 ={:016x} r10={:016x} r11={:016x}",
+              (unsigned long long)g[R8], (unsigned long long)g[R9],
+              (unsigned long long)g[R10], (unsigned long long)g[R11]);
+    BASE_LOGI("crashHandler", "  r12={:016x} r13={:016x} r14={:016x} r15={:016x}",
+              (unsigned long long)g[R12], (unsigned long long)g[R13],
+              (unsigned long long)g[R14], (unsigned long long)g[R15]);
 
     // Corroborate the recovery against si_addr: a faulting memory operand is
     // built out of a base register, so SOME GPR should sit within a small
@@ -1915,16 +1937,17 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       for (int i = 0; i < 16; i++) {
         const int64_t d = (int64_t)fa - (int64_t)g[i];
         if (d >= -0x2000 && d <= 0x2000) {
-          std::fprintf(stderr, "  [regs] fault = %s%+lld  (exact, from the JIT "
-                              "signal context)\n", kN[i], (long long)d);
+          BASE_LOGI("crashHandler",
+                    "  [regs] fault = {}{:+}  (exact, from the JIT "
+                    "signal context)", kN[i], (long long)d);
           any = true;
         }
       }
       if (!any)
-        std::fprintf(stderr,
-                     "  [regs] WARNING no GPR is within 0x2000 of the fault "
-                     "address -- the SRA recovery is suspect, do not trust "
-                     "these values\n");
+        BASE_LOGI("crashHandler",
+                  "  [regs] WARNING no GPR is within 0x2000 of the fault "
+                  "address -- the SRA recovery is suspect, do not trust "
+                  "these values");
     }
 
     // ---- SOTC free-tree walk (diagnostic; see helper above) ----
@@ -1970,9 +1993,10 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       bool inTrk = ebase && ((off >= 0x18000 && off < 0x19000) ||
                              (off >= 0x8d000 && off < 0x8e000));
       if (inTrk) {
-        std::fprintf(stderr,
-                     "\n  === SOTC tracker walk (eboot base=%#llx, fault off=%#llx) ===\n",
-                     (unsigned long long)ebase, (unsigned long long)off);
+        BASE_LOGI("trkwalk",
+                  "\n  === SOTC tracker walk (eboot base={:#x}, fault off={:#x}) "
+                  "===",
+                  (unsigned long long)ebase, (unsigned long long)off);
         // Recover (tracker,key) from the saved-register slots on the stack,
         // which are reliable regardless of FEX callee-saved reconstruction.
         // Layout after the prologue pushes (no further stack alloc):
@@ -1980,11 +2004,11 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         uint64_t rsp = g[RSP];
         uint64_t trkStk = 0, keyStk = 0;
         bool haveStk = trkRd64(rsp + 0x18, trkStk) && trkRd64(rsp + 0x20, keyStk);
-        std::fprintf(stderr,
-                     "  [trkwalk] from-stack: tracker=%#llx key=%#llx (ok=%d) | "
-                     "from-reg: r13=%#llx r14=%#llx\n",
-                     (unsigned long long)trkStk, (unsigned long long)keyStk,
-                     haveStk, (unsigned long long)g[R13], (unsigned long long)g[R14]);
+        BASE_LOGI("trkwalk",
+                  " from-stack: tracker={:#x} key={:#x} (ok={}) | "
+                  "from-reg: r13={:#x} r14={:#x}",
+                  (unsigned long long)trkStk, (unsigned long long)keyStk,
+                  haveStk, (unsigned long long)g[R13], (unsigned long long)g[R14]);
         // Prefer the stack-recovered tracker/key; fall back to the regs if the
         // stack slot doesn't look like a mapped module-space pointer.
         auto plausible = [](uint64_t t) {
@@ -1995,12 +2019,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // Raw tracker header window (fallback context: +0x00..0xa0).
         if (trkMincore(tracker)) {
           auto *q = reinterpret_cast<const uint64_t *>(tracker);
+          base::String trkwords;
           for (int i = 0; i < 20; i++) {
             if ((i % 4) == 0)
-              std::fprintf(stderr, "\n  trk+%03x:", i * 8);
-            std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+              base::FormatTo(trkwords, "\n  trk+{:03x}:", i * 8);
+            base::FormatTo(trkwords, " {:016x}", (unsigned long long)q[i]);
           }
-          std::fprintf(stderr, "\n");
+          base::FormatTo(trkwords, "\n");
+          BASE_LOGI("trkwalk", "{}", trkwords.c_str());
         }
         // 1) Walk the tracker the fault came from.
         bool inThis = sotcWalkTracker(tracker, key, "fault");
@@ -2015,23 +2041,24 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           auto *pi = proc->getVma().get(reinterpret_cast<uint8_t *>(key));
           if (pi) {
             uint64_t vb = (uint64_t)pi->ptr, ve = vb + pi->size;
-            std::fprintf(stderr,
-                         "  [trkwalk] emu VMA: key %#llx is IN region [%#llx,%#llx) "
-                         "size=%#llx sceProt=%#x reserved=%d name=%s  key-regionbase=%+lld\n",
-                         (unsigned long long)key, (unsigned long long)vb,
-                         (unsigned long long)ve, (unsigned long long)pi->size,
-                         pi->sceProt, pi->reserved, pi->name ? pi->name : "(null)",
-                         (long long)(key - vb));
+            BASE_LOGI("trkwalk",
+                      " emu VMA: key {:#x} is IN region [{:#x},{:#x}) "
+                      "size={:#x} sceProt={:#x} reserved={} name={}  "
+                      "key-regionbase={:+}",
+                      (unsigned long long)key, (unsigned long long)vb,
+                      (unsigned long long)ve, (unsigned long long)pi->size,
+                      pi->sceProt, pi->reserved, pi->name ? pi->name : "(null)",
+                      (long long)(key - vb));
           } else {
-            std::fprintf(stderr,
-                         "  [trkwalk] emu VMA: key %#llx is in NO tracked region\n",
-                         (unsigned long long)key);
+            BASE_LOGI("trkwalk",
+                      " emu VMA: key {:#x} is in NO tracked region",
+                      (unsigned long long)key);
           }
         }
-        std::fprintf(stderr,
-                     "  [trkwalk] SUMMARY: key covered in fault-tracker=%d gpuA=%d gpuB=%d\n",
-                     inThis, inA, inB);
-        std::fprintf(stderr, "  === end SOTC tracker walk ===\n\n");
+        BASE_LOGI("trkwalk",
+                  " SUMMARY: key covered in fault-tracker={} gpuA={} gpuB={}",
+                  inThis, inA, inB);
+        BASE_LOGI("trkwalk", "  === end SOTC tracker walk ===\n");
         std::fflush(stderr);
       }
     }
@@ -2052,12 +2079,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // deep vtable/member-fn slot (the fault operand disp can be several
         // hundred bytes in). Other regs get just a header.
         int n = (r < 2) ? 56 : 8;
+        base::String peekr;
         for (int i = 0; i < n; i++) {
           if ((i % 4) == 0)
-            std::fprintf(stderr, "\n  peek %s+%03x:", rn[r], i * 8);
-          std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+            base::FormatTo(peekr, "\n  peek {}+{:03x}:", rn[r], i * 8);
+          base::FormatTo(peekr, " {:016x}", (unsigned long long)q[i]);
         }
-        std::fprintf(stderr, "\n");
+        base::FormatTo(peekr, "\n");
+        BASE_LOGI("crashHandler", "{}", peekr.c_str());
       }
       // Explicit address list: DELTA_CRASH_PEEK=0x1c92d00,0x1c2fc00 also dumps a
       // window of guest memory at each given VA (comma/space separated). Unlike the
@@ -2075,16 +2104,20 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         unsigned char vec[2] = {0, 0};
         void *pa = reinterpret_cast<void *>(va & ~((uint64_t)pg - 1));
         if (mincore(pa, 1, vec) != 0) {
-          std::fprintf(stderr, "  peek %#llx: <unmapped>\n", (unsigned long long)va);
+          BASE_LOGI("crashHandler", "  peek {:#x}: <unmapped>",
+                    (unsigned long long)va);
           continue;
         }
         auto *q = reinterpret_cast<const uint64_t *>(va);
+        base::String peeks;
         for (int i = 0; i < 16; i++) {
           if ((i % 4) == 0)
-            std::fprintf(stderr, "\n  peek %#llx+%03x:", (unsigned long long)va, i * 8);
-          std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+            base::FormatTo(peeks, "\n  peek {:#x}+{:03x}:",
+                           (unsigned long long)va, i * 8);
+          base::FormatTo(peeks, " {:016x}", (unsigned long long)q[i]);
         }
-        std::fprintf(stderr, "\n");
+        base::FormatTo(peeks, "\n");
+        BASE_LOGI("crashHandler", "{}", peeks.c_str());
       }
     }
     // DELTA_CRASH_PEEK also dumps the raw stack window around rsp: for a fault
@@ -2097,12 +2130,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       void *pa = reinterpret_cast<void *>(g[RSP] & ~((uint64_t)pg - 1));
       if (mincore(pa, 1, vec) == 0) {
         auto *q = reinterpret_cast<const uint64_t *>(g[RSP] & ~7ull);
+        base::String stackwords;
         for (int i = -8; i < 64; i++) {
           if (((i + 8) % 4) == 0)
-            std::fprintf(stderr, "\n  stack rsp%+05x:", i * 8);
-          std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+            base::FormatTo(stackwords, "\n  stack rsp{:+05x}:", i * 8);
+          base::FormatTo(stackwords, " {:016x}", (unsigned long long)q[i]);
         }
-        std::fprintf(stderr, "\n");
+        base::FormatTo(stackwords, "\n");
+        BASE_LOGI("crashHandler", "{}", stackwords.c_str());
       }
     }
     // DELTA_GUEST_BRK_DUMP=<reg>: follow an argument register one level. A
@@ -2125,15 +2160,17 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // it: "all" is the mode used when the interesting register is unknown.
         if (base < 0x10000 || !trkMincore(base))
           continue;
-        std::fprintf(stderr, "  --- %s = %#llx ---\n", r.name,
-                     (unsigned long long)base);
+        base::String qw;
+        base::FormatTo(qw, "  --- {} = {:#x} ---\n", r.name,
+                       (unsigned long long)base);
         const auto *q = reinterpret_cast<const uint64_t *>(base);
         for (int i = 0; i < 16; i++) {
           if (i % 4 == 0)
-            std::fprintf(stderr, "\n  %s+%03x:", r.name, i * 8);
-          std::fprintf(stderr, " %016llx", (unsigned long long)q[i]);
+            base::FormatTo(qw, "\n  {}+{:03x}:", r.name, i * 8);
+          base::FormatTo(qw, " {:016x}", (unsigned long long)q[i]);
         }
-        std::fprintf(stderr, "\n");
+        base::FormatTo(qw, "\n");
+        BASE_LOGI("crashHandler", "{}", qw.c_str());
         // One level down: any field that looks like a guest pointer gets its
         // first 64 bytes dumped, which is where a byte stream shows itself.
         for (int i = 0; i < 16; i++) {
@@ -2141,11 +2178,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           if (p < 0x8000000000ull || p >= 0x8100000000ull)
             continue;
           const auto *b = reinterpret_cast<const uint8_t *>(p);
-          std::fprintf(stderr, "  %s+%03x -> %#llx:", r.name, i * 8,
-                       (unsigned long long)p);
+          base::String b8b;
+          base::FormatTo(b8b, "  {}+{:03x} -> {:#x}:", r.name, i * 8,
+                         (unsigned long long)p);
           for (int k = 0; k < 48; k++)
-            std::fprintf(stderr, " %02x", b[k]);
-          std::fprintf(stderr, "\n");
+            base::FormatTo(b8b, " {:02x}", b[k]);
+          BASE_LOGI("crashHandler", "{}", b8b.c_str());
         }
       }
       std::fflush(stderr);
@@ -2164,16 +2202,18 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           mincore(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)), 1,
                   &vec) == 0) {
         const auto *b = reinterpret_cast<const uint8_t *>(at);
+        base::String pbytes;
         for (size_t i = 0; i < n; i++) {
           if (i % 32 == 0)
-            std::fprintf(stderr, "\n  peek %#llx:",
-                         (unsigned long long)(at + i));
-          std::fprintf(stderr, " %02x", b[i]);
+            base::FormatTo(pbytes, "\n  peek {:#x}:",
+                           (unsigned long long)(at + i));
+          base::FormatTo(pbytes, " {:02x}", b[i]);
         }
-        std::fprintf(stderr, "\n");
+        base::FormatTo(pbytes, "\n");
+        BASE_LOGI("crashHandler", "{}", pbytes.c_str());
       } else {
-        std::fprintf(stderr, "  peek %#llx: not mapped\n",
-                     (unsigned long long)at);
+        BASE_LOGI("crashHandler", "  peek {:#x}: not mapped",
+                  (unsigned long long)at);
       }
       std::fflush(stderr);
     }
@@ -2186,7 +2226,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     // chain above misses frames. Scan the guest stack for any value that lands
     // in a loaded module's .text; that's the (super)set of return
     // addresses, i.e. the real call chain.
-    std::fprintf(stderr, "  --- stack scan ---\n");
+    BASE_LOGI("crashHandler", "  --- stack scan ---");
     auto *sp = reinterpret_cast<uintptr_t *>(g[RSP]);
     if (g[RSP] >= 0x10000) {
       for (int i = 0; i < 256; i++) {
@@ -2194,7 +2234,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         char sym[256];
         symbolize(v, sym, sizeof(sym));
         if (std::strstr(sym, "(.text)"))
-          std::fprintf(stderr, "  sp+%-4x %016lx  %s\n", i * 8, v, sym);
+          BASE_LOGI("crashHandler", "  sp+{:<4x} {:016x}  {}", i * 8, v, sym);
       }
     }
   }
@@ -2291,8 +2331,7 @@ void guestStackTraceFrom(uintptr_t base, const char *tag, int maxFrames,
     char sym[256];
     symbolize(sp[i], sym, sizeof(sym));
     if (std::strstr(sym, "(.text)")) {
-      std::fprintf(stderr, "[%s]     tid=%ld sp+%-5x %s\n", tag, tid,
-                   (unsigned)(i * 8), sym);
+      BASE_LOGI(tag, "    tid={} sp+{:<5x} {}", tid, (unsigned)(i * 8), sym);
       printed++;
     }
   }
@@ -2304,18 +2343,16 @@ void guestStackTrace(const char *tag, int maxFrames) {
       t_guestSp ? t_guestSp : reinterpret_cast<uintptr_t>(&here);
   uintptr_t sp[512];
   const size_t n = copyStackWindow(base, sp, 512);
-  std::fprintf(stderr, "[%s] tid=%ld guest stack:\n", tag, (long)gettid());
+  BASE_LOGI(tag, "tid={} guest stack:", (long)gettid());
   int printed = 0;
   for (size_t i = 0; i < n && printed < maxFrames; i++) {
     char sym[256];
     symbolize(sp[i], sym, sizeof(sym));
     if (std::strstr(sym, "(.text)")) {
-      std::fprintf(stderr, "[%s]   sp+%-5x %016lx %s\n", tag, (unsigned)(i * 8),
-                   sp[i], sym);
+      BASE_LOGI(tag, "  sp+{:<5x} {:016x} {}", (unsigned)(i * 8), sp[i], sym);
       printed++;
     }
   }
-  std::fflush(stderr);
 }
 
 void setFnWatch(uintptr_t addr, const char *label) {
@@ -2374,10 +2411,9 @@ void startWriteWatch(uintptr_t addr, size_t bytes, unsigned everyMs,
     g_wprotReportLen = bytes;
     if (::mprotect(reinterpret_cast<void *>(base), span,
                    trapReads ? PROT_NONE : PROT_READ) == 0) {
-      std::fprintf(stderr, "[wprot] single-stepping %#lx+%#zx, reporting %#lx+%#zx (%s)\n",
-                   (unsigned long)base, span, (unsigned long)addr, bytes,
-                   trapReads ? "reads+writes" : "writes");
-      std::fflush(stderr);
+      BASE_LOGI("wprot", "single-stepping {:#x}+{:#x}, reporting {:#x}+{:#x} ({})",
+                (unsigned long)base, (unsigned long)span, (unsigned long)addr,
+                (unsigned long)bytes, trapReads ? "reads+writes" : "writes");
     }
     return;
   }
@@ -2403,10 +2439,9 @@ void startWriteWatch(uintptr_t addr, size_t bytes, unsigned everyMs,
       g_wprotReportLen = span;
       if (!announced) {
         announced = true;
-        std::fprintf(stderr, "[wprot] watching %#lx+%#zx (%s), re-armed every %ums\n",
-                     (unsigned long)base, span,
-                     trapReads ? "reads+writes" : "writes", everyMs);
-        std::fflush(stderr);
+        BASE_LOGI("wprot", "watching {:#x}+{:#x} ({}), re-armed every {}ms",
+                  (unsigned long)base, (unsigned long)span,
+                  trapReads ? "reads+writes" : "writes", everyMs);
       }
     }
   }).detach();
@@ -2432,8 +2467,8 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
     }
     g_whistBase = base;
     g_whistLen = span;
-    std::fprintf(stderr, "[whist] census on %#lx+%#zx every %ums\n",
-                 (unsigned long)base, span, everyMs);
+    BASE_LOGI("whist", "census on {:#x}+{:#x} every {}ms", (unsigned long)base,
+              (unsigned long)span, everyMs);
     unsigned sinceReport = 0;
     for (;;) {
       ::mprotect(reinterpret_cast<void *>(base), span, PROT_READ);
@@ -2446,7 +2481,7 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
         const uint32_t n = g_whistBucket[off / kWhistGranule].load();
         map += n == 0 ? '_' : n < 10 ? '.' : n < 100 ? '+' : '#';
       }
-      std::fprintf(stderr, "[whist] %s\n", map.c_str());
+      BASE_LOGI("whist", "{}", map.c_str());
       for (int i = 0; i < kWhistSites; i++) {
         const uintptr_t rip = g_whistSite[i].load();
         if (!rip)
@@ -2454,15 +2489,14 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
         char sym[192], csym[192];
         symbolize(rip, sym, sizeof(sym));
         symbolize(g_whistSiteCaller[i].load(), csym, sizeof(csym));
-        std::fprintf(stderr, "[whist]   %8u %s <- %s\n",
-                     g_whistSiteHits[i].load(), sym, csym);
+        BASE_LOGI("whist", "  {:8} {} <- {}", g_whistSiteHits[i].load(), sym,
+                  csym);
       }
       // Never let the site list read as the complete set of writers when some
       // faults could not be attributed to a guest instruction.
       if (const uint64_t unattributed = g_whistUnattributed.load())
-        std::fprintf(stderr, "[whist]   %8llu <unattributed>\n",
-                     (unsigned long long)unattributed);
-      std::fflush(stderr);
+        BASE_LOGI("whist", "  {:8} <unattributed>",
+                  (unsigned long long)unattributed);
     }
   }).detach();
 }
@@ -2493,9 +2527,9 @@ void startPopcntPrinter(uintptr_t addr, size_t bytes, unsigned everyMs) {
           first = (long)(i * 64 + __builtin_ctzll(w[i]));
         last = (long)(i * 64 + 63 - __builtin_clzll(w[i]));
       }
-      std::fprintf(stderr, "[popcnt] %#lx: %llu/%zu set, first=%ld last=%ld\n",
-                   (unsigned long)addr, (unsigned long long)set, bytes * 8,
-                   first, last);
+      BASE_LOGI("popcnt", "{:#x}: {} / {} set, first={} last={}",
+                (unsigned long)addr, (unsigned long long)set, bytes * 8, first,
+                last);
     }
   }).detach();
 }
@@ -2524,17 +2558,16 @@ void startSumWatchPrinter(uintptr_t slot, size_t off, size_t stride, int count,
       const uintptr_t obj = *reinterpret_cast<const uintptr_t *>(slot);
       if (!readable(obj))
         continue;
-      char line[512];
-      int n = std::snprintf(line, sizeof line, "[sumwatch] %#lx:",
-                            (unsigned long)obj);
+      base::String line;
+      base::FormatTo(line, "{:#x}:", (unsigned long)obj);
       uint64_t sum = 0;
-      for (int i = 0; i < count && n < (int)sizeof line; i++) {
+      for (int i = 0; i < count; i++) {
         const uint32_t v =
             *reinterpret_cast<const uint32_t *>(obj + off + (size_t)i * stride);
         sum += v;
-        n += std::snprintf(line + n, sizeof line - n, " %u", v);
+        base::FormatTo(line, " {}", v);
       }
-      std::fprintf(stderr, "%s = %llu\n", line, (unsigned long long)sum);
+      BASE_LOGI("sumwatch", "{} = {}", line.c_str(), (unsigned long long)sum);
     }
   }).detach();
 }
@@ -2575,12 +2608,10 @@ void startPoolMap(uintptr_t addr, size_t bytes, unsigned everyMs) {
         nonzero += nz;
         map += nz ? '#' : res ? '.' : '_';
       }
-      std::fprintf(stderr,
-                   "[poolmap] %#lx+%#zx resident=%zu/%zu pages nonzero=%zu\n"
-                   "[poolmap] %s\n",
-                   (unsigned long)base, span, resident, npages, nonzero,
-                   map.c_str());
-      std::fflush(stderr);
+      BASE_LOGI("poolmap", "{:#x}+{:#x} resident={}/{} pages nonzero={}",
+                (unsigned long)base, (unsigned long)span, resident, npages,
+                nonzero);
+      BASE_LOGI("poolmap", "{}", map.c_str());
     }
   }).detach();
 }
@@ -2598,7 +2629,7 @@ void startPoolCensus(unsigned everyMs) {
         return;
       char line[512];
       std::vector<unsigned char> vec;
-      std::fprintf(stderr, "[census] ---- guest mappings ----\n");
+      BASE_LOGI("census", "---- guest mappings ----");
       while (std::fgets(line, sizeof line, f)) {
         unsigned long lo = 0, hi = 0;
         char perm[8] = {0};
@@ -2621,14 +2652,12 @@ void startPoolCensus(unsigned everyMs) {
           for (size_t j = 0; j < pgsz / 8; j++)
             if (w[j]) { nz++; break; }
         }
-        std::fprintf(stderr,
-                     "[census] %012lx+%09zx %8.1f MB resident=%7.1f MB "
-                     "nonzero=%7.1f MB\n",
-                     lo, span, span / 1048576.0, res * pgsz / 1048576.0,
-                     nz * pgsz / 1048576.0);
+        BASE_LOGI("census", "{:012x}+{:09x} {:.1f} MB resident={:.1f} MB "
+                            "nonzero={:.1f} MB",
+                  lo, span, span / 1048576.0, res * pgsz / 1048576.0,
+                  nz * pgsz / 1048576.0);
       }
       std::fclose(f);
-      std::fflush(stderr);
     }
   }).detach();
 }
@@ -2648,7 +2677,7 @@ void startMemDump(uintptr_t addr, size_t bytes, unsigned afterMs,
     const size_t span = (bytes + pgsz - 1) & ~(pgsz - 1);
     std::vector<unsigned char> vec(span / pgsz);
     if (mincore(reinterpret_cast<void *>(base), span, vec.data()) != 0) {
-      std::fprintf(stderr, "[memdump] %#lx not mapped\n", (unsigned long)base);
+      BASE_LOGI("memdump", "{:#x} not mapped", (unsigned long)base);
       return;
     }
     FILE *f = std::fopen(out.c_str(), "wb");
@@ -2665,9 +2694,9 @@ void startMemDump(uintptr_t addr, size_t bytes, unsigned afterMs,
       }
     }
     std::fclose(f);
-    std::fprintf(stderr, "[memdump] %#lx+%#zx -> %s (%zu/%zu resident pages)\n",
-                 (unsigned long)base, span, out.c_str(), resident, vec.size());
-    std::fflush(stderr);
+    BASE_LOGI("memdump", "{:#x}+{:#x} -> {} ({}/{} resident pages)",
+              (unsigned long)base, (unsigned long)span, out.c_str(), resident,
+              vec.size());
   }).detach();
 }
 
@@ -2680,16 +2709,15 @@ void startFnWatchPrinter() {
     uint64_t last[kFnWatchMax] = {0};
     for (;;) {
       std::this_thread::sleep_for(std::chrono::seconds(2));
-      char line[512];
-      int off = std::snprintf(line, sizeof line, "[fnwatch]");
-      for (int i = 0; i < g_fnWatchCount && off < (int)sizeof line; i++) {
+      base::String line;
+      base::FormatTo(line, "[fnwatch]");
+      for (int i = 0; i < g_fnWatchCount; i++) {
         uint64_t h = g_fnWatchHits[i].load(std::memory_order_relaxed);
-        off += std::snprintf(line + off, sizeof line - off, " %s=%llu(+%llu)",
-                             g_fnWatchLabels[i], (unsigned long long)h,
-                             (unsigned long long)(h - last[i]));
+        base::FormatTo(line, " {}={}(+{})", g_fnWatchLabels[i],
+                       (unsigned long long)h, (unsigned long long)(h - last[i]));
         last[i] = h;
       }
-      std::fprintf(stderr, "%s\n", line);
+      BASE_LOGI("fnwatch", "{}", line.c_str());
     }
   }).detach();
 }

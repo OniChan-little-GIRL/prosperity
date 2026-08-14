@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include <base/logging.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -1539,10 +1541,10 @@ ValidationCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
       labels += " > ";
     labels += data->pCmdBufLabels[i].pLabelName;
   }
-  std::fprintf(stderr, "[vkval] %s f%d draw#%u [%s] %s: %s\n", level,
-               g_frame.num, g_frame.draws, labels.c_str(),
-               data->pMessageIdName ? data->pMessageIdName : "?",
-               data->pMessage ? data->pMessage : "");
+  BASE_LOGI("vkval", "{} f{} draw#{} [{}] {}: {}", level,
+            g_frame.num, g_frame.draws, labels.c_str(),
+            data->pMessageIdName ? data->pMessageIdName : "?",
+            data->pMessage ? data->pMessage : "");
   if (g_recording) {
     Line l("validation");
     l.U("seq", g_seq++)
@@ -1581,9 +1583,9 @@ void InstallValidationMessenger(VkInstance instance) {
   auto create = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
       vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
   if (!create) {
-    std::fprintf(stderr,
-                 "[vkval] validation requested but the layer is not loaded "
-                 "(is VK_LAYER_PATH set?)\n");
+    BASE_LOGI("vkval",
+              "validation requested but the layer is not loaded "
+              "(is VK_LAYER_PATH set?)");
     return;
   }
   VkDebugUtilsMessengerCreateInfoEXT ci{
@@ -1595,7 +1597,7 @@ void InstallValidationMessenger(VkInstance instance) {
                    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
   ci.pfnUserCallback = ValidationCallback;
   create(instance, &ci, nullptr, &g_messenger);
-  std::fprintf(stderr, "[vkval] validation layer active\n");
+  BASE_LOGI("vkval", "validation layer active");
 }
 
 void DestroyValidationMessenger(VkInstance instance) {
@@ -1662,7 +1664,7 @@ void FrameBegin(int frame_num) {
   const std::string path = g_prefix + ".jsonl";
   g_file = std::fopen(path.c_str(), "wb");
   if (!g_file) {
-    std::fprintf(stderr, "[gpucap] cannot open %s\n", path.c_str());
+    BASE_LOGI("gpucap", "cannot open {}", path.c_str());
     g_frames_left = 0;
     return;
   }
@@ -1671,8 +1673,7 @@ void FrameBegin(int frame_num) {
   g_seq = 0;
   g_draw_seq = 0;
   g_frame_texs.clear();
-  std::fprintf(stderr, "[gpucap] capturing frame %d -> %s\n", frame_num,
-               path.c_str());
+  BASE_LOGI("gpucap", "capturing frame {} -> {}", frame_num, path.c_str());
   Line l("capture");
   l.Int("version", 1)
       .Int("frame", frame_num)
@@ -1707,8 +1708,7 @@ void FrameEnd(uint64_t scanout_base) {
   g_recording = false;
   if (--g_frames_left <= 0) {
     g_finished = true;
-    std::fprintf(stderr, "[gpucap] capture complete: %s*.jsonl\n",
-                 g_dir.c_str());
+    BASE_LOGI("gpucap", "capture complete: {}*.jsonl", g_dir.c_str());
     if (kExitAfter) {
       std::fflush(nullptr);
       std::_Exit(0);

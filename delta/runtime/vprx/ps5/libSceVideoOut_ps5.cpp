@@ -22,6 +22,8 @@
 #include <string>
 #include <thread>
 
+#include <base/logging.h>
+
 #include "gfx/gfx.h"
 #include "kern/proc.h"
 #include "kern/ps4/lv2/sys_event.h"
@@ -129,12 +131,12 @@ bool ensureGfx(uint32_t w, uint32_t h) {
   st = g_gfxState.load();
   if (st != 0) return st == 1;
   if (!gfx::init("prosperity", w, h)) {
-    std::printf("[videoout/ps5] gfx::init FAILED (no window this run)\n");
+    BASE_LOGI("videoout/ps5", "gfx::init FAILED (no window this run)");
     g_gfxState.store(2);
     return false;
   }
   g_gfxState.store(1);
-  std::printf("[videoout/ps5] gfx window up (%ux%u)\n", w, h);
+  BASE_LOGI("videoout/ps5", "gfx window up ({}x{})", w, h);
   return true;
 }
 
@@ -154,7 +156,7 @@ std::atomic<bool> g_flipPumpStarted{false};
 void startFlipPump() {
   bool expected = false;
   if (!g_flipPumpStarted.compare_exchange_strong(expected, true)) return;
-  std::printf("[videoout/ps5] flip pump started (60 Hz)\n");
+  BASE_LOGI("videoout/ps5", "flip pump started (60 Hz)");
   std::thread([] {
     for (;;) {
       std::this_thread::sleep_for(std::chrono::microseconds(16667));
@@ -174,7 +176,7 @@ void startFlipPump() {
 }
 
 int PS4ABI vOpen(int userId, int busType, int index, const void *) {
-  std::printf("[videoout/ps5] open user=%d bus=%d idx=%d\n", userId, busType, index);
+  BASE_LOGI("videoout/ps5", "open user={} bus={} idx={}", userId, busType, index);
   std::lock_guard<std::mutex> lk(g_mtx);
   g_port.open = true;
   return kHandleBase;
@@ -213,8 +215,8 @@ int PS4ABI vSetBufferAttribute(void *attribute, uint32_t pixelFormat,
   a->width = width;
   a->height = height;
   a->pitchInPixel = pitchInPixel;
-  std::printf("[videoout/ps5] setBufferAttribute fmt=%#x tiling=%u %ux%u pitch=%u\n",
-              pixelFormat, tilingMode, width, height, pitchInPixel);
+  BASE_LOGI("videoout/ps5", "setBufferAttribute fmt={:#x} tiling={} {}x{} pitch={}",
+            pixelFormat, tilingMode, width, height, pitchInPixel);
   return 0;
 }
 
@@ -247,11 +249,12 @@ int PS4ABI vRegisterBuffers(int, int startIndex, int option, void *const *buffer
     g_port.bufferCount = startIndex + n;
     w = g_port.width;
     h = g_port.height;
-    std::printf("[videoout/ps5] registerBuffers start=%d num=%d -> %ux%u pitch=%u "
-                "fmt=%#x (buf0=%p buf1=%p)\n",
-                startIndex, bufferNum, g_port.width, g_port.height, g_port.pitch,
-                g_port.pixelFormat, g_port.buffers[startIndex],
-                bufferNum > 1 ? g_port.buffers[startIndex + 1] : nullptr);
+    BASE_LOGI("videoout/ps5",
+              "registerBuffers start={} num={} -> {}x{} pitch={} fmt={:#x} "
+              "(buf0={:p} buf1={:p})",
+              startIndex, bufferNum, g_port.width, g_port.height, g_port.pitch,
+              g_port.pixelFormat, g_port.buffers[startIndex],
+              bufferNum > 1 ? g_port.buffers[startIndex + 1] : nullptr);
     // A title that flips through AGC never calls sceVideoOutSubmitFlip, so it
     // never names a scanout buffer either. Default to the first one it just
     // registered, or the AGC flip ioctls present a null address.

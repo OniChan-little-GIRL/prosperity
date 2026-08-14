@@ -6,6 +6,7 @@
  */
 
 #include <base/environment_variables.h>
+#include <base/logging.h>
 #include "libSceSaveData.h"
 
 #include <algorithm>
@@ -36,7 +37,7 @@ namespace {
 // even called" is the first thing worth knowing.
 static void sdTrace(const char* fn) {
   if (kSavedataTrace)
-    std::fprintf(stderr, "[savedata] call %s\n", fn);
+    BASE_LOGI("savedata", "call {}", fn);
 }
 
 // Mount modes (SCE_SAVE_DATA_MOUNT_MODE_*).
@@ -146,8 +147,8 @@ const std::string &titleTag() {
   static const std::string tag = [] {
     std::string t = krnl::vfs::titleId();
     if (g_trace())
-      std::fprintf(stderr, "[savedata] title id = %s\n",
-                   t.empty() ? "(fallback SAVEDATA)" : t.c_str());
+      BASE_LOGI("savedata", "title id = {}",
+                t.empty() ? "(fallback SAVEDATA)" : t.c_str());
     return t.empty() ? std::string("SAVEDATA") : t;
   }();
   return tag;
@@ -274,10 +275,8 @@ int memorySetup(uint64_t memorySize, uint32_t slotId, void *result) {
     std::memcpy(result, &existed, 8);  // existedMemorySize@0
   }
   if (g_trace())
-    std::fprintf(stderr,
-                 "[savedata] memory setup slot=%u size=%llu (existed=%llu)\n",
-                 slotId, (unsigned long long)memorySize,
-                 (unsigned long long)existed);
+    BASE_LOGI("savedata", "memory setup slot={} size={} (existed={})", slotId,
+              (unsigned long long)memorySize, (unsigned long long)existed);
   return kOk;
 }
 
@@ -340,10 +339,9 @@ int doMount(const char *dir_name, uint32_t mode, void *result) {
     std::memcpy(r + 28, &status, 4);            // mount_status@28
   }
   if (g_trace())
-    std::fprintf(stderr,
-                 "[savedata] mount dir='%s' mode=%#x -> %s (host=%s, %s)\n",
-                 dir_name, mode, point, host.c_str(),
-                 exists ? "existing" : "created");
+    BASE_LOGI("savedata", "mount dir='{}' mode={:#x} -> {} (host={}, {})",
+              dir_name, mode, point, host.c_str(),
+              exists ? "existing" : "created");
   return kOk;
 }
 
@@ -501,8 +499,8 @@ int PS4ABI sceSaveDataDirNameSearch(const void *cond, void *result) {
   std::memcpy(r + 20, &setNum, 4);  // setNum
   // dirNamesNum stays the caller's capacity value; leave it untouched.
   if (g_trace())
-    std::fprintf(stderr, "[savedata] dirNameSearch -> %u hit(s), %u returned\n",
-                 hitNum, setNum);
+    BASE_LOGI("savedata", "dirNameSearch -> {} hit(s), {} returned", hitNum,
+              setNum);
   return kOk;
 }
 
@@ -518,7 +516,7 @@ int PS4ABI sceSaveDataDelete(const void *del) {
   if (exists)
     removeTree(host);
   if (g_trace())
-    std::fprintf(stderr, "[savedata] delete dir='%s'\n", cstrOf(dn));
+    BASE_LOGI("savedata", "delete dir='{}'", cstrOf(dn));
   return kOk;
 }
 
@@ -636,8 +634,8 @@ int PS4ABI sceSaveDataSetParam(const void *mountPoint, uint32_t paramType,
   std::memcpy(blob + off, buf, n);
   storeParam(host, blob);
   if (g_trace())
-    std::fprintf(stderr, "[savedata] setParam type=%u size=%llu -> %s\n",
-                 paramType, (unsigned long long)size, host.c_str());
+    BASE_LOGI("savedata", "setParam type={} size={} -> {}", paramType,
+              (unsigned long long)size, host.c_str());
   return kOk;
 }
 
@@ -659,7 +657,7 @@ int PS4ABI sceSaveDataSaveIcon(const void *mountPoint, const void *icon) {
     }
   }
   if (g_trace())
-    std::fprintf(stderr, "[savedata] saveIcon -> %s\n", host.c_str());
+    BASE_LOGI("savedata", "saveIcon -> {}", host.c_str());
   return kOk;
 }
 

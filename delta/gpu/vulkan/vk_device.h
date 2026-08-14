@@ -9,6 +9,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <base/logging.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -20,7 +22,7 @@ namespace gpu::vk {
   do {                                                              \
     VkResult _r = (x);                                              \
     if (_r != VK_SUCCESS) {                                         \
-      std::fprintf(stderr, "[gpuvk] %s failed: %d\n", #x, (int)_r); \
+      BASE_LOGI("gpuvk", "{} failed: {}", #x, (int)_r); \
       return false;                                                 \
     }                                                               \
   } while (0)

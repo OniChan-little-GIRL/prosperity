@@ -13,6 +13,7 @@
 #if defined(DELTA_BACKEND_NATIVE)
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdio>
 #include <xbyak.h>
 
@@ -69,8 +70,8 @@ static Xbyak::Operand::Code capstone_to_xbyak(x86_reg reg) {
 
 // for debugging
 static void printOpInfo(const cs_x86_op &op) {
-  std::printf("Operand: Type %d, Reg %d, (Mem: base %d)\n", op.type, op.reg,
-              op.mem.base);
+  BASE_LOGI("syslift", "Operand: Type {}, Reg {}, (Mem: base {})", (int)op.type,
+            (int)op.reg, (int)op.mem.base);
 }
 
 codeLift::codeLift(uint8_t *&rip, uint8_t *ripEndIn)
@@ -180,8 +181,8 @@ void codeLift::emit_syscall(uint8_t *base, uint32_t idx) {
   const bool ps5 = proc && proc->getPlatform() == krnl::proc::platform::ps5;
   auto address = ps5 ? krnl::lv2_get_ps5(idx) : krnl::lv2_get(idx);
   if (kSysliftTrace)
-    std::fprintf(stderr, "[syslift] site=%p idx=%u -> trampoline=%#lx\n",
-                 (void *)base, idx, (unsigned long)address);
+    BASE_LOGI("syslift", "site={:p} idx={} -> trampoline={:#x}", (void *)base,
+              idx, (unsigned long)address);
   if (address) {
     // `mov rax, trampoline; call rax` over the stub's 12 bytes. It must be a
     // CALL, not a JMP: the bytes right after the syscall are libkernel's own

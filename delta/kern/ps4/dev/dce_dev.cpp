@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <base.h>
+#include <base/logging.h>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -107,7 +108,7 @@ static void printVideoOutCaller() {
       uintptr_t off = v - vbase;
       if (off == lastoff)
         continue;  // skip repeated return-address slots
-      std::printf("[dce]   caller libSceVideoOut+%#lx\n", off);
+      BASE_LOGI("dce", "  caller libSceVideoOut+{:#x}", off);
       lastoff = off;
       shown++;
     }
@@ -134,7 +135,7 @@ static void dumpStruct(const void *data, uint32_t len) {
   const uint64_t *q = static_cast<const uint64_t *>(data);
   uint32_t n = len / 8;
   for (uint32_t i = 0; i < n; i++)
-    std::printf("    [%u] %#018llx\n", i, (unsigned long long)q[i]);
+    BASE_LOGI("dce", "    [{}] {:#018x}", i, (unsigned long long)q[i]);
 }
 
 uint64_t dceDevice::poolAlloc(uint64_t bytes) {
@@ -181,7 +182,7 @@ uint8_t *dceDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) 
 int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
   if (g_dceTrace()) {
     uint32_t len = (cmd >> 16) & 0x1FFF;
-    std::printf("[dce] ioctl cmd=%#x len=%u data=%p\n", cmd, len, data);
+    BASE_LOGI("dce", "ioctl cmd={:#x} len={} data={:p}", cmd, len, data);
     printVideoOutCaller();
     if (data && len && len <= 0x200)
       dumpStruct(data, len);
@@ -316,8 +317,8 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // Other query/config sub-ops (1, 6, 0xc, ...). Soft-succeed without
       // touching arg fields whose role (pointer vs scalar) we haven't pinned.
       if (g_dceTrace())
-        std::printf("[dce] 0xc0308203 sub-op %#llx -> 0\n",
-                    (unsigned long long)s[0]);
+        BASE_LOGI("dce", "0xc0308203 sub-op {:#x} -> 0",
+                  (unsigned long long)s[0]);
       return 0;
     }
   }
@@ -348,8 +349,8 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
     g_dceFlipArg.store(static_cast<int64_t>(s[3]));
     g_dceFlipCount.fetch_add(1);  // a per-flip count reported back in GetFlipStatus
     if (g_dceTrace())
-      std::printf("[dce] submitFlip buf=%d flipArg=%#llx\n", (int)s[1],
-                  (unsigned long long)s[3]);
+      BASE_LOGI("dce", "submitFlip buf={} flipArg={:#x}", (int)s[1],
+                (unsigned long long)s[3]);
     // Report success: arg[0x40] (s[8]) holds a pointer to the status out-slot
     // the kernel copyouts 8 bytes to (0 on clean success, 88 when a flip is
     // already pending). The caller checks it for 0x58 = ok.
@@ -359,7 +360,7 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
   }
 
   if (g_dceTrace())
-    std::printf("[dce] UNHANDLED ioctl %#x -> 0\n", cmd);
+    BASE_LOGI("dce", "UNHANDLED ioctl {:#x} -> 0", cmd);
   return 0;
 }
 }  // namespace krnl

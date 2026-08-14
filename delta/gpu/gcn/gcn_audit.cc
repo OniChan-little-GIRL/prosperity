@@ -13,6 +13,8 @@
 #include <map>
 #include <unordered_map>
 
+#include <base/logging.h>
+
 #include "gpu/gcn/gcn_disasm.h"
 #include <utl/options.h>
 
@@ -115,7 +117,7 @@ void MaybeWriteReportFile() {
     static bool warned = false;
     if (!warned) {
       warned = true;
-      std::fprintf(stderr, "[shaudit] cannot write report to %s\n", v);
+      BASE_LOGI("shaudit", "cannot write report to {}", v);
     }
   }
 }
@@ -165,7 +167,7 @@ void WriteDumpFiles(const ShaderRecord& rec,
     static bool warned = false;
     if (!warned) {
       warned = true;
-      std::fprintf(stderr, "[shdump] cannot write to %s\n", dir);
+      BASE_LOGI("shdump", "cannot write to {}", dir);
     }
     return;
   }

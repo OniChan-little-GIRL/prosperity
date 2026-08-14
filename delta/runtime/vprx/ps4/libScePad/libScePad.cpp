@@ -14,6 +14,8 @@
 #include <thread>
 #include <vector>
 
+#include <base/logging.h>
+
 #include "gfx/gfx.h"
 #include <cctype>
 #include <utl/options.h>
@@ -129,9 +131,9 @@ void startMemWatch() {
       for (size_t i = 0; i < addrs.size(); i++) {
         uint64_t cur = *reinterpret_cast<volatile uint64_t *>(addrs[i]);
         if (cur != last[i]) {
-          std::fprintf(stderr, "[memwatch] t=%.2f  *%#llx: %016llx -> %016llx\n",
-                       t, (unsigned long long)addrs[i],
-                       (unsigned long long)last[i], (unsigned long long)cur);
+          BASE_LOGI("memwatch", "t={:.2f}  *{:#x}: {:016x} -> {:016x}", t,
+                    (unsigned long long)addrs[i], (unsigned long long)last[i],
+                    (unsigned long long)cur);
           last[i] = cur;
           any = true;
         }
@@ -227,9 +229,9 @@ void startMemPoke() {
         }
         if (!announced[k]) {
           announced[k] = true;
-          std::fprintf(stderr, "[mempoke] t=%.0fms first write %#llx <- %#llx (w%d)\n",
-                       ms, (unsigned long long)target,
-                       (unsigned long long)p.value, p.width);
+          BASE_LOGI("mempoke", "t={:.0f}ms first write {:#x} <- {:#x} (w{})", ms,
+                    (unsigned long long)target, (unsigned long long)p.value,
+                    p.width);
         }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -279,7 +281,7 @@ uint32_t scriptButtons(bool &active) {
         }
     }
     if (!out.empty())
-      std::fprintf(stderr, "[pad] script: %zu steps\n", out.size());
+      BASE_LOGI("pad", "script: {} steps", out.size());
     return out;
   }();
   active = !steps.empty();
@@ -291,8 +293,8 @@ uint32_t scriptButtons(bool &active) {
       static size_t last = ~size_t(0);
       if (last != i) {
         last = i;
-        std::fprintf(stderr, "[pad] script step %zu mask=%#x for %llu reads\n", i,
-                     steps[i].mask, (unsigned long long)steps[i].reads);
+        BASE_LOGI("pad", "script step {} mask={:#x} for {} reads", i,
+                  steps[i].mask, (unsigned long long)steps[i].reads);
       }
       return steps[i].mask;
     }
@@ -358,8 +360,8 @@ uint32_t autoSkipButtons() {
     static uint32_t lastSlot = 0xffffffff;
     if (slot != lastSlot) {
       lastSlot = slot;
-      std::fprintf(stderr, "[sweep] readSeq=%llu now pressing %s\n",
-                   (unsigned long long)g_readSeq, names[slot]);
+      BASE_LOGI("sweep", "readSeq={} now pressing {}", (unsigned long long)g_readSeq,
+                names[slot]);
     }
     uint32_t ph = g_readSeq % 60;
     return (ph < 30) ? btns[slot] : 0;  // hold ~30 reads, release ~30
@@ -433,7 +435,7 @@ uint32_t buttonMask(const std::string &name) {
   for (const auto &b : kBtnNames)
     if (name == b.name) return b.mask;
   if (axisByName(name)) return 0;  // an axis, reported by the caller instead
-  std::fprintf(stderr, "[padscript] unknown button '%s'\n", name.c_str());
+  BASE_LOGI("padscript", "unknown button '{}'", name.c_str());
   return 0;
 }
 
@@ -606,11 +608,9 @@ void fillPadState(PadData *d) {
       first = false;
       lastTraced = buttons;
       lastSticks = sticks;
-      std::fprintf(stderr,
-                   "[padtrace] readSeq=%llu buttons=%#x %s ls=(%u,%u) "
-                   "rs=(%u,%u)\n",
-                   (unsigned long long)g_readSeq, buttons,
-                   buttonNames(buttons).c_str(), lx, ly, rx, ry);
+      BASE_LOGI("padtrace", "readSeq={} buttons={:#x} {} ls=({},{}) rs=({},{})",
+                (unsigned long long)g_readSeq, buttons,
+                buttonNames(buttons).c_str(), lx, ly, rx, ry);
     }
   }
 
@@ -624,8 +624,8 @@ void fillPadState(PadData *d) {
   d->connectedCount = 1;
   d->timestamp = ++g_readSeq;
   if (kPadAutoskip && (g_readSeq % 600 == 1))
-    std::fprintf(stderr, "[pad] readSeq=%llu buttons=%#x\n",
-                 (unsigned long long)g_readSeq, buttons);
+    BASE_LOGI("pad", "readSeq={} buttons={:#x}", (unsigned long long)g_readSeq,
+              buttons);
 }
 
 }  // namespace
@@ -742,8 +742,7 @@ int scePadOpen(int userId, int type, int index, const void *param) {
   // its input path, which the read trace below cannot tell apart from a title
   // that opened one and is ignoring it.
   if (kPadTrace)
-    std::fprintf(stderr, "[padtrace] open user=%d type=%d index=%d\n", userId,
-                 type, index);
+    BASE_LOGI("padtrace", "open user={} type={} index={}", userId, type, index);
   startPadExperiments();
   return 1;  // positive handle = success
 }

@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include <base/logging.h>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -312,11 +313,11 @@ void smodule::digestDynamic() {
 
   if (kImplibTrace) {
     for (auto &l : impLibs)
-      std::printf("[implib] %s id=%u %s\n", info.name.c_str(), l.id,
-                  l.name ? l.name : "?");
+      BASE_LOGI("implib", "{} id={} {}", info.name.c_str(), l.id,
+                l.name ? l.name : "?");
     for (auto &m : impModules)
-      std::printf("[impmod] %s id=%u %s\n", info.name.c_str(), m.id,
-                  m.name ? m.name : "?");
+      BASE_LOGI("impmod", "{} id={} {}", info.name.c_str(), m.id,
+                m.name ? m.name : "?");
   }
 }
 
@@ -419,10 +420,11 @@ void smodule::digestDynamicPs5(const ELFPgHeader *dynS) {
     numSymbols = reinterpret_cast<uint32_t *>(hashes)[1];
 
   if (kImplibTrace)
-    std::printf("[ps5dyn] %s strtab=%p sz=%llu syms=%u rela=%u jmp=%u needed=%llu\n",
-                info.name.c_str(), (void *)strtab.ptr,
-                (unsigned long long)strtab.size, numSymbols, numRela, numJmpSlots,
-                (unsigned long long)sharedObjects.size());
+    BASE_LOGI("ps5dyn",
+              "{} strtab={:p} sz={} syms={} rela={} jmp={} needed={}",
+              info.name.c_str(), (void *)strtab.ptr,
+              (unsigned long long)strtab.size, numSymbols, numRela, numJmpSlots,
+              (unsigned long long)sharedObjects.size());
 }
 
 // DELTA_GUEST_BRK=<name substring>:<hex offset>[,...]: plant a ud2 at a guest
@@ -449,8 +451,8 @@ static void startNoExecWatch() {
       std::this_thread::sleep_for(std::chrono::seconds(delay));
       const int r = ::mprotect(reinterpret_cast<void *>(addr), size,
                                PROT_READ | PROT_WRITE);
-      std::printf("[noexec] %#llx+%#zx -> rw (%d)\n", (unsigned long long)addr,
-                  size, r);
+      BASE_LOGI("noexec", "{:#x}+{:#x} -> rw ({})", (unsigned long long)addr,
+                size, r);
     }).detach();
   });
 }
@@ -486,16 +488,16 @@ void smodule::plantGuestBreakpoints() {
         std::this_thread::sleep_for(std::chrono::seconds(delay));
         at[0] = 0x0F;
         at[1] = 0x0B;  // ud2
-        std::printf("[guestbrk] %s +%#llx -> ud2 at %p (armed after %llus)\n",
-                    name.c_str(), (unsigned long long)off, (void *)at,
-                    (unsigned long long)delay);
+        BASE_LOGI("guestbrk", "{} +{:#x} -> ud2 at {:p} (armed after {}s)",
+                  name.c_str(), (unsigned long long)off, (void *)at,
+                  (unsigned long long)delay);
       }).detach();
       continue;
     }
     at[0] = 0x0F;
     at[1] = 0x0B;  // ud2
-    std::printf("[guestbrk] %s +%#llx -> ud2 at %p\n", info.name.c_str(),
-                (unsigned long long)off, (void *)at);
+    BASE_LOGI("guestbrk", "{} +{:#x} -> ud2 at {:p}", info.name.c_str(),
+              (unsigned long long)off, (void *)at);
   }
 }
 
@@ -533,13 +535,13 @@ void smodule::startModuleWatch() {
         for (size_t k = 0; k < r.size; k += 64)
           h = (h ^ r.addr[k]) * 1099511628211ull;
         if (first) {
-          std::printf("[modcheck] %s seg%zu %p+%#zx digest=%#llx\n",
-                      name.c_str(), i, (const void *)r.addr, r.size,
-                      (unsigned long long)h);
+          BASE_LOGI("modcheck", "{} seg{} {:p}+{:#x} digest={:#x}",
+                    name.c_str(), i, (const void *)r.addr, r.size,
+                    (unsigned long long)h);
         } else if (h != last[i]) {
-          std::printf("[modcheck] %s seg%zu %p+%#zx CHANGED %#llx -> %#llx\n",
-                      name.c_str(), i, (const void *)r.addr, r.size,
-                      (unsigned long long)last[i], (unsigned long long)h);
+          BASE_LOGI("modcheck", "{} seg{} {:p}+{:#x} CHANGED {:#x} -> {:#x}",
+                    name.c_str(), i, (const void *)r.addr, r.size,
+                    (unsigned long long)last[i], (unsigned long long)h);
         }
         last[i] = h;
       }
@@ -995,8 +997,8 @@ bool smodule::resolveImports() {
     // NID#lib#mod). Lets us pin which symbol a given GOT slot resolves to when an
     // LLE module calls an import we mis-emulate.
     if (kRelocTrace)
-      std::printf("[reloc] %s jmpslot@%#lx -> %s\n", info.name.c_str(),
-                  (unsigned long)r->offset, name);
+      BASE_LOGI("reloc", "{} jmpslot@{:#x} -> {}", info.name.c_str(),
+                (unsigned long)r->offset, name);
 
     // unresolved import (missing dep): point at the badcall stub, don't fail
     if (!resolveObfSymbol(name, addr) || !addr) {
@@ -1006,8 +1008,8 @@ bool smodule::resolveImports() {
     }
 
     if (kRelocTrace)
-      std::printf("[reloc]   %s @%#lx resolved -> %#lx\n", name,
-                  (unsigned long)r->offset, (unsigned long)addr);
+      BASE_LOGI("reloc", "  {} @{:#x} resolved -> {:#x}", name,
+                (unsigned long)r->offset, (unsigned long)addr);
 
     // DELTA_FIOS_TRACE: substitute a return-capturing guest wrapper for the
     // libSceFios2 whole-file APIs so the SotC world-container's FHGetSize/FHRead

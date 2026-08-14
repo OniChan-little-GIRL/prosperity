@@ -15,6 +15,7 @@
 // the authoritative PS4/PS5 syscall map. Enumerate with DELTA_PS5_SYSTRACE.
 
 #include <base.h>
+#include <base/logging.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -114,7 +115,7 @@ uintptr_t lv2_get_ps5(uint32_t sid) {
   static std::set<uint32_t> seen;
   if (kPs5SysTrace && seen.insert(sid).second) {
     const char *name = ex ? ex->name : syscall_getname(sid);
-    std::fprintf(stderr, "[ps5sys] %4u  %s\n", sid, name ? name : "?");
+    BASE_LOGI("ps5sys", "{:4}  {}", sid, name ? name : "?");
   }
 
   if (ex) {
