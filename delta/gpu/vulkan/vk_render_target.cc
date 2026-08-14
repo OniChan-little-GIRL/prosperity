@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_render_target.h"
+#include "base/arch.h"
 
 #include "gpu/rhi/renderer.h"
 #include "gpu/vulkan/vk_debug.h"
@@ -47,8 +48,8 @@ DELTA_OPTION(bool, kResolveTrace, "DELTA_GPU_RESOLVETRACE", false);
 // address depends on draw order -- so an artefact that alternates frame to
 // frame has to be tested against variant switching before anything else.
 DELTA_OPTION(bool, kNoVariant, "DELTA_GPU_NOVARIANT", false);
-DELTA_OPTION(uint64_t, kDepthResolveTrace, "DELTA_GPU_DEPTHRESOLVE", 0);
-DELTA_OPTION(uint64_t, kFrameClearRt, "DELTA_GPU_FRAMECLEAR", 0);
+DELTA_OPTION(u64, kDepthResolveTrace, "DELTA_GPU_DEPTHRESOLVE", 0);
+DELTA_OPTION(u64, kFrameClearRt, "DELTA_GPU_FRAMECLEAR", 0);
 }  // namespace
 
 namespace gpu::vk {
@@ -59,8 +60,8 @@ VkImageView SampledImageView(VkImage image,
                              VkImageView identity,
                              VkFormat format,
                              VkImageAspectFlags aspect,
-                             uint32_t swizzle,
-                             std::unordered_map<uint32_t, VkImageView>& views) {
+                             u32 swizzle,
+                             std::unordered_map<u32, VkImageView>& views) {
   const VkComponentMapping components = TextureComponents(swizzle);
   if (components.r == VK_COMPONENT_SWIZZLE_IDENTITY &&
       components.g == VK_COMPONENT_SWIZZLE_IDENTITY &&
@@ -93,11 +94,11 @@ VkImageView SampledImageView(VkImage image,
 // Sampled view of a colour target in `want` rather than the target's own
 // format, when the two are the same size (so the reinterpretation is legal and
 // the bytes line up). Falls back to the target's format when they are not.
-VkImageView SampledViewAs(RTarget& rt, uint32_t swizzle, VkFormat want) {
+VkImageView SampledViewAs(RTarget& rt, u32 swizzle, VkFormat want) {
   if (want == VK_FORMAT_UNDEFINED || want == rt.fmt ||
       FormatBytes(want) != FormatBytes(rt.fmt))
     return SampledView(rt, swizzle);
-  const uint32_t key = swizzle | (static_cast<uint32_t>(want) << 16);
+  const u32 key = swizzle | (static_cast<u32>(want) << 16);
   const auto it = rt.alias_views.find(key);
   if (it != rt.alias_views.end())
     return it->second;
@@ -117,7 +118,7 @@ VkImageView SampledViewAs(RTarget& rt, uint32_t swizzle, VkFormat want) {
   return v;
 }
 
-VkImageView SampledView(RTarget& rt, uint32_t swizzle, bool feedback) {
+VkImageView SampledView(RTarget& rt, u32 swizzle, bool feedback) {
   // A target that became live at this address after the draw took its snapshot
   // (an alias switch, see ActivateRtVariant) has no copy of its own yet.
   // Sampling the attachment instead would be the feedback loop the copy exists
@@ -132,24 +133,24 @@ VkImageView SampledView(RTarget& rt, uint32_t swizzle, bool feedback) {
                                      rt.sampled_views);
 }
 
-VkImageView SampledView(DepthTarget& depth, uint32_t swizzle) {
+VkImageView SampledView(DepthTarget& depth, u32 swizzle) {
   return SampledImageView(depth.image, depth.view, kDepthFormat,
                           VK_IMAGE_ASPECT_DEPTH_BIT, swizzle,
                           depth.sampled_views);
 }
 
-uint64_t RtByteSizeWH(uint32_t w, uint32_t h, VkFormat fmt) {
-  return (uint64_t)w * h * FormatBytes(fmt);
+u64 RtByteSizeWH(u32 w, u32 h, VkFormat fmt) {
+  return (u64)w * h * FormatBytes(fmt);
 }
 
 // Register an RT's footprint pages so the page table can find it by overlap.
-void RegisterRtPages(uint64_t base, uint32_t w, uint32_t h, VkFormat fmt) {
-  uint64_t lo = base >> kRtPageShift;
-  uint64_t hi = (base + RtByteSizeWH(w, h, fmt) - 1) >> kRtPageShift;
-  for (uint64_t p = lo; p <= hi; p++) {
+void RegisterRtPages(u64 base, u32 w, u32 h, VkFormat fmt) {
+  u64 lo = base >> kRtPageShift;
+  u64 hi = (base + RtByteSizeWH(w, h, fmt) - 1) >> kRtPageShift;
+  for (u64 p = lo; p <= hi; p++) {
     auto& v = g_rt_pages[p];
     bool seen = false;
-    for (uint64_t b : v)
+    for (u64 b : v)
       if (b == base) {
         seen = true;
         break;
@@ -226,9 +227,9 @@ void ClearNewRt(RTarget& t) {
 }
 
 bool CreateRtImage(RTarget& t,
-                   uint64_t base,
-                   uint32_t w,
-                   uint32_t h,
+                   u64 base,
+                   u32 w,
+                   u32 h,
                    VkFormat fmt) {
   if (!w || !h)
     return false;
@@ -304,7 +305,7 @@ bool CreateRtImage(RTarget& t,
   ClearNewRt(t);
   BASE_LOGI("gpuvk", "new RT {:#x} {}x{} fmt={}", (unsigned long)base, w, h,
             (int)fmt);
-  NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)t.image, "rt %#lx %ux%u fmt=%d",
+  NameObject(VK_OBJECT_TYPE_IMAGE, (u64)t.image, "rt %#lx %ux%u fmt=%d",
              (unsigned long)base, w, h, (int)fmt);
   return true;
 }
@@ -316,15 +317,15 @@ bool CreateRtImage(RTarget& t,
 // address reads mostly stale pixels. Every lookup in the backend names a target
 // by address alone, so g_rts keeps holding the live target and the other
 // geometries wait here until a draw asks for them again.
-std::unordered_map<uint64_t, std::vector<RTarget>> g_rt_variants;
+std::unordered_map<u64, std::vector<RTarget>> g_rt_variants;
 constexpr size_t kMaxRtVariants = 3;
 
 // Make the image of geometry (w, h, fmt) the live target at `base`, creating it
 // on first use.
 RTarget* ActivateRtVariant(RTarget& live,
-                           uint64_t base,
-                           uint32_t w,
-                           uint32_t h,
+                           u64 base,
+                           u32 w,
+                           u32 h,
                            VkFormat fmt) {
   if (kNoVariant)
     return &live;
@@ -374,7 +375,7 @@ RTarget* ActivateRtVariant(RTarget& live,
 }
 
 // Find or create the render target at guest address `base` (dimensions w x h).
-RTarget* GetRT(uint64_t base, uint32_t w, uint32_t h, VkFormat fmt) {
+RTarget* GetRT(u64 base, u32 w, u32 h, VkFormat fmt) {
   auto it = g_rts.find(base);
   if (it != g_rts.end()) {
     RTarget& live = it->second;
@@ -431,7 +432,7 @@ VkDescriptorSet SnapshotRT(RTarget& rt) {
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = rt.fmt;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)rt.feedback_image,
+    NameObject(VK_OBJECT_TYPE_IMAGE, (u64)rt.feedback_image,
                "rt feedback %ux%u", rt.w, rt.h);
     if (vkCreateImageView(g_dev.device, &vi, nullptr, &rt.feedback_view) !=
         VK_SUCCESS) {
@@ -486,7 +487,7 @@ VkDescriptorSet SnapshotRT(RTarget& rt) {
   return rt.feedback_set;
 }
 
-uint64_t RtByteSize(const RTarget& rt) {
+u64 RtByteSize(const RTarget& rt) {
   return RtByteSizeWH(rt.w, rt.h, rt.fmt);
 }
 // Find or create the depth target at guest address `base` (dimensions w x h).
@@ -497,14 +498,14 @@ uint64_t RtByteSize(const RTarget& rt) {
 // of that image: P.T.'s 1920x1080 depth buffer had a 960x540 clear in its
 // top-left quadrant and nothing anywhere else, so every pass that sampled the
 // depth -- SSAO first, then the whole post chain -- read zero.
-std::unordered_map<uint64_t, std::vector<DepthTarget>> g_depth_variants;
+std::unordered_map<u64, std::vector<DepthTarget>> g_depth_variants;
 constexpr size_t kMaxDepthVariants = 3;
 
 bool CreateDepthImage(DepthTarget& t,
-                      uint64_t base,
-                      uint32_t w,
-                      uint32_t h,
-                      uint64_t stencil_base) {
+                      u64 base,
+                      u32 w,
+                      u32 h,
+                      u64 stencil_base) {
   if (!w || !h)
     return false;
   t.w = w;
@@ -563,7 +564,7 @@ bool CreateDepthImage(DepthTarget& t,
     }
   }
   BASE_LOGI("gpuvk", "new depth {:#x} {}x{}", (unsigned long)base, w, h);
-  NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)t.image, "depth %#lx %ux%u",
+  NameObject(VK_OBJECT_TYPE_IMAGE, (u64)t.image, "depth %#lx %ux%u",
              (unsigned long)base, w, h);
   return true;
 }
@@ -573,10 +574,10 @@ bool CreateDepthImage(DepthTarget& t,
 DELTA_OPTION(bool, kDepthVariants, "DELTA_GPU_DEPTHVARIANTS", true);
 
 DepthTarget* ActivateDepthVariant(DepthTarget& live,
-                                  uint64_t base,
-                                  uint32_t w,
-                                  uint32_t h,
-                                  uint64_t stencil_base) {
+                                  u64 base,
+                                  u32 w,
+                                  u32 h,
+                                  u64 stencil_base) {
   // A depth attachment must COVER the render area: Vulkan lets it be larger,
   // never smaller (VUID-VkRenderingInfo-pNext-06079/06080). Every fallback
   // below used to hand the live target back whatever its geometry, and
@@ -627,7 +628,7 @@ DepthTarget* ActivateDepthVariant(DepthTarget& live,
 // target by address, and the live geometry at that address is whichever pass
 // ran last -- routinely the small half-resolution one. P.T.'s SSAO samples the
 // full-resolution scene depth and was handed the 960x540 variant instead.
-bool ActivateSampledDepthVariant(uint64_t base, uint32_t w, uint32_t h) {
+bool ActivateSampledDepthVariant(u64 base, u32 w, u32 h) {
   if (!base || !w || !h)
     return false;
   auto it = g_depths.find(base);
@@ -646,10 +647,10 @@ bool ActivateSampledDepthVariant(uint64_t base, uint32_t w, uint32_t h) {
   return false;
 }
 
-DepthTarget* GetDepthRT(uint64_t base,
-                        uint32_t w,
-                        uint32_t h,
-                        uint64_t stencil_base) {
+DepthTarget* GetDepthRT(u64 base,
+                        u32 w,
+                        u32 h,
+                        u64 stencil_base) {
   auto it = g_depths.find(base);
   if (it != g_depths.end()) {
     DepthTarget& live = it->second;
@@ -683,7 +684,7 @@ DepthTarget* GetDepthRT(uint64_t base,
 // fullscreen composite and a 64x64 pass to the same address; when the small one
 // was live, the present blit sampled it, found `ever_rendered` false, and
 // resolved to nothing -- a black screen with the whole scene one variant away.
-bool ActivateSampledRtVariant(uint64_t base, uint32_t w, uint32_t h) {
+bool ActivateSampledRtVariant(u64 base, u32 w, u32 h) {
   if (!base || !w || !h)
     return false;
   auto it = g_rts.find(base);
@@ -706,11 +707,11 @@ bool ActivateSampledRtVariant(uint64_t base, uint32_t w, uint32_t h) {
   return false;
 }
 
-uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h) {
+u64 ResolveSampledRT(u64 addr, u32 w, u32 h) {
   if (!addr)
     return 0;
-  uint64_t req_size = w && h ? (uint64_t)w * h * 4 : 4;
-  uint64_t a0 = addr, a1 = addr + req_size;
+  u64 req_size = w && h ? (u64)w * h * 4 : 4;
+  u64 a0 = addr, a1 = addr + req_size;
   // Exact-identity hit: the guest sampled this exact base and it is a live RT
   // of the requested size. That is unambiguously the right image -- return it
   // before any freshness comparison can pick an overlapping cycled buffer
@@ -719,18 +720,18 @@ uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h) {
   if (ex != g_rts.end() && ex->second.ever_rendered &&
       ((!w || !h) || (ex->second.w == w && ex->second.h == h)))
     return addr;
-  uint64_t best = 0;
+  u64 best = 0;
   long best_score = -1;
-  uint32_t candidates = 0, ties = 0;
-  uint64_t tie_with = 0;
-  auto consider = [&](uint64_t b0) {
+  u32 candidates = 0, ties = 0;
+  u64 tie_with = 0;
+  auto consider = [&](u64 b0) {
     auto it = g_rts.find(b0);
     if (it == g_rts.end())
       return;
     const RTarget& rt = it->second;
     if (!rt.ever_rendered)
       return;  // never sample an RT with no content
-    uint64_t b1 = b0 + RtByteSize(rt);
+    u64 b1 = b0 + RtByteSize(rt);
     if (!(a0 < b1 && b0 < a1))
       return;  // no interval overlap
     bool dim_match = (!w || !h) || (rt.w == w && rt.h == h);
@@ -758,14 +759,14 @@ uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h) {
       best = b0;
     }
   };
-  for (uint64_t p = a0 >> kRtPageShift; p <= (a1 - 1) >> kRtPageShift; p++) {
+  for (u64 p = a0 >> kRtPageShift; p <= (a1 - 1) >> kRtPageShift; p++) {
     auto it = g_rt_pages.find(p);
     if (it != g_rt_pages.end())
-      for (uint64_t b0 : it->second)
+      for (u64 b0 : it->second)
         consider(b0);
   }
   if (kResolveTrace && ties) {
-    static std::atomic<uint64_t> n{0};
+    static std::atomic<u64> n{0};
     if (n.fetch_add(1) < 40)
       BASE_LOGI("resolve",
                 "AMBIGUOUS {:#x} {}x{}: {} candidates, {} tied at score {} -- "
@@ -783,7 +784,7 @@ uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h) {
 // be sampled through an R32_FLOAT descriptor whose base denotes an overlapping
 // view rather than DB_Z_WRITE_BASE, so resolve typed depth aliases by footprint
 // too.
-uint64_t ResolveSampledStencil(uint64_t addr) {
+u64 ResolveSampledStencil(u64 addr) {
   if (!addr)
     return 0;
   for (const auto& [base, depth] : g_depths)
@@ -806,12 +807,12 @@ VkImageView StencilSampledView(DepthTarget& depth) {
   return depth.stencil_view;
 }
 
-uint64_t ResolveSampledDepth(uint64_t addr, uint32_t w, uint32_t h) {
+u64 ResolveSampledDepth(u64 addr, u32 w, u32 h) {
   if (!addr)
     return 0;
-  uint64_t req_size = w && h ? (uint64_t)w * h * 4 : 4;
-  uint64_t a1 = addr + req_size;
-  uint64_t best = 0;
+  u64 req_size = w && h ? (u64)w * h * 4 : 4;
+  u64 a1 = addr + req_size;
+  u64 best = 0;
   long best_score = -1;
   for (const auto& [base, depth] : g_depths) {
     if (depth.last_frame <= -1000)
@@ -821,20 +822,20 @@ uint64_t ResolveSampledDepth(uint64_t addr, uint32_t w, uint32_t h) {
     // otherwise a base whose small variant happens to be live stops covering
     // an address its full-resolution one does, and the sample falls through to
     // guest memory -- which for a depth buffer is empty.
-    uint64_t span = depth.guest_w && depth.guest_h
-                        ? (uint64_t)depth.guest_w * depth.guest_h * 4
+    u64 span = depth.guest_w && depth.guest_h
+                        ? (u64)depth.guest_w * depth.guest_h * 4
                         : RtByteSizeWH(depth.w, depth.h, kDepthFormat);
     bool dim_match = (!w || !h) || (depth.w == w && depth.h == h);
     const auto parked = g_depth_variants.find(base);
     if (parked != g_depth_variants.end())
       for (const DepthTarget& v : parked->second) {
         span = std::max(span, v.guest_w && v.guest_h
-                                  ? (uint64_t)v.guest_w * v.guest_h * 4
+                                  ? (u64)v.guest_w * v.guest_h * 4
                                   : RtByteSizeWH(v.w, v.h, kDepthFormat));
         if (w && h && v.w == w && v.h == h)
           dim_match = true;
       }
-    uint64_t b1 = base + span;
+    u64 b1 = base + span;
     if (!(addr < b1 && base < a1))
       continue;
     long score = depth.last_frame;
@@ -851,7 +852,7 @@ uint64_t ResolveSampledDepth(uint64_t addr, uint32_t w, uint32_t h) {
   // a depth target. An address INSIDE a depth allocation that misses resolves
   // to a guest upload of undefined bytes, which reads as depth 0 -- i.e. the
   // far plane -- and nothing downstream looks wrong.
-  if (kDepthResolveTrace && addr == (uint64_t)kDepthResolveTrace) {
+  if (kDepthResolveTrace && addr == (u64)kDepthResolveTrace) {
     static int n = 0;
     if (n++ < 6) {
       base::String depths;
@@ -917,22 +918,22 @@ void SetGuestViewport(const DrawInfo& d) {
 // attachment. depth_base != 0 additionally binds a depth attachment (cleared to
 // depth_clear on its first use each frame, loaded thereafter); depth_base == 0
 // leaves depth unbound (the 2D path).
-bool BeginRegion(const uint64_t* mrt_base,
-                 const uint32_t* mrt_info,
-                 uint32_t mrt_count,
-                 uint32_t w,
-                  uint32_t h,
-                  uint64_t depth_base,
+bool BeginRegion(const u64* mrt_base,
+                 const u32* mrt_info,
+                 u32 mrt_count,
+                 u32 w,
+                  u32 h,
+                  u64 depth_base,
                   float depth_clear,
-                  uint64_t stencil_base,
-                  uint8_t stencil_clear,
+                  u64 stencil_base,
+                  u8 stencil_clear,
                   bool depth_read_only,
-                 uint32_t depth_w,
-                 uint32_t depth_h) {
+                 u32 depth_w,
+                 u32 depth_h) {
   VkRenderingAttachmentInfo colors[8]{};
   RTarget* targets[8]{};
   mrt_count = std::min(mrt_count, 8u);
-  for (uint32_t i = 0; i < mrt_count; i++) {
+  for (u32 i = 0; i < mrt_count; i++) {
     targets[i] = GetRT(mrt_base[i], w, h, ColorTargetFormat(mrt_info[i]));
     if (!targets[i])
       return false;
@@ -942,7 +943,7 @@ bool BeginRegion(const uint64_t* mrt_base,
   if (depth_base && !dt)
     return false;
   g_region.cur_mrt_count = 0;
-  for (uint32_t i = 0; i < mrt_count; i++) {
+  for (u32 i = 0; i < mrt_count; i++) {
     RTarget& rt = *targets[i];
     ImageBarrier(g_frame.cmd, rt.image, rt.layout,
                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -965,7 +966,7 @@ bool BeginRegion(const uint64_t* mrt_base,
     // later one in the same frame reads it). Setting clear_pending from EndFrame
     // does NOT work -- it never reaches this gate -- so the earlier probe that
     // did so tested nothing.
-    if (kFrameClearRt && mrt_base[i] == (uint64_t)kFrameClearRt) {
+    if (kFrameClearRt && mrt_base[i] == (u64)kFrameClearRt) {
       static int cleared_frame = -1;
       if (cleared_frame != g_frame.num) {
         cleared_frame = g_frame.num;
@@ -1017,7 +1018,7 @@ bool BeginRegion(const uint64_t* mrt_base,
   }
   g_region.cur_mrt_count = mrt_count;
   RTarget* primary = mrt_count ? targets[0] : nullptr;
-  uint64_t base = primary ? mrt_base[0] : 0;
+  u64 base = primary ? mrt_base[0] : 0;
   // Depth attachment (3D). Cleared to the guest DB_DEPTH_CLEAR value on its
   // first use this frame, then loaded so multiple regions in a frame share one
   // Z buffer.
@@ -1136,7 +1137,7 @@ bool BeginRegion(const uint64_t* mrt_base,
     info.height = h;
     info.depth_base = depth_base;
     info.stencil_base = stencil_base;
-    for (uint32_t i = 0; i < g_region.cur_mrt_count; i++)
+    for (u32 i = 0; i < g_region.cur_mrt_count; i++)
       if (colors[i].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR)
         info.color_clear_mask |= 1u << i;
     info.depth_clear = dt && depth_att.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1180,16 +1181,16 @@ namespace gpu::rhi {
 using namespace gpu::vk;
 
 void NoteMemoryFill(Renderer& renderer,
-                    uint64_t base,
-                    uint64_t bytes,
-                    uint32_t value) {
+                    u64 base,
+                    u64 bytes,
+                    u32 value) {
   if (!renderer.available() || !bytes)
     return;
   if (trace::Recording())
     trace::RecordMemoryFill(base, bytes, value);
-  const uint64_t end = base + bytes;
-  const auto note = [&](RTarget& rt, uint64_t rt_base) {
-    const uint64_t rt_end = rt_base + RtByteSize(rt);
+  const u64 end = base + bytes;
+  const auto note = [&](RTarget& rt, u64 rt_base) {
+    const u64 rt_end = rt_base + RtByteSize(rt);
     // Only a fill that covers the whole surface is a clear; a partial one is a
     // buffer update that happens to overlap.
     if (base > rt_base || end < rt_end)

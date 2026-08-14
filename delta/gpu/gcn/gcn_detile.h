@@ -13,6 +13,7 @@
  */
 
 #include <array>
+#include "base/arch.h"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -29,31 +30,31 @@ namespace gpu::gcn {
 // microtile bands; the GPU staging paths reuse it for row-major
 // format-convert loops. Only one row-parallel region runs at a time (calls are
 // serialized), matching the single-threaded GPU pipeline.
-void DetileParallelRows(uint32_t rows,
-                        const std::function<void(uint32_t, uint32_t)>& fn);
+void DetileParallelRows(u32 rows,
+                        const std::function<void(u32, u32)>& fn);
 
 // True if tiling_idx denotes a linear surface (no de-tile needed): only
 // DisplayLinearAligned(8) and DisplayLinearGeneral(31) are linear on Liverpool.
-bool TilingIsLinear(uint32_t tiling_idx);
+bool TilingIsLinear(u32 tiling_idx);
 
 struct TextureMipLayout32 {
-  uint64_t offset = 0;  // byte offset of this complete mip level
-  uint64_t size = 0;    // bytes occupied by all physical layers
-  uint32_t width = 0;   // logical dimensions copied to Vulkan
-  uint32_t height = 0;
-  uint32_t pitch = 0;  // storage dimensions after tile-mode alignment
-  uint32_t stored_height = 0;
-  uint32_t thickness = 1;    // slices interleaved in each thick microtile
+  u64 offset = 0;  // byte offset of this complete mip level
+  u64 size = 0;    // bytes occupied by all physical layers
+  u32 width = 0;   // logical dimensions copied to Vulkan
+  u32 height = 0;
+  u32 pitch = 0;  // storage dimensions after tile-mode alignment
+  u32 stored_height = 0;
+  u32 thickness = 1;    // slices interleaved in each thick microtile
   bool macro_tiled = false;  // false for linear and mip-downgraded 1D tiling
 };
 
 struct TextureLayout32 {
   std::array<TextureMipLayout32, 16> mips{};
-  uint64_t size = 0;
-  uint32_t mip_levels = 0;
-  uint32_t layers = 0;
-  uint32_t tiling_idx = 0;
-  uint32_t elem_bytes = 4;  // bytes per element (2/4 = pixel, 8/16 = BCn block)
+  u64 size = 0;
+  u32 mip_levels = 0;
+  u32 layers = 0;
+  u32 tiling_idx = 0;
+  u32 elem_bytes = 4;  // bytes per element (2/4 = pixel, 8/16 = BCn block)
 };
 
 // Compute the complete physical layout of a one-sample 2D/2D-array image whose
@@ -62,21 +63,21 @@ struct TextureLayout32 {
 // contains all array layers. Later macro-tiled mips are downgraded to 1D
 // microtiling when they no longer span a macro tile.
 bool BuildTextureLayout32(TextureLayout32& out,
-                          uint32_t width,
-                          uint32_t height,
-                          uint32_t pitch,
-                          uint32_t layers,
-                          uint32_t mip_levels,
-                          uint32_t tiling_idx,
+                          u32 width,
+                          u32 height,
+                          u32 pitch,
+                          u32 layers,
+                          u32 mip_levels,
+                          u32 tiling_idx,
                           bool pow2_pad,
-                          uint32_t elem_bytes = 4);
+                          u32 elem_bytes = 4);
 
 // De-tile one physical mip/layer into tightly packed row-major elements.
 bool DetileTextureMip32(const void* src,
                         void* dst,
                         const TextureLayout32& layout,
-                        uint32_t mip,
-                        uint32_t layer);
+                        u32 mip,
+                        u32 layer);
 
 // De-tile into rows separated by dst_row_bytes. This avoids an intermediate
 // tightly packed buffer when the consumer already has a pitched linear layout.
@@ -84,22 +85,22 @@ bool DetileTextureMip32Pitched(const void* src,
                                void* dst,
                                size_t dst_row_bytes,
                                const TextureLayout32& layout,
-                               uint32_t mip,
-                               uint32_t layer);
+                               u32 mip,
+                               u32 layer);
 
 // Tile one tightly packed row-major physical mip/layer back into guest layout.
 bool RetileTextureMip32(const void* src,
                         void* dst,
                         const TextureLayout32& layout,
-                        uint32_t mip,
-                        uint32_t layer);
+                        u32 mip,
+                        u32 layer);
 
 // Re-tile from rows separated by src_row_bytes.
 bool RetileTextureMip32Pitched(const void* src,
                                size_t src_row_bytes,
                                void* dst,
                                const TextureLayout32& layout,
-                               uint32_t mip,
-                               uint32_t layer);
+                               u32 mip,
+                               u32 layer);
 
 }  // namespace gpu::gcn

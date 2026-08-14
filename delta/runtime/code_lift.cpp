@@ -13,6 +13,7 @@
 #if defined(DELTA_BACKEND_NATIVE)
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <xbyak.h>
@@ -28,8 +29,8 @@ DELTA_OPTION(bool, kSysliftTrace, "DELTA_SYSLIFT_TRACE", false);
 }  // namespace
 
 namespace krnl {
-uintptr_t lv2_get(uint32_t sysIndex);
-uintptr_t lv2_get_ps5(uint32_t sysIndex);
+uintptr_t lv2_get(u32 sysIndex);
+uintptr_t lv2_get_ps5(u32 sysIndex);
 }
 
 namespace runtime {
@@ -74,7 +75,7 @@ static void printOpInfo(const cs_x86_op &op) {
             (int)op.reg, (int)op.mem.base);
 }
 
-codeLift::codeLift(uint8_t *&rip, uint8_t *ripEndIn)
+codeLift::codeLift(u8 *&rip, u8 *ripEndIn)
     : ripPointer(rip), ripEnd(ripEndIn) {}
 
 codeLift::~codeLift() {
@@ -106,10 +107,10 @@ static bool is_bmi1_instruction(int op) {
          op == X86_INS_BLSMSK || op == X86_INS_BLSR || op == X86_INS_TZCNT;
 };
 
-bool codeLift::transform(uint8_t *data, size_t size, uint64_t base) {
+bool codeLift::transform(u8 *data, size_t size, u64 base) {
   insn = cs_malloc(handle);
 
-  const uint8_t *codePtr = data; // iterator
+  const u8 *codePtr = data; // iterator
   // Executable PT_LOAD segments interleave code with rodata (strings, constants,
   // jump tables) that capstone can't decode. A plain linear sweep stops dead at
   // the first such blob, leaving every later instruction un-lifted; that code
@@ -127,9 +128,9 @@ bool codeLift::transform(uint8_t *data, size_t size, uint64_t base) {
     }
 
     auto detail = insn->detail->x86;
-    // uint32_t dest = static_cast<uint32_t>(X86_REL_ADDR(*insn));
+    // u32 dest = static_cast<u32>(X86_REL_ADDR(*insn));
 
-    auto getOps = [&](int32_t ofs) { return &data[insn->address + ofs]; };
+    auto getOps = [&](i32 ofs) { return &data[insn->address + ofs]; };
 
     /*syscall -> custom handler*/
     if (insn->id == X86_INS_SYSCALL) {
@@ -138,7 +139,7 @@ bool codeLift::transform(uint8_t *data, size_t size, uint64_t base) {
       // It also no-ops unless the preceding bytes form a known syscall number, so
       // a stray `0f 05` in resync'd data is left alone.
       if (insn->address >= 10)
-        emit_syscall(getOps(-10), *(uint32_t *)(getOps(-7)));
+        emit_syscall(getOps(-10), *(u32 *)(getOps(-7)));
     }
 
     // `int` is intentionally NOT rewritten: turning every `cd xx` (common in the
@@ -151,7 +152,7 @@ bool codeLift::transform(uint8_t *data, size_t size, uint64_t base) {
       /*idea inspired by uplift*/
       bool isTls = false;
 
-      for (uint8_t i = 0; i < insn->detail->x86.op_count; i++) {
+      for (u8 i = 0; i < insn->detail->x86.op_count; i++) {
         auto operand = insn->detail->x86.operands[i];
         if (operand.type == X86_OP_MEM) {
           if (operand.mem.segment == X86_REG_FS) {
@@ -174,7 +175,7 @@ bool codeLift::transform(uint8_t *data, size_t size, uint64_t base) {
   return false;
 }
 
-void codeLift::emit_syscall(uint8_t *base, uint32_t idx) {
+void codeLift::emit_syscall(u8 *base, u32 idx) {
   // PS5 titles route to the separate Prospero syscall layer (FreeBSD 11 ABI);
   // never the PS4 table.
   auto *proc = krnl::proc::getActive();
@@ -191,14 +192,14 @@ void codeLift::emit_syscall(uint8_t *base, uint32_t idx) {
     // tail straight to the wrapper's caller, so a failing syscall arrived as
     // rax = errno instead of -1 -- and a wrapper like sceKernelPollEventFlag
     // (`mov ecx,eax; xor eax,eax; cmp ecx,-1`) then reported success.
-    *(uint16_t *)base = 0xB848;
-    *(uint64_t *)(base + 2) = address;
-    *(uint16_t *)(base + 10) = 0xD0FF;
+    *(u16 *)base = 0xB848;
+    *(u64 *)(base + 2) = address;
+    *(u16 *)(base + 10) = 0xD0FF;
   }
 }
 
 /*this implementation is based on uplift*/
-void codeLift::emit_fsbase(uint8_t *base) {
+void codeLift::emit_fsbase(u8 *base) {
   auto &x = insn->detail->x86;
   auto *operands = x.operands;
   if (x.op_count != 2)
@@ -232,8 +233,8 @@ void codeLift::emit_fsbase(uint8_t *base) {
   auto reg = Xbyak::Reg64(capstone_to_xbyak(gpr.reg));
 
   struct fsGen : Xbyak::CodeGenerator {
-    fsGen(Xbyak::Reg64 reg, int32_t disp, uint8_t size, bool isWrite,
-          int32_t guestFsOffset, int32_t scratchOffset) {
+    fsGen(Xbyak::Reg64 reg, i32 disp, u8 size, bool isWrite,
+          i32 guestFsOffset, i32 scratchOffset) {
       if (!isWrite) {
         putSeg(fs);
         mov(reg, ptr[guestFsOffset]);
@@ -257,7 +258,7 @@ void codeLift::emit_fsbase(uint8_t *base) {
     }
   };
 
-  auto fsDisp = static_cast<int32_t>(mem.mem.disp);
+  auto fsDisp = static_cast<i32>(mem.mem.disp);
   fsGen gen(reg, fsDisp, gpr.size, isWrite, krnl::hostGuestFsOffset(),
             krnl::hostFsScratchOffset());
 
@@ -270,8 +271,8 @@ void codeLift::emit_fsbase(uint8_t *base) {
     return;
 
   base[0] = 0xE9;
-  auto disp = static_cast<uint32_t>(ripPointer - &base[5]);
-  *reinterpret_cast<uint32_t *>(&base[1]) = disp;
+  auto disp = static_cast<u32>(ripPointer - &base[5]);
+  *reinterpret_cast<u32 *>(&base[1]) = disp;
 
   /*pad out any remaining code*/
   if (insn->size > 5)
@@ -280,8 +281,8 @@ void codeLift::emit_fsbase(uint8_t *base) {
   std::memcpy(ripPointer, gen.getCode(), gen.getSize());
   auto *returnJump = ripPointer + gen.getSize();
   returnJump[0] = 0xE9;
-  *reinterpret_cast<uint32_t *>(&returnJump[1]) =
-      static_cast<uint32_t>(&base[insn->size] - &returnJump[5]);
+  *reinterpret_cast<u32 *>(&returnJump[1]) =
+      static_cast<u32>(&base[insn->size] - &returnJump[5]);
   if (stubSize < alignedSize)
     std::memset(ripPointer + stubSize, 0xCC, alignedSize - stubSize);
   ripPointer += alignedSize;

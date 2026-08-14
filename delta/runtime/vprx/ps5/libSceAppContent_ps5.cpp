@@ -10,6 +10,7 @@
  */
 
 #include <base/environment_variables.h>
+#include "base/arch.h"
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
 
 #include <cstdint>
@@ -23,14 +24,14 @@
 
 namespace {
 // SCE_APP_CONTENT_APPPARAM_ID_SKU_FLAG == 0; 0 = full game, 1 = trial.
-constexpr uint32_t kSkuFlagFull = 0;
+constexpr u32 kSkuFlagFull = 0;
 
 // Free space reported for both areas, in KiB. Deliberately 1 GiB and not
 // something larger: a caller that converts KiB to bytes in 32 bits wraps to
 // exactly 0 for any value that is a multiple of 4 GiB, which reads as "no
 // space". 1 GiB is 0x40000000 bytes -- positive even as a signed 32-bit count,
 // and far more than a new world needs.
-constexpr uint64_t kAvailableKb = 1024ull * 1024;
+constexpr u64 kAvailableKb = 1024ull * 1024;
 
 constexpr char kTempPoint[] = "/temp0";
 
@@ -57,7 +58,7 @@ void makeHostDirs(const std::string &path) {
   ::mkdir(p.c_str(), 0755);
 }
 
-int PS4ABI appContentInitialize(const void *, uint32_t *bootParam) {
+int PS4ABI appContentInitialize(const void *, u32 *bootParam) {
   if (bootParam)
     *bootParam = 0;
   return 0;
@@ -66,7 +67,7 @@ int PS4ABI appContentInitialize(const void *, uint32_t *bootParam) {
 // paramId 1..4 are the title's own userDefinedParamN, which on Prospero live in
 // /app0/sce_sys/param.json. Scrape the one key rather than pulling in a JSON
 // parser: the file is a flat object of "key": value pairs.
-int32_t userDefinedParam(uint32_t n) {
+i32 userDefinedParam(u32 n) {
   static const std::string json = [] {
     utl::File f = krnl::vfs::openRead("/app0/sce_sys/param.json");
     if (!f.IsOpen())
@@ -83,20 +84,20 @@ int32_t userDefinedParam(uint32_t n) {
   const size_t colon = json.find(':', at);
   return colon == std::string::npos
              ? 0
-             : static_cast<int32_t>(std::strtol(json.c_str() + colon + 1,
+             : static_cast<i32>(std::strtol(json.c_str() + colon + 1,
                                                 nullptr, 10));
 }
 
-int PS4ABI appContentAppParamGetInt(uint32_t paramId, int32_t *value) {
+int PS4ABI appContentAppParamGetInt(u32 paramId, i32 *value) {
   if (!value)
     return -1;
-  *value = paramId == 0 ? static_cast<int32_t>(kSkuFlagFull)
+  *value = paramId == 0 ? static_cast<i32>(kSkuFlagFull)
                         : userDefinedParam(paramId);
   return 0;
 }
 
 // SceAppContentMountPoint is a char[16] the caller uses as a path prefix.
-int PS4ABI appContentTemporaryDataMount2(uint32_t /*option*/, void *mountPoint) {
+int PS4ABI appContentTemporaryDataMount2(u32 /*option*/, void *mountPoint) {
   if (!mountPoint)
     return -1;
   const std::string host = tempHostDir();
@@ -109,7 +110,7 @@ int PS4ABI appContentTemporaryDataMount2(uint32_t /*option*/, void *mountPoint) 
 
 int PS4ABI appContentTemporaryDataUnmount(const void *) { return 0; }
 
-int PS4ABI appContentGetAvailableSpaceKb(const void *, uint64_t *availableKb) {
+int PS4ABI appContentGetAvailableSpaceKb(const void *, u64 *availableKb) {
   if (!availableKb)
     return -1;
   *availableKb = kAvailableKb;

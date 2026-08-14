@@ -2,16 +2,17 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 #include "tty6_dev.h"
 
 namespace krnl {
 tty6Device::tty6Device(proc *p) : device(p) {}
 
-bool tty6Device::init(const char *, uint32_t, uint32_t) { return true; }
+bool tty6Device::init(const char *, u32, u32) { return true; }
 
-uint8_t *tty6Device::map(void *addr, size_t, uint32_t, uint32_t, size_t) {
+u8 *tty6Device::map(void *addr, size_t, u32, u32, size_t) {
   __debugbreak();
-  return reinterpret_cast<uint8_t *>(-1);
+  return reinterpret_cast<u8 *>(-1);
   // return SysError::SUCCESS;
 }
 } // namespace krnl

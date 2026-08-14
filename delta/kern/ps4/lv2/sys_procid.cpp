@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -25,7 +26,7 @@ static constexpr int kGamePid = 0x1337;
 
 // A finite open-file ceiling the guest can size fd tables / fd_sets against.
 // getrlimit(NOFILE) and getdtablesize must agree on it.
-static constexpr int64_t kMaxFiles = 4096;
+static constexpr i64 kMaxFiles = 4096;
 
 int PS4ABI sys_getppid() { return 0; }
 
@@ -34,18 +35,18 @@ int PS4ABI sys_geteuid() { return 1; }
 int PS4ABI sys_getgid() { return 1; }
 int PS4ABI sys_getegid() { return 1; }
 
-int PS4ABI sys_setuid(uint32_t uid) { return 0; }
-int PS4ABI sys_seteuid(uint32_t uid) { return 0; }
-int PS4ABI sys_setgid(uint32_t gid) { return 0; }
-int PS4ABI sys_setegid(uint32_t gid) { return 0; }
-int PS4ABI sys_setresuid(uint32_t ruid, uint32_t euid, uint32_t suid) {
+int PS4ABI sys_setuid(u32 uid) { return 0; }
+int PS4ABI sys_seteuid(u32 uid) { return 0; }
+int PS4ABI sys_setgid(u32 gid) { return 0; }
+int PS4ABI sys_setegid(u32 gid) { return 0; }
+int PS4ABI sys_setresuid(u32 ruid, u32 euid, u32 suid) {
   return 0;
 }
-int PS4ABI sys_setresgid(uint32_t rgid, uint32_t egid, uint32_t sgid) {
+int PS4ABI sys_setresgid(u32 rgid, u32 egid, u32 sgid) {
   return 0;
 }
 
-int PS4ABI sys_getresuid(uint32_t *ruid, uint32_t *euid, uint32_t *suid) {
+int PS4ABI sys_getresuid(u32 *ruid, u32 *euid, u32 *suid) {
   if (ruid)
     *ruid = 1;
   if (euid)
@@ -54,7 +55,7 @@ int PS4ABI sys_getresuid(uint32_t *ruid, uint32_t *euid, uint32_t *suid) {
     *suid = 1;
   return 0;
 }
-int PS4ABI sys_getresgid(uint32_t *rgid, uint32_t *egid, uint32_t *sgid) {
+int PS4ABI sys_getresgid(u32 *rgid, u32 *egid, u32 *sgid) {
   if (rgid)
     *rgid = 1;
   if (egid)
@@ -67,11 +68,11 @@ int PS4ABI sys_getresgid(uint32_t *rgid, uint32_t *egid, uint32_t *sgid) {
 // Report "clean" so libc doesn't disable env-based behaviour or harden itself.
 int PS4ABI sys_issetugid() { return 0; }
 
-int PS4ABI sys_getlogin(char *buf, uint32_t namelen) {
+int PS4ABI sys_getlogin(char *buf, u32 namelen) {
   if (!buf || namelen == 0)
     return -SysError::eINVAL;
   static const char name[] = "game";
-  uint32_t n = sizeof(name); // includes NUL
+  u32 n = sizeof(name); // includes NUL
   if (n > namelen)
     n = namelen;
   std::memcpy(buf, name, n);
@@ -82,18 +83,18 @@ int PS4ABI sys_getlogin(char *buf, uint32_t namelen) {
 int PS4ABI sys_setlogin(const char *name) { return 0; }
 
 // Track the mask so the set/get-previous round trip stays consistent.
-int PS4ABI sys_umask(uint32_t newmask) {
-  static uint32_t mask = 022;
-  uint32_t prev = mask;
+int PS4ABI sys_umask(u32 newmask) {
+  static u32 mask = 022;
+  u32 prev = mask;
   mask = newmask & 0777;
   return prev;
 }
 
 int PS4ABI sys_getpgrp() { return kGamePid; }
-int PS4ABI sys_setpgid(uint32_t pid, uint32_t pgid) { return 0; }
-int PS4ABI sys_getpgid(uint32_t pid) { return kGamePid; }
+int PS4ABI sys_setpgid(u32 pid, u32 pgid) { return 0; }
+int PS4ABI sys_getpgid(u32 pid) { return kGamePid; }
 int PS4ABI sys_setsid() { return kGamePid; }
-int PS4ABI sys_getsid(uint32_t pid) { return kGamePid; }
+int PS4ABI sys_getsid(u32 pid) { return kGamePid; }
 
 // struct rusage is ~144 bytes on LP64; we keep no accounting, so zero it.
 int PS4ABI sys_getrusage(int who, void *rusage) {
@@ -114,7 +115,7 @@ int PS4ABI sys_getrlimit(int which, void *rlp) {
   if (static_cast<unsigned>(which) > 0xC)
     return -SysError::eINVAL;
   enum { kCore = 4, kNproc = 7, kNofile = 8, kNpts = 11 };
-  int64_t lim = INT64_MAX;
+  i64 lim = INT64_MAX;
   switch (which) {
   case kNofile: lim = kMaxFiles; break;
   case kNproc:  lim = 256; break;
@@ -122,7 +123,7 @@ int PS4ABI sys_getrlimit(int which, void *rlp) {
   case kCore:   lim = 0; break;
   default: break; // unlimited
   }
-  auto *r = static_cast<int64_t *>(rlp);
+  auto *r = static_cast<i64 *>(rlp);
   r[0] = lim; // rlim_cur
   r[1] = lim; // rlim_max
   return 0;
@@ -151,11 +152,11 @@ int PS4ABI sys_uname(void *name) {
   return 0;
 }
 
-int PS4ABI sys_gethostname(char *buf, uint32_t len) {
+int PS4ABI sys_gethostname(char *buf, u32 len) {
   if (!buf || len == 0)
     return -SysError::eINVAL;
   static const char host[] = "ps4";
-  uint32_t n = sizeof(host); // includes NUL
+  u32 n = sizeof(host); // includes NUL
   if (n > len)
     n = len;
   std::memcpy(buf, host, n);
@@ -163,12 +164,12 @@ int PS4ABI sys_gethostname(char *buf, uint32_t len) {
   return 0;
 }
 
-int PS4ABI sys_sethostname(const char *name, uint32_t len) { return 0; }
+int PS4ABI sys_sethostname(const char *name, u32 len) { return 0; }
 
 int PS4ABI sys_getdtablesize() { return static_cast<int>(kMaxFiles); }
 
 // We deliver no real signals; log the attempt and pretend it landed.
-int PS4ABI sys_kill(uint32_t pid, int sig) {
+int PS4ABI sys_kill(u32 pid, int sig) {
   BASE_LOGI("procid", "kill(pid={}, sig={}) ignored", pid, sig);
   return 0;
 }
@@ -209,9 +210,9 @@ int PS4ABI sys_sigwait(const void *set, int *sig) {
 int PS4ABI sys_sigsuspend(const void *sigmask) { return -SysError::eINTR; }
 
 // struct rtprio{uint16 type; uint16 prio}: report RTP_PRIO_NORMAL/prio 0.
-int PS4ABI sys_rtprio(int function, uint32_t pid, void *rtprio) {
+int PS4ABI sys_rtprio(int function, u32 pid, void *rtprio) {
   if (rtprio) {
-    auto *rp = static_cast<uint16_t *>(rtprio);
+    auto *rp = static_cast<u16 *>(rtprio);
     rp[0] = 2; // RTP_PRIO_NORMAL
     rp[1] = 0;
   }
@@ -219,7 +220,7 @@ int PS4ABI sys_rtprio(int function, uint32_t pid, void *rtprio) {
 }
 
 // Single process, no children.
-int PS4ABI sys_wait4(uint32_t pid, int *status, int options, void *rusage) {
+int PS4ABI sys_wait4(u32 pid, int *status, int options, void *rusage) {
   return -SysError::eCHILD;
 }
 } // namespace krnl

@@ -10,26 +10,27 @@
 // target costs the build no new dependency.
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu::vk {
 
 // 8 bits per channel, 4 channels, tightly packed, top row first.
 bool WritePngRgba8(const char* path,
-                   const uint8_t* rgba,
-                   uint32_t width,
-                   uint32_t height);
+                   const u8* rgba,
+                   u32 width,
+                   u32 height);
 
 // 16 bits per channel (host byte order in, big-endian in the file), 4 channels.
 // The lossless form for an HDR target: no exposure choice is baked in.
 bool WritePngRgba16(const char* path,
-                    const uint16_t* rgba,
-                    uint32_t width,
-                    uint32_t height);
+                    const u16* rgba,
+                    u32 width,
+                    u32 height);
 
 // Raw zlib stream (deflate + header + adler32), exposed for the PNG writers
 // and for the unit test that round-trips it. Returns bytes written into `out`,
 // which must hold at least DeflateBound(len).
-uint64_t DeflateBound(uint64_t len);
-uint64_t ZlibCompress(const uint8_t* data, uint64_t len, uint8_t* out);
+u64 DeflateBound(u64 len);
+u64 ZlibCompress(const u8* data, u64 len, u8* out);
 
 }  // namespace gpu::vk

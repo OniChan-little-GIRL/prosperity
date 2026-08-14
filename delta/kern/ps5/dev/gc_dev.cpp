@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/xstring.h>
@@ -41,9 +42,9 @@ DELTA_OPTION(bool, kGcTrace, "DELTA_GC_TRACE", false);
 
 // PS5 AGC submit bridge (delta_gpu, gpu/ps5): forward the DCB to the PS5 command
 // processor, which follows INDIRECT_BUFFER chains and decodes the draws.
-extern "C" void prosperity_agc_submit(uint64_t dcbBase, uint32_t sizeBytes);
+extern "C" void prosperity_agc_submit(u64 dcbBase, u32 sizeBytes);
 // PS5 present bridge: end the frame and present the rendered RT to the window.
-extern "C" void prosperity_agc_flip(uint64_t scanoutBase);
+extern "C" void prosperity_agc_flip(u64 scanoutBase);
 
 // Set once the title issues the mode-1 end-of-frame ioctl. Until then the frame
 // has to be ended somewhere, and the start of a state submit is the only other
@@ -53,11 +54,11 @@ static std::atomic<bool> g_sawEndOfFrame{false};
 // from sceVideoOutSubmitFlip*'s bufferIndex via the registered-buffer table
 // (libSceVideoOut_ps5.cpp). The AGC flip ioctls below carry no buffer field, so
 // they present this instead of falling back to whichever RT was drawn last.
-extern "C" uint64_t prosperity_ps5_scanout_base();
+extern "C" u64 prosperity_ps5_scanout_base();
 
 // DELTA_FLIP_TRACE: log the scanout base each AGC flip presents, so the derived
 // per-flip buffer can be checked against the registered display buffers.
-static void traceFlip(const char *site, uint64_t base) {
+static void traceFlip(const char *site, u64 base) {
   if (kFlipTrace)
     BASE_LOGI("flip", "{} present={:#x}", site, (unsigned long)base);
 }
@@ -65,26 +66,26 @@ static void traceFlip(const char *site, uint64_t base) {
 namespace krnl {
 gcDevicePs5::gcDevicePs5(proc *p) : device(p) {}
 
-bool gcDevicePs5::init(const char *, uint32_t, uint32_t) { return true; }
+bool gcDevicePs5::init(const char *, u32, u32) { return true; }
 
 // Diagnostic (DELTA_AGC_TRACE): scan one GPU-aperture page for a draw-DCB PM4
 // header to locate the command buffer if a submit-arg pointer reads zero.
-static void scanPagePm4(void *ctx, uint8_t *p, size_t sz) {
+static void scanPagePm4(void *ctx, u8 *p, size_t sz) {
   int *hits = static_cast<int *>(ctx);
-  auto isDcb = [](uint32_t h) {
+  auto isDcb = [](u32 h) {
     if ((h >> 30) != 3) return false;
-    uint32_t op = (h >> 8) & 0xFF;
+    u32 op = (h >> 8) & 0xFF;
     return op == 0x69 || op == 0x76 || op == 0x79 || op == 0x3F || op == 0x2D ||
            op == 0x27 || op == 0x35 || op == 0x15;
   };
-  auto *w = reinterpret_cast<const uint32_t *>(p);
-  uint64_t n = sz / 4;
+  auto *w = reinterpret_cast<const u32 *>(p);
+  u64 n = sz / 4;
   if (n > 0x400000) n = 0x400000;
   int perPage = 0;
-  for (uint64_t j = 0; j < n && *hits < 24 && perPage < 4; j++) {
+  for (u64 j = 0; j < n && *hits < 24 && perPage < 4; j++) {
     if (isDcb(w[j])) {
       BASE_LOGI("agc", "  DCB@{:#x} hdr={:08x} op={:#x}",
-                (unsigned long)(reinterpret_cast<uint64_t>(p) + j * 4), w[j],
+                (unsigned long)(reinterpret_cast<u64>(p) + j * 4), w[j],
                 (w[j] >> 8) & 0xFF);
       (*hits)++;
       perPage++;
@@ -97,14 +98,14 @@ static void scanPagePm4(void *ctx, uint8_t *p, size_t sz) {
 // ceiling); a fixed band around one title's pool silently drops every command
 // buffer another title allocates outside it, so nothing renders and the game
 // waits forever on a GPU label the dropped submits would have written.
-static inline bool gpuAddr(uint64_t a) {
+static inline bool gpuAddr(u64 a) {
   return a >= 0x1000000000ull && a < 0x10000000000ull;
 }
 
 // The submit paths and trace probes below deref candidate pointers pulled out of
 // a submit arg. Plenty of those words look like GPU addresses without being
 // mapped, so the range check alone is not enough to read through one.
-static inline bool gpuReadable(uint64_t a, size_t n) {
+static inline bool gpuReadable(u64 a, size_t n) {
   return gpuAddr(a) && utl::isMemoryRangeMapped(reinterpret_cast<void *>(a), n);
 }
 
@@ -112,7 +113,7 @@ static inline bool gpuReadable(uint64_t a, size_t n) {
 // run time rather than hardcoded (each title's ring sits wherever its driver
 // mapped it). Lets the per-frame trace re-read the ring long after the 0x8121
 // ioctls have stopped.
-static uint64_t g_acqRingLo = 0, g_acqRingHi = 0;
+static u64 g_acqRingLo = 0, g_acqRingHi = 0;
 
 // The mode-1 submit ioctls are INOUT on firmware 13.60: libSceAgcDriver presets a
 // status dword in the arg and, on return, treats the submit as FAILED unless the
@@ -120,13 +121,13 @@ static uint64_t g_acqRingLo = 0, g_acqRingHi = 0;
 // call that carries the title's own command buffer, so the frame is dropped
 // entirely -- no draws reach us, and the completion label the title spins on is
 // never written. The IN-only variants older firmware issues have no such field.
-static void clearSubmitStatus(uint32_t cmd, void *data, uint32_t offset) {
+static void clearSubmitStatus(u32 cmd, void *data, u32 offset) {
   if (!data || !(cmd & 0x40000000u))
     return;
-  const uint32_t len = (cmd >> 16) & 0x1fff;
-  if (offset + sizeof(uint32_t) > len)
+  const u32 len = (cmd >> 16) & 0x1fff;
+  if (offset + sizeof(u32) > len)
     return;
-  std::memset(static_cast<uint8_t *>(data) + offset, 0, sizeof(uint32_t));
+  std::memset(static_cast<u8 *>(data) + offset, 0, sizeof(u32));
 }
 
 // GNM-style submit descriptor array: each 4-dword entry is an IT_INDIRECT_BUFFER
@@ -134,24 +135,24 @@ static void clearSubmitStatus(uint32_t cmd, void *data, uint32_t offset) {
 // sizeDwords]. libSceAgcDriver/GnmDriver submits the pipeline+shader setup and
 // draws through these on PS5 too; forward each buffer to the PS5 command processor
 // (they carry the SET_SH_REG shader binding the AGC mode-1 path never emits).
-static void submitGnmDescArray(uint64_t descPtr, uint32_t count) {
-  const uint32_t *d = reinterpret_cast<const uint32_t *>(descPtr);
+static void submitGnmDescArray(u64 descPtr, u32 count) {
+  const u32 *d = reinterpret_cast<const u32 *>(descPtr);
   if (!d || count > 0x1000) return;
-  for (uint32_t i = 0; i < count; i++) {
-    const uint32_t *e = d + i * 4;
-    uint32_t hdr = e[0];
-    uint64_t addr = (static_cast<uint64_t>(e[2] & 0xFF) << 32) | e[1];
-    uint32_t bytes = (e[3] & 0xFFFFF) * 4;
+  for (u32 i = 0; i < count; i++) {
+    const u32 *e = d + i * 4;
+    u32 hdr = e[0];
+    u64 addr = (static_cast<u64>(e[2] & 0xFF) << 32) | e[1];
+    u32 bytes = (e[3] & 0xFFFFF) * 4;
     if (bytes && (hdr == 0xC0023F00u || hdr == 0xC0023300u) &&
         gpuReadable(addr, bytes))
       prosperity_agc_submit(addr, bytes);
   }
 }
 
-int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
+i32 gcDevicePs5::ioctl(u32 cmd, void *data) {
   if (kGcIoctlCensus) {
     static std::mutex mtx;
-    static std::map<uint32_t, uint64_t> hist;
+    static std::map<u32, u64> hist;
     static auto last = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(mtx);
     hist[cmd]++;
@@ -167,22 +168,22 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
     BASE_LOGI("gc", "ioctl({:x}) data={:p}", cmd, data);
   switch (cmd) {
   case 0xC0108102: {  // GNM submit: {u32 a0, u32 count, u64 descPtr}
-    struct argl { uint32_t a0; uint32_t count; uint64_t descPtr; };
+    struct argl { u32 a0; u32 count; u64 descPtr; };
     auto *a = static_cast<argl *>(data);
     if (a) submitGnmDescArray(a->descPtr, a->count);
     return 0;
   }
   case 0xC018810A: {  // GNM submit variant: {a0, count, a2, pad, descPtr}
-    struct argl { uint32_t a0, count, a2, pad; uint64_t descPtr; };
+    struct argl { u32 a0, count, a2, pad; u64 descPtr; };
     auto *a = static_cast<argl *>(data);
     if (a) submitGnmDescArray(a->descPtr, a->count);
     return 0;
   }
   case 0xC020810C: {  // GNM submit-and-flip: {a0, count, descPtr, flipPtr, flag}
-    struct argl { uint32_t a0, count; uint64_t descPtr, flipPtr; uint32_t flag; };
+    struct argl { u32 a0, count; u64 descPtr, flipPtr; u32 flag; };
     auto *a = static_cast<argl *>(data);
     if (a) submitGnmDescArray(a->descPtr, a->count);
-    uint64_t scanout = prosperity_ps5_scanout_base();
+    u64 scanout = prosperity_ps5_scanout_base();
     traceFlip("0xC020810C", scanout);
     prosperity_agc_flip(scanout);  // present the flipped display buffer
     return 0;
@@ -190,12 +191,12 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
   case 0x40048135:  // AGC query: OUT dword (submit/queue id). The driver stores
                     // it; 0 is accepted.
     if (data)
-      *static_cast<uint32_t *>(data) = 0;
+      *static_cast<u32 *>(data) = 0;
     return 0;
   case 0xC004812E:  // AGC init: INOUT dword. 0 tells AgcDriver to map its own
                     // submit doorbell (which then succeeds).
     if (data)
-      *static_cast<uint32_t *>(data) = 0;
+      *static_cast<u32 *>(data) = 0;
     return 0;
   case 0xC0408121: {  // AGC submit (INOUT, 64 bytes). The DCB ring window is at
                       // arg+0x10 (= ACQRB + submitIdx*0x8000, 0x4000 bytes) with a
@@ -203,17 +204,17 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                       // arg per the OUT convention. (This title uses the mode-1
                       // 0x80488131 path instead; this ring reads empty for it.)
     if (data) {
-      auto *a = static_cast<uint8_t *>(data);
-      uint64_t base = 0, base2 = 0;
+      auto *a = static_cast<u8 *>(data);
+      u64 base = 0, base2 = 0;
       std::memcpy(&base, a + 0x10, 8);
       std::memcpy(&base2, a + 0x18, 8);
-      uint32_t size = 0x8000;
+      u32 size = 0x8000;
       if (gpuAddr(base)) {
         if (!g_acqRingLo || base < g_acqRingLo) g_acqRingLo = base;
         if (base + size > g_acqRingHi) g_acqRingHi = base + size;
       }
       static int dumps = 0;
-      static uint64_t calls = 0;
+      static u64 calls = 0;
       ++calls;
       // The first few submits are engine init, where the ring legitimately holds
       // nothing. Sample later ones too, or "the ring reads empty" only ever
@@ -221,7 +222,7 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       if (kAgcTrace && (dumps < 8 || (calls % 200 == 0 && dumps < 12))) {
         dumps++;
         BASE_LOGI("agc", "--- submit #{} ---", (unsigned long long)calls);
-        auto *w = reinterpret_cast<uint32_t *>(a);
+        auto *w = reinterpret_cast<u32 *>(a);
         base::String line;
         base::FormatTo(line, "submit arg[0..15]:");
         for (int k = 0; k < 16; k++)
@@ -230,9 +231,9 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                        (unsigned long)base2, size);
         BASE_LOGI("agc", "{}", line.c_str());
         for (int k = 0; k + 1 < 16; k++) {
-          uint64_t p = (static_cast<uint64_t>(w[k + 1]) << 32) | w[k];
+          u64 p = (static_cast<u64>(w[k + 1]) << 32) | w[k];
           if (gpuReadable(p, 32)) {
-            auto *pw = reinterpret_cast<const uint32_t *>(p);
+            auto *pw = reinterpret_cast<const u32 *>(p);
             base::String line;
             base::FormatTo(line, "  arg[{}] ptr={:#x} ->", k, (unsigned long)p);
             for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", pw[j]);
@@ -249,9 +250,9 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         // that does not see its writes": count non-zero dwords in the ring
         // window, regardless of whether they look like PM4.
         if (gpuReadable(base, 0x8000)) {
-          auto *rw = reinterpret_cast<const uint32_t *>(base);
-          uint32_t nz = 0, first = 0;
-          for (uint32_t k = 0; k < 0x8000 / 4; k++)
+          auto *rw = reinterpret_cast<const u32 *>(base);
+          u32 nz = 0, first = 0;
+          for (u32 k = 0; k < 0x8000 / 4; k++)
             if (rw[k]) { if (!nz) first = k; nz++; }
           BASE_LOGI("agc", "  ring {:#x}: {}/{} dwords non-zero (first @dw {})",
                     (unsigned long)base, nz, 0x8000u / 4, first);
@@ -261,11 +262,11 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       // afterwards and kicks the GPU through the doorbell instead. Re-read the
       // PREVIOUS submit's window here: if it has packets now, the ioctl is a
       // ring-window acquire and the submit boundary is the doorbell, not this.
-      static uint64_t prevBase = 0;
+      static u64 prevBase = 0;
       if (kAgcTrace && prevBase && prevBase != base && gpuReadable(prevBase, 0x8000)) {
-        auto *pw = reinterpret_cast<const uint32_t *>(prevBase);
-        uint32_t nz = 0;
-        for (uint32_t k = 0; k < 0x8000 / 4; k++)
+        auto *pw = reinterpret_cast<const u32 *>(prevBase);
+        u32 nz = 0;
+        for (u32 k = 0; k < 0x8000 / 4; k++)
           if (pw[k]) nz++;
         if (nz && dumps <= 12) {
           base::String line;
@@ -283,15 +284,15 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       static int ringN = 0;
       if (kAgcRingdump && ringN < 3) {
         ringN++;
-        auto *w = reinterpret_cast<const uint32_t *>(a);
+        auto *w = reinterpret_cast<const u32 *>(a);
         base::String line;
         base::FormatTo(line, "arg:");
         for (int k = 0; k < 16; k++) base::FormatTo(line, " {:08x}", w[k]);
         BASE_LOGI("ring", "{}", line.c_str());
-        auto sniff = [](uint64_t p, const char *what) {
+        auto sniff = [](u64 p, const char *what) {
           if (!gpuReadable(p, 1024)) return;
-          const auto *q = reinterpret_cast<const uint32_t *>(p);
-          uint32_t t3 = 0;
+          const auto *q = reinterpret_cast<const u32 *>(p);
+          u32 t3 = 0;
           for (int i = 0; i < 256; i++)
             if ((q[i] >> 30) == 3) t3++;
           BASE_LOGI("ring",
@@ -299,16 +300,16 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                     what, (unsigned long)p, q[0], q[1], q[2], q[3], t3);
         };
         for (int k = 0; k + 1 < 16; k++)
-          sniff((static_cast<uint64_t>(w[k + 1]) << 32) | w[k], "argptr");
-        const uint64_t tbl = 0x80014981d8ull;
+          sniff((static_cast<u64>(w[k + 1]) << 32) | w[k], "argptr");
+        const u64 tbl = 0x80014981d8ull;
         if (gpuAddr(tbl)) {
-          const auto *t = reinterpret_cast<const uint32_t *>(tbl);
+          const auto *t = reinterpret_cast<const u32 *>(tbl);
           base::String line;
           base::FormatTo(line, "table @{:#x}:", (unsigned long)tbl);
           for (int k = 0; k < 16; k++) base::FormatTo(line, " {:08x}", t[k]);
           BASE_LOGI("ring", "{}", line.c_str());
           for (int k = 0; k + 1 < 16; k += 2)
-            sniff((static_cast<uint64_t>(t[k + 1] & 0xFFFF) << 32) | t[k], "tblptr");
+            sniff((static_cast<u64>(t[k + 1] & 0xFFFF) << 32) | t[k], "tblptr");
         }
       }
       // NOTE: the arg window reads empty for this title (mode-1 path is used); the
@@ -334,8 +335,8 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                       // counter that always satisfies a ">= submitted id" wait. Left
                       // at 0 the title spins re-submitting forever.
     if (data) {
-      static uint32_t s_agcDone = 0;
-      *static_cast<uint32_t *>(data) = ++s_agcDone;
+      static u32 s_agcDone = 0;
+      *static_cast<u32 *>(data) = ++s_agcDone;
     }
     return 0;
   }
@@ -359,14 +360,14 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       // the game last flipped via the HLE videoout (bufferIndex -> registered
       // address), not whichever RT drew last.
       if (!g_sawEndOfFrame.load(std::memory_order_relaxed)) {
-        uint64_t scanout = prosperity_ps5_scanout_base();
+        u64 scanout = prosperity_ps5_scanout_base();
         traceFlip("0x80488131", scanout);
         prosperity_agc_flip(scanout);
       }
       static int s_d131 = 0;
       if (kAgcTrace && s_d131 < 6) {
         s_d131++;
-        auto *w = static_cast<const uint32_t *>(data);
+        auto *w = static_cast<const u32 *>(data);
         base::String line;
         base::FormatTo(line, "8131 arg(18 dwords):");
         for (int i = 0; i < 18; i++) base::FormatTo(line, " {:08x}", w[i]);
@@ -374,11 +375,11 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         // The ACQ ring is only ever sampled from the 0x8121 handler, which stops
         // firing once the driver has initialised. Sample it HERE, on the actual
         // per-frame submit, or "the ring is empty" only ever describes start-up.
-        for (uint64_t r = g_acqRingLo; r && r < g_acqRingHi; r += 0x8000) {
+        for (u64 r = g_acqRingLo; r && r < g_acqRingHi; r += 0x8000) {
           if (!gpuReadable(r, 0x8000)) continue;
-          auto *rw = reinterpret_cast<const uint32_t *>(r);
-          uint32_t nz = 0;
-          for (uint32_t k = 0; k < 0x8000 / 4; k++)
+          auto *rw = reinterpret_cast<const u32 *>(r);
+          u32 nz = 0;
+          for (u32 k = 0; k < 0x8000 / 4; k++)
             if (rw[k]) nz++;
           if (!nz) continue;
           base::String line;
@@ -391,18 +392,18 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         // title's own command buffer is chained in at all.
         for (int i = 0; i + 3 < 18; i++) {
           if (w[i] != 0xC0023F00u) continue;
-          uint64_t ib = (static_cast<uint64_t>(w[i + 2] & 0xFF) << 32) | w[i + 1];
-          uint32_t dw = w[i + 3] & 0xFFFFF;
+          u64 ib = (static_cast<u64>(w[i + 2] & 0xFF) << 32) | w[i + 1];
+          u32 dw = w[i + 3] & 0xFFFFF;
           if (dw > 256) dw = 256;
           if (!gpuReadable(ib, dw * 4)) continue;
-          auto *iw = reinterpret_cast<const uint32_t *>(ib);
+          auto *iw = reinterpret_cast<const u32 *>(ib);
           base::String line;
           base::FormatTo(line, "  IB {:#x} ({} dw):", (unsigned long)ib, dw);
-          for (uint32_t k = 0; k < dw; k++) base::FormatTo(line, " {:08x}", iw[k]);
+          for (u32 k = 0; k < dw; k++) base::FormatTo(line, " {:08x}", iw[k]);
           BASE_LOGI("agc", "{}", line.c_str());
         }
       }
-      prosperity_agc_submit(reinterpret_cast<uint64_t>(data), (cmd >> 16) & 0x1fff);
+      prosperity_agc_submit(reinterpret_cast<u64>(data), (cmd >> 16) & 0x1fff);
       clearSubmitStatus(cmd, data, 0x40);
     }
     return 0;
@@ -415,17 +416,17 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                       // 0x80488131 stream is only per-frame register state. Forward
                       // each non-null command buffer to the command processor.
     if (data) {
-      auto *w = static_cast<uint32_t *>(data);
-      uint32_t count = w[1];
-      uint64_t ptr = (static_cast<uint64_t>(w[3]) << 32) | w[2];
+      auto *w = static_cast<u32 *>(data);
+      u32 count = w[1];
+      u64 ptr = (static_cast<u64>(w[3]) << 32) | w[2];
       static int s_d132 = 0;
       if (kAgcTrace && s_d132 < 8) {
         s_d132++;
         BASE_LOGI("agc", "8132 arg=[{:08x} {:08x} {:08x} {:08x}] ptr={:#x} count={}",
                   w[0], w[1], w[2], w[3], (unsigned long)ptr, count);
         if (ptr && count && count < 4096) {
-          auto *dd = reinterpret_cast<const uint32_t *>(ptr);
-          for (uint32_t i = 0; i < count && i < 24; i++)
+          auto *dd = reinterpret_cast<const u32 *>(ptr);
+          for (u32 i = 0; i < count && i < 24; i++)
             BASE_LOGI("agc", "  desc[{}] = {:08x} {:08x} {:08x} {:08x}", i,
                       dd[i * 4], dd[i * 4 + 1], dd[i * 4 + 2], dd[i * 4 + 3]);
         }
@@ -433,13 +434,13 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
       // Census: a whole submit used to be dropped when it carried >= 64
       // descriptors, and individual buffers are skipped when the address does
       // not look like GPU memory. Both are invisible without counting them.
-      static std::atomic<uint64_t> nSubmits{0}, nDropBatch{0}, nDesc{0},
+      static std::atomic<u64> nSubmits{0}, nDropBatch{0}, nDesc{0},
           nFwd{0}, nSkipAddr{0};
       nSubmits.fetch_add(1, std::memory_order_relaxed);
       if (count >= 64) nDropBatch.fetch_add(1, std::memory_order_relaxed);
       if (kGcCensus) {
-        static std::atomic<uint64_t> last{0};
-        uint64_t n = nSubmits.load();
+        static std::atomic<u64> last{0};
+        u64 n = nSubmits.load();
         if (n - last.load() >= 2000) {
           last.store(n);
           BASE_LOGI("gccensus",
@@ -453,10 +454,10 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
         }
       }
       if (ptr && count && count < 64) {
-        auto *d = reinterpret_cast<uint32_t *>(ptr);
-        for (uint32_t i = 0; i < count; i++) {
-          uint64_t buf = (static_cast<uint64_t>(d[i * 4 + 1]) << 32) | d[i * 4];
-          uint32_t sz = d[i * 4 + 2];
+        auto *d = reinterpret_cast<u32 *>(ptr);
+        for (u32 i = 0; i < count; i++) {
+          u64 buf = (static_cast<u64>(d[i * 4 + 1]) << 32) | d[i * 4];
+          u32 sz = d[i * 4 + 2];
           nDesc.fetch_add(1, std::memory_order_relaxed);
           if (sz && gpuReadable(buf, sz * 4)) {
             nFwd.fetch_add(1, std::memory_order_relaxed);
@@ -475,7 +476,7 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
                     // The 8-byte arg carries no buffer field (observed all-zero);
                     // present the buffer the game flipped via the HLE videoout.
     g_sawEndOfFrame.store(true, std::memory_order_relaxed);
-    uint64_t scanout = prosperity_ps5_scanout_base();
+    u64 scanout = prosperity_ps5_scanout_base();
     traceFlip("0x80088133", scanout);
     prosperity_agc_flip(scanout);
     return 0;
@@ -486,35 +487,35 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
   // flip/label, 0x8123 setup) with embedded GPU-pointer probes, to RE the ones we
   // still soft-ok.
   if (data) {
-    uint32_t num = cmd & 0xff;
+    u32 num = cmd & 0xff;
     static int agcDumps = 0;
     if (kAgcTrace && agcDumps < 24 &&
         (num == 0x31 || num == 0x32 || num == 0x33 || num == 0x23)) {
       agcDumps++;
-      uint32_t len = (cmd >> 16) & 0x1fff;
-      auto *w = static_cast<uint32_t *>(data);
+      u32 len = (cmd >> 16) & 0x1fff;
+      auto *w = static_cast<u32 *>(data);
       base::String line;
       base::FormatTo(line, "mode1 ioctl({:x}) len={}:", cmd, len);
-      for (uint32_t k = 0; k * 4 < len && k < 24; k++)
+      for (u32 k = 0; k * 4 < len && k < 24; k++)
         base::FormatTo(line, " {:08x}", w[k]);
       BASE_LOGI("agc", "{}", line.c_str());
-      for (uint32_t k = 0; (k + 1) * 4 < len && k < 24; k++) {
-        uint64_t p = (static_cast<uint64_t>(w[k + 1]) << 32) | w[k];
+      for (u32 k = 0; (k + 1) * 4 < len && k < 24; k++) {
+        u64 p = (static_cast<u64>(w[k + 1]) << 32) | w[k];
         // Follow both GPU-aperture pointers AND host/stack pointers (the mode-1
         // flip/wait ioctls embed a stack ptr to a label/status struct).
         bool gpu = gpuAddr(p);
         bool stk = p >= 0x7ff000000000ull && p < 0x800000000000ull;
         if (gpu || stk) {
-          auto *pw = reinterpret_cast<const uint32_t *>(p);
+          auto *pw = reinterpret_cast<const u32 *>(p);
           base::String line;
           base::FormatTo(line, "  +{} ptr={:#x} ->", k * 4, (unsigned long)p);
           for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", pw[j]);
           // If the struct holds a further (GPU) pointer, deref that too (a label).
           if (stk) {
             for (int e = 0; e < 6; e++) {
-              uint64_t cand = (static_cast<uint64_t>(pw[e + 1]) << 32) | pw[e];
+              u64 cand = (static_cast<u64>(pw[e + 1]) << 32) | pw[e];
               if (gpuAddr(cand)) {
-                auto *cw = reinterpret_cast<const uint32_t *>(cand);
+                auto *cw = reinterpret_cast<const u32 *>(cand);
                 base::FormatTo(line, "\n    [+{}] buf {:#x} sz={:08x} ->", e * 4,
                                (unsigned long)cand, pw[e + 2]);
                 for (int j = 0; j < 8; j++) base::FormatTo(line, " {:08x}", cw[j]);
@@ -535,7 +536,7 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
     BASE_LOGI("gc", "UNHANDLED ioctl({:x}) data={:p}", cmd, data);
   }
   if (data && (cmd & 0x40000000u)) {
-    uint32_t len = (cmd >> 16) & 0x1fff;
+    u32 len = (cmd >> 16) & 0x1fff;
     if (len)
       std::memset(data, 0, len);
   }
@@ -547,13 +548,13 @@ int32_t gcDevicePs5::ioctl(uint32_t cmd, void *data) {
 // offset (MAP_SHARED) so the bytes the CPU writes command packets into and the
 // bytes the command processor reads at submit time are the same. Places the
 // mapping in the low guest aperture the GPU pointers reference.
-uint8_t *gcDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t flags,
+u8 *gcDevicePs5::map(void *addr, size_t len, u32 /*prot*/, u32 flags,
                           size_t offset) {
   int fd = dmemBackingFd();
   if (fd < 0 || len == 0 ||
-      static_cast<uint64_t>(offset) + len > dmemBackingSize())
-    return reinterpret_cast<uint8_t *>(-1);
-  uint8_t *va = static_cast<uint8_t *>(addr);
+      static_cast<u64>(offset) + len > dmemBackingSize())
+    return reinterpret_cast<u8 *>(-1);
+  u8 *va = static_cast<u8 *>(addr);
   const bool fixed = (flags & mFlags::fixed) != 0;
   void *p = MAP_FAILED;
   // Same hint handling as dmaDevicePs5::map: never let the host kernel choose the
@@ -567,19 +568,19 @@ uint8_t *gcDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t fl
     }
   }
   if (p == MAP_FAILED) {
-    uint8_t *base = (va && fixed) ? va : allocLowGuest(len);
+    u8 *base = (va && fixed) ? va : allocLowGuest(len);
     if (!base)
-      return reinterpret_cast<uint8_t *>(-1);
+      return reinterpret_cast<u8 *>(-1);
     p = ::mmap(base, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd,
                static_cast<off_t>(offset));
   }
   if (p == MAP_FAILED)
-    return reinterpret_cast<uint8_t *>(-1);
+    return reinterpret_cast<u8 *>(-1);
   static const bool trace = kGcTrace ||
                             kDmemTrace;
   if (trace)
     BASE_LOGI("gc", "devmap off={:#x} len={:#x} -> {:p} (shared)", offset, len,
               p);
-  return reinterpret_cast<uint8_t *>(p);
+  return reinterpret_cast<u8 *>(p);
 }
 }  // namespace krnl

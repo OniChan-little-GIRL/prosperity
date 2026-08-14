@@ -7,6 +7,7 @@
 #ifdef DELTA_HAVE_SPIRV_BACKEND
 
 #include "gpu/gcn/spirv/spv_post.h"
+#include "base/arch.h"
 
 #include <base/logging.h>
 
@@ -25,7 +26,7 @@
 
 namespace gpu::gcn::spirv {
 
-std::vector<uint32_t> Optimize(const std::vector<uint32_t>& spv) {
+std::vector<u32> Optimize(const std::vector<u32>& spv) {
   spvtools::Optimizer opt(SPV_ENV_VULKAN_1_1);
   opt.SetMessageConsumer([](spv_message_level_t lvl, const char*,
                             const spv_position_t&, const char* msg) {
@@ -37,13 +38,13 @@ std::vector<uint32_t> Optimize(const std::vector<uint32_t>& spv) {
   // stream the translator emits.
   opt.RegisterLegalizationPasses();
   opt.RegisterPerformancePasses();
-  std::vector<uint32_t> out;
+  std::vector<u32> out;
   if (!opt.Run(spv.data(), spv.size(), &out) || out.empty())
     return spv;  // keep the valid-but-unoptimized binary on failure
   return out;
 }
 
-bool Validate(const std::vector<uint32_t>& spv, std::string* err) {
+bool Validate(const std::vector<u32>& spv, std::string* err) {
   spv_context ctx = spvContextCreate(SPV_ENV_VULKAN_1_1);
   spv_diagnostic diag = nullptr;
   spv_const_binary_t bin{spv.data(), spv.size()};
@@ -66,11 +67,11 @@ DELTA_OPTION(const char*,
 // Bump when anything that changes the optimizer's OUTPUT changes -- the pass
 // list here, or the SPIRV-Tools version the build links. Entries from an older
 // generation are simply never looked up.
-constexpr uint32_t kCacheGeneration = 1;
+constexpr u32 kCacheGeneration = 1;
 
-uint64_t HashWords(const std::vector<uint32_t>& w) {
-  uint64_t h = 1469598103934665603ull;  // FNV-1a
-  for (uint32_t x : w) {
+u64 HashWords(const std::vector<u32>& w) {
+  u64 h = 1469598103934665603ull;  // FNV-1a
+  for (u32 x : w) {
     h ^= x;
     h *= 1099511628211ull;
   }
@@ -103,14 +104,14 @@ const std::string& CacheDir() {
   return dir;
 }
 
-std::string EntryPath(uint64_t key) {
+std::string EntryPath(u64 key) {
   char name[32];
   std::snprintf(name, sizeof(name), "/%016llx.spv",
                 static_cast<unsigned long long>(key));
   return CacheDir() + name;
 }
 
-bool ReadEntry(uint64_t key, std::vector<uint32_t>* out) {
+bool ReadEntry(u64 key, std::vector<u32>* out) {
   if (CacheDir().empty())
     return false;
   FILE* f = std::fopen(EntryPath(key).c_str(), "rb");
@@ -133,7 +134,7 @@ bool ReadEntry(uint64_t key, std::vector<uint32_t>* out) {
 
 // Write through a temporary + rename, so a torn file is never observed: two
 // processes recompiling the same shader is normal.
-void WriteEntry(uint64_t key, const std::vector<uint32_t>& spv) {
+void WriteEntry(u64 key, const std::vector<u32>& spv) {
   if (CacheDir().empty() || spv.empty())
     return;
   const std::string path = EntryPath(key);
@@ -152,10 +153,10 @@ void WriteEntry(uint64_t key, const std::vector<uint32_t>& spv) {
 }
 }  // namespace
 
-bool Finalize(const std::vector<uint32_t>& spv,
-              std::vector<uint32_t>* out,
+bool Finalize(const std::vector<u32>& spv,
+              std::vector<u32>* out,
               std::string* err) {
-  const uint64_t key = HashWords(spv);
+  const u64 key = HashWords(spv);
   if (ReadEntry(key, out))
     return true;
   if (!Validate(spv, err))

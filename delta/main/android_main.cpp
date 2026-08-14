@@ -8,6 +8,7 @@
  * input to the gfx pad. Rendering reaches the screen via gfx_android.cpp.
  */
 #include <android/log.h>
+#include "base/arch.h"
 #include <android/native_window.h>
 #include <android_native_app_glue.h>
 
@@ -131,7 +132,7 @@ void forwardTouch(AInputEvent *ev) {
   gfx::setAndroidTouches(pts, c);
 }
 
-void onCmd(android_app *app, int32_t cmd) {
+void onCmd(android_app *app, i32 cmd) {
   auto *s = static_cast<AppState *>(app->userData);
   switch (cmd) {
   case APP_CMD_INIT_WINDOW:
@@ -148,7 +149,7 @@ void onCmd(android_app *app, int32_t cmd) {
   }
 }
 
-int32_t onInput(android_app *, AInputEvent *ev) {
+i32 onInput(android_app *, AInputEvent *ev) {
   if (AInputEvent_getType(ev) == AINPUT_EVENT_TYPE_MOTION) {
     forwardTouch(ev);
     return 1;

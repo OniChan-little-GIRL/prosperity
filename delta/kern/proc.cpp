@@ -7,6 +7,7 @@
  */
 
 #include <sys/mman.h>
+#include "base/arch.h"
 #include <thread>
 #include <chrono>
 #include <base.h>
@@ -76,11 +77,11 @@ DELTA_OPTION(bool, kSotcForceWorlddone, "DELTA_SOTC_FORCE_WORLDDONE", false);
 DELTA_OPTION(bool, kSotcJobfix, "DELTA_SOTC_JOBFIX", false);
 DELTA_OPTION(int, kSotcAllocLock, "DELTA_SOTC_ALLOCLOCK", 0);
 DELTA_OPTION(bool, kSotcTreeWatch, "DELTA_SOTC_TREEWATCH", false);
-DELTA_OPTION(uint64_t, kSotcTreeWalk, "DELTA_SOTC_TREEWALK", 0);
-DELTA_OPTION(uint64_t, kSotcUmtxAddr, "DELTA_SOTC_UMTX_ADDR", 0x200003420ull);
+DELTA_OPTION(u64, kSotcTreeWalk, "DELTA_SOTC_TREEWALK", 0);
+DELTA_OPTION(u64, kSotcUmtxAddr, "DELTA_SOTC_UMTX_ADDR", 0x200003420ull);
 DELTA_OPTION(bool, kSotcHeapRoute, "DELTA_SOTC_HEAPROUTE", false);
-DELTA_OPTION(uint64_t, kSotcTreeNode, "DELTA_SOTC_TREEWATCH_NODE", 0x8052e00020ull);
-DELTA_OPTION(uint64_t, kSotcTreeState, "DELTA_SOTC_TREEWATCH_STATE", 0x8309e0fd20ull);
+DELTA_OPTION(u64, kSotcTreeNode, "DELTA_SOTC_TREEWATCH_NODE", 0x8052e00020ull);
+DELTA_OPTION(u64, kSotcTreeState, "DELTA_SOTC_TREEWATCH_STATE", 0x8309e0fd20ull);
 DELTA_OPTION(const char *, kGuestPopcnt, "DELTA_GUEST_POPCNT", nullptr);
 DELTA_OPTION(const char *, kGuestWprot, "DELTA_GUEST_WPROT", nullptr);
 DELTA_OPTION(const char *, kGuestRprot, "DELTA_GUEST_RPROT", nullptr);
@@ -96,7 +97,7 @@ DELTA_OPTION(bool, kVoWatch, "DELTA_VO_WATCH", false);
 }  // namespace
 
 namespace krnl {
-const uint32_t *currentGuestTidPtr();  // sys_thread.cpp: this thread's guest tid
+const u32 *currentGuestTidPtr();  // sys_thread.cpp: this thread's guest tid
 
 static proc *g_activeProc{nullptr};
 
@@ -172,7 +173,7 @@ bool proc::create(const base::String &path, bool fromVfs) {
   if (const char *ng = kNullGuard) {
     for (const char *p = ng; *p;) {
       char *endp = nullptr;
-      const uint64_t off = std::strtoull(p, &endp, 16);
+      const u64 off = std::strtoull(p, &endp, 16);
       if (!endp || *endp != ':')
         break;
       const char *r = endp + 1;
@@ -212,12 +213,12 @@ bool proc::create(const base::String &path, bool fromVfs) {
       // videoout NIDs are HLE'd (RegisterBuffers returns 0), VOInit (gate C) should
       // return TRUE on its own -- forcing past it leaves an INVALID render context
       // (null pipelines / zero shader PGM). Test whether it succeeds naturally.
-      struct { uint32_t off; uint8_t b1; } gates[] = {
+      struct { u32 off; u8 b1; } gates[] = {
           {0x553602, 0x59}, {0x553612, 0x49}, {0x553622, 0x39}};
       bool noForce = kPs5Noforce;
       for (auto &g : gates) {
         if (noForce) break;
-        uint8_t *c = base8 + g.off;
+        u8 *c = base8 + g.off;
         if (c[0] == 0x74 && c[1] == g.b1) {  // je 0x55365d
           utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(c) & ~0xFFFull),
                           0x1000, utl::pageProtection::rwx);
@@ -281,7 +282,7 @@ static void investigateRetTrace(proc &pr) {
         p = plus + 1;
       }
     }
-    uint8_t *base = pr.getModuleList()[0]->getInfo().base;
+    u8 *base = pr.getModuleList()[0]->getInfo().base;
     if (!modName.empty()) {
       auto mod = pr.getModule(base::StringRef(modName));
       if (!mod) {
@@ -294,7 +295,7 @@ static void investigateRetTrace(proc &pr) {
     }
     const char *where = modName.empty() ? "eboot" : modName.c_str();
     char *endp = nullptr;
-    uint64_t off = std::strtoull(p, &endp, 16);
+    u64 off = std::strtoull(p, &endp, 16);
     const char *label = "ret";
     if (endp && *endp == ':') {
       const char *lb = endp + 1, *le = lb;
@@ -331,14 +332,14 @@ static void investigateFnWatch(smodule &m) {
   const char *e = kFnWatch;
   if (!e)
     return;
-  uint8_t *base = m.getInfo().base;
+  u8 *base = m.getInfo().base;
   for (const char *p = e; *p;) {
     while (*p == ',' || *p == ' ')
       p++;
     if (!*p)
       break;
     char *endp = nullptr;
-    uint64_t off = std::strtoull(p, &endp, 0);
+    u64 off = std::strtoull(p, &endp, 0);
     const char *label = "fn";
     if (endp && *endp == ':') {
       const char *lb = endp + 1;
@@ -466,7 +467,7 @@ static void investigateSumWatch() {
   const char *sw = kGuestSumwatch;
   if (!sw)
     return;
-  uint64_t f[5] = {0, 0, 0, 0, 1000};
+  u64 f[5] = {0, 0, 0, 0, 1000};
   const char *p = sw;
   for (int i = 0; i < 5 && p && *p; i++) {
     f[i] = std::strtoull(p, nullptr, i == 3 ? 10 : 16);
@@ -485,22 +486,22 @@ static void applyGuestPatches(smodule &m) {
   const char *e = kGuestPatch;
   if (!e)
     return;
-  uint8_t *base = m.getInfo().base;
+  u8 *base = m.getInfo().base;
   for (const char *p = e; *p;) {
     while (*p == ',' || *p == ' ')
       p++;
     if (!*p)
       break;
     char *endp = nullptr;
-    uint64_t off = std::strtoull(p, &endp, 16);
+    u64 off = std::strtoull(p, &endp, 16);
     if (!endp || *endp != '=')
       break;
     const char *h = endp + 1;
-    uint8_t bytes[32];
+    u8 bytes[32];
     int n = 0;
     while (n < 32 && std::isxdigit((unsigned char)h[0]) &&
            std::isxdigit((unsigned char)h[1])) {
-      bytes[n++] = (uint8_t)std::strtoul(base::String(h, 2).c_str(), nullptr, 16);
+      bytes[n++] = (u8)std::strtoul(base::String(h, 2).c_str(), nullptr, 16);
       h += 2;
     }
     p = h;
@@ -519,15 +520,15 @@ static void investigateFnArgs(smodule &m) {
   const char *e = kFnArgs;
   if (!e)
     return;
-  uint8_t *base = m.getInfo().base;
+  u8 *base = m.getInfo().base;
   for (const char *p = e; *p;) {
     while (*p == ',' || *p == ' ')
       p++;
     if (!*p)
       break;
     char *endp = nullptr;
-    uint64_t off = std::strtoull(p, &endp, 16);
-    uint64_t offs[8];
+    u64 off = std::strtoull(p, &endp, 16);
+    u64 offs[8];
     int noffs = 0;
     while (endp && *endp == '+' && noffs < 8)
       offs[noffs++] = std::strtoull(endp + 1, &endp, 16);
@@ -565,13 +566,13 @@ static void investigateFnArgs(smodule &m) {
 // parse as 0 entries and let boot proceed to the title/main menu. This is a
 // runtime patching EXPERIMENT (env-gated, off by default; not a shipped fix).
 static void forceSotcPayload(smodule &m) {
-  uint8_t *base = m.getInfo().base;
-  auto rwx = [](uint8_t *p) {
+  u8 *base = m.getInfo().base;
+  auto rwx = [](u8 *p) {
     utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(p) & ~0xFFFull),
                     0x1000, utl::pageProtection::rwx);
   };
   if (kSotcForcePayload) {
-    uint8_t *je = base + 0x14c00a;  // `74 07` je +9 (return null) in accessor 0x14c000
+    u8 *je = base + 0x14c00a;  // `74 07` je +9 (return null) in accessor 0x14c000
     rwx(je);
     if (je[0] == 0x74 && je[1] == 0x07) {
       je[0] = 0x90; je[1] = 0x90;
@@ -590,7 +591,7 @@ static void forceSotcPayload(smodule &m) {
   // proceed past the wedge to the title/menu, skipping the (broken) precache.
   // Runtime patching EXPERIMENT (env-gated, off by default).
   if (kSotcSkipWorldwait) {
-    uint8_t *je = base + 0x3c55fd;
+    u8 *je = base + 0x3c55fd;
     rwx(je);
     if (je[0] == 0x0f && je[1] == 0x84) {
       for (int i = 0; i < 6; i++) je[i] = 0x90;
@@ -624,10 +625,10 @@ static void forceSotcPayload(smodule &m) {
   // Patch the fn tail 0x3337f (`pop rbp; ret` + pad) in place:
   //   test eax,eax; js .r; cmp eax,4; jb .r; and eax,3; .r: pop rbp; ret
   if (kSotcJobfix) {
-    uint8_t *t = base + 0x3337f;
+    u8 *t = base + 0x3337f;
     rwx(t);
     if (t[0] == 0x5d && t[1] == 0xc3) {
-      static const uint8_t code[] = {0x85, 0xc0,             // test eax,eax
+      static const u8 code[] = {0x85, 0xc0,             // test eax,eax
                                      0x78, 0x08,             // js .r (+8 -> pop)
                                      0x83, 0xf8, 0x04,       // cmp eax,4
                                      0x72, 0x03,             // jb .r (+3 -> pop)
@@ -642,8 +643,8 @@ static void forceSotcPayload(smodule &m) {
     }
   }
   if (kSotcForceWorlddone) {
-    uint8_t *je = base + 0x14d768;   // 74 0d  je 0x14d777 (retry)
-    uint8_t *sn = base + 0x14cf0e;   // 0f 95 c0  setne al
+    u8 *je = base + 0x14d768;   // 74 0d  je 0x14d777 (retry)
+    u8 *sn = base + 0x14cf0e;   // 0f 95 c0  setne al
     rwx(je); rwx(sn);
     bool ok = true;
     if (je[0] == 0x74 && je[1] == 0x0d) { je[0] = 0x90; je[1] = 0x90; }
@@ -674,18 +675,18 @@ static void forceSotcPayload(smodule &m) {
 // ===========================================================================
 namespace {
 struct FiosOpen {          // one FHOpen (all opens tracked so any fh maps to a path)
-  uint64_t pOutFH;         // guest ptr the async open writes the SceFiosFH into
+  u64 pOutFH;         // guest ptr the async open writes the SceFiosFH into
   std::string path;
 };
 std::mutex g_fiosMx;
 std::vector<FiosOpen> g_fiosOpens;          // all opens, for fh->path reverse lookup
-std::set<uint64_t> g_zeroSizeFh;            // FHGetSize==0 fh's already reported
-std::set<uint64_t> g_zeroActOp;             // OpGetActualCount==0 ops already reported
+std::set<u64> g_zeroSizeFh;            // FHGetSize==0 fh's already reported
+std::set<u64> g_zeroActOp;             // OpGetActualCount==0 ops already reported
 std::set<std::string> g_seenPaths;          // DELTA_FIOS_ALLOPEN: dedup full open list
-std::atomic<uint64_t> g_fiosOpenN{0}, g_zeroSizeChurn{0}, g_zeroActChurn{0};
+std::atomic<u64> g_fiosOpenN{0}, g_zeroSizeChurn{0}, g_zeroActChurn{0};
 
 // Safe-ish read of a guest C string (guest memory is identity-mapped to host).
-const char *guestStr(uint64_t va, char *buf, size_t cap) {
+const char *guestStr(u64 va, char *buf, size_t cap) {
   if (!va || va < 0x10000) { buf[0] = 0; return buf; }
   const char *s = reinterpret_cast<const char *>(va);
   size_t i = 0;
@@ -697,10 +698,10 @@ const char *guestStr(uint64_t va, char *buf, size_t cap) {
 // Reverse-map an SceFiosFH to the path that opened it (newest first). Only ever
 // called on the RARE zero-size/zero-count anomaly, so the O(n) scan is fine.
 // Caller holds g_fiosMx.
-std::string pathForFh(uint64_t fh) {
+std::string pathForFh(u64 fh) {
   if (!fh) return "<null-fh>";
   for (auto it = g_fiosOpens.rbegin(); it != g_fiosOpens.rend(); ++it) {
-    uint64_t v = it->pOutFH ? *reinterpret_cast<uint64_t *>(it->pOutFH) : 0;
+    u64 v = it->pOutFH ? *reinterpret_cast<u64 *>(it->pOutFH) : 0;
     if (v && v == fh) return it->path;
   }
   return "<unknown-fh>";
@@ -715,12 +716,12 @@ std::string pathForFh(uint64_t fh) {
 // Detection is path-agnostic: a size or count of 0 is the anomaly; we then map
 // the fh back to the file that opened it. Zero events are deduped per-fh/op so
 // the post-drain retry churn (millions of calls) can't flood the log.
-void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
-                            uint64_t a2, uint64_t a3, uint64_t ret) {
+void PS4ABI fiosTraceLogger(u64 hookId, u64 a0, u64 a1,
+                            u64 a2, u64 a3, u64 ret) {
   char pb[512];
   switch (hookId) {
   case 1: { // FHOpen
-    uint64_t n = ++g_fiosOpenN;
+    u64 n = ++g_fiosOpenN;
     // Run the DELTA_FIOS_PROBE once, after enough opens that PlayGo chunks for
     // /app0/misc and /app0/scripts are mounted (the guest opens /app0/misc files
     // by open ~#905). Firing at proc::create or the first open is too early.
@@ -745,7 +746,7 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     break;
   }
   case 2: { // FHGetSize(fh) -> size ; ANY zero/neg is the anomaly
-    if ((int64_t)ret <= 0) {
+    if ((i64)ret <= 0) {
       std::lock_guard lk(g_fiosMx);
       if (g_zeroSizeFh.insert(a0).second) {
         BASE_LOGI("fios",
@@ -755,7 +756,7 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
         BASE_LOGI("fios", "(FHGetSize-zero churn count={})",
                   (unsigned long long)g_zeroSizeChurn.load());
       }
-    } else if (kFiosAllopen && (int64_t)ret > (4 << 20)) {
+    } else if (kFiosAllopen && (i64)ret > (4 << 20)) {
       // Large files (>4MB) are candidates for the world container; log once/fh.
       std::lock_guard lk(g_fiosMx);
       if (g_zeroSizeFh.insert(a0 ^ 0x5A5A5A5Aull).second)
@@ -778,7 +779,7 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     break;
   }
   case 5: { // OpGetActualCount(op) -> count ; ANY zero/neg is the anomaly
-    if ((int64_t)ret <= 0) {
+    if ((i64)ret <= 0) {
       std::lock_guard lk(g_fiosMx);
       if (g_zeroActOp.insert(a0).second) {
         BASE_LOGI("fios", "*** OpGetActualCount ZERO op={:#x} -> count={}",
@@ -803,7 +804,7 @@ void PS4ABI fiosTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
 uintptr_t maybeWrapFiosImport(const char *nidName, uintptr_t realAddr) {
   if (!kFiosTrace || !nidName || !realAddr)
     return realAddr;
-  struct { const char *nid; uint32_t hookId; const char *nm; } tbl[] = {
+  struct { const char *nid; u32 hookId; const char *nm; } tbl[] = {
       {"er6TkQFUvp0", 1, "sceFiosFHOpen"},
       {"FdjoqFQOlt0", 2, "sceFiosFHGetSize"},
       {"cg-VoPqZYss", 3, "sceFiosFHRead"},
@@ -869,15 +870,15 @@ static void probeFiosPaths() {
 //   kick  0x35480: job affinity/prio submitted
 // ===========================================================================
 namespace {
-std::atomic<uint64_t> g_jobClaims{0}, g_jobFails{0};
+std::atomic<u64> g_jobClaims{0}, g_jobFails{0};
 
 // Host-side JobSystem watcher. Spawned once with the guest jobsys base
 // (identity-mapped, safe to read from a host thread). Everything expensive
 // happens here, off the guest's hot paths.
-void spawnJobWatcher(uint64_t base);
+void spawnJobWatcher(u64 base);
 
-void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
-                           uint64_t a2, uint64_t a3, uint64_t ret) {
+void PS4ABI jobTraceLogger(u64 hookId, u64 a0, u64 a1,
+                           u64 a2, u64 a3, u64 ret) {
   switch (hookId) {
   case 12: { // CLAIM 0x38d40 -> ret = claimed job ptr (0 = failed to claim)
     // Log each worker's ordinal (fs:[-8]) exactly once, cheaply (thread_local).
@@ -887,10 +888,10 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
       // Replicate get-core-ordinal fn 0x33350: tcb = *(fsbase); v = [tcb-0x10];
       // ord = (v & 0x8000) ? (v & ~0x8000) : -1.  This is the value the claim
       // path (0x38d70/0x38d7f) uses for 1<<ord AND the direct-assign slot index.
-      uint64_t fsb = cpu::currentGuestFsBase();
-      uint64_t tcb = fsb ? *reinterpret_cast<uint64_t *>(fsb) : 0;
-      uint64_t v = tcb ? *reinterpret_cast<uint64_t *>(tcb - 0x10) : 0;
-      int64_t ord = (v & 0x8000) ? (int64_t)(v & ~0x8000ULL) : -1;
+      u64 fsb = cpu::currentGuestFsBase();
+      u64 tcb = fsb ? *reinterpret_cast<u64 *>(fsb) : 0;
+      u64 v = tcb ? *reinterpret_cast<u64 *>(tcb - 0x10) : 0;
+      i64 ord = (v & 0x8000) ? (i64)(v & ~0x8000ULL) : -1;
       static std::mutex m; std::lock_guard lk(m);
       BASE_LOGI("jobclaim",
                 "worker fsbase={:#x} tcb={:#x} [tcb-0x10]={:#x} -> ordinal={} "
@@ -917,8 +918,8 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     // block, a2 = rdx = its element count. One line per DISTINCT block, so a
     // block updated every frame costs one line, not thousands.
     static std::mutex m;
-    static std::unordered_set<uint64_t> seen;
-    static uint64_t calls = 0;
+    static std::unordered_set<u64> seen;
+    static u64 calls = 0;
     std::lock_guard lk(m);
     calls++;
     if (seen.insert(a3).second && seen.size() <= 256)
@@ -940,11 +941,11 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
     // 16384 selects exactly the whole-arena (1048576-element) fills.
     if (a1 != 16384)
       break;
-    const auto *cb = reinterpret_cast<const uint64_t *>(a0);
-    const uint64_t wp = cb[2], end = cb[1];
+    const auto *cb = reinterpret_cast<const u64 *>(a0);
+    const u64 wp = cb[2], end = cb[1];
     static std::mutex m;
-    static std::unordered_set<uint64_t> seen;
-    static uint64_t n = 0;
+    static std::unordered_set<u64> seen;
+    static u64 n = 0;
     std::lock_guard lk(m);
     n++;
     if (seen.insert(wp >> 20).second && seen.size() <= 64)
@@ -987,19 +988,19 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
 // across two consecutive dumps, move the marker qword into block 2 -- note the
 // claim path copies a 0x40-byte descriptor at +0xea8, so a single-qword move
 // hands worker 2 a zeroed job; superseded by the job-table affinity survey.
-void spawnJobWatcher(uint64_t base) {
-  static std::atomic<uint64_t> once{0};
-  uint64_t expect = 0;
+void spawnJobWatcher(u64 base) {
+  static std::atomic<u64> once{0};
+  u64 expect = 0;
   if (!once.compare_exchange_strong(expect, base))
     return;
   std::thread([base] {
-        uint64_t prev[8] = {0};
+        u64 prev[8] = {0};
         int persist = 0;
         for (;;) {
           std::this_thread::sleep_for(std::chrono::seconds(30));
-          uint64_t slot[8];
+          u64 slot[8];
           for (int i = 0; i < 8; i++)
-            slot[i] = *reinterpret_cast<volatile uint64_t *>(base + (uint64_t)i * 0x120 + 0xeb0);
+            slot[i] = *reinterpret_cast<volatile u64 *>(base + (u64)i * 0x120 + 0xeb0);
           BASE_LOGI("jobwatch",
                     "claims={} fails={} directAssign[0..7]= "
                     "0:{:#x} 1:{:#x} 2:{:#x} 3:{:#x} 4:{:#x} 5:{:#x} 6:{:#x} 7:{:#x}",
@@ -1015,7 +1016,7 @@ void spawnJobWatcher(uint64_t base) {
           for (int i = 0; i < 8; i++) {
             if (!slot[i])
               continue;
-            const uint64_t *q = reinterpret_cast<const uint64_t *>(base + (uint64_t)i * 0x120 + 0xea8);
+            const u64 *q = reinterpret_cast<const u64 *>(base + (u64)i * 0x120 + 0xea8);
             BASE_LOGI("jobwatch",
                       "  block{} desc@+0xea8: {:#x} {:#x} {:#x} {:#x} "
                       "{:#x} {:#x} {:#x} {:#x}",
@@ -1052,29 +1053,29 @@ void spawnJobWatcher(uint64_t base) {
           // cannot take what is there (consumer-side). Our workers report
           // ordinals 0..3, so a mask missing 0xf excludes every one of them.
           {
-            const uint64_t qbase =
-                *reinterpret_cast<volatile uint64_t *>(base + 0x1478);
-            auto mapped = [](uint64_t a) {
+            const u64 qbase =
+                *reinterpret_cast<volatile u64 *>(base + 0x1478);
+            auto mapped = [](u64 a) {
               return a > 0x10000 && a < (1ULL << 47);
             };
             if (mapped(qbase)) {
               for (int lvl = 0; lvl < 8; lvl++) {
-                const uint64_t bucket = qbase + (uint64_t)lvl * 0x2078;
-                const uint64_t acount =
-                    *reinterpret_cast<volatile uint64_t *>(bucket + 0x2038);
-                const uint64_t nodes =
-                    *reinterpret_cast<volatile uint64_t *>(bucket);
+                const u64 bucket = qbase + (u64)lvl * 0x2078;
+                const u64 acount =
+                    *reinterpret_cast<volatile u64 *>(bucket + 0x2038);
+                const u64 nodes =
+                    *reinterpret_cast<volatile u64 *>(bucket);
                 if (!acount && !nodes)
                   continue;
                 BASE_LOGI(
                     "jobwatch",
                     "bucket L{} scanA-slots={} scanB-nodes={}",
                     lvl, (unsigned long long)acount, (unsigned long long)nodes);
-                const uint64_t slots =
-                    *reinterpret_cast<volatile uint64_t *>(bucket + 0x2070);
+                const u64 slots =
+                    *reinterpret_cast<volatile u64 *>(bucket + 0x2070);
                 if (acount && mapped(slots)) {
-                  for (uint64_t i = 0; i < acount && i < 16; i++) {
-                    const uint32_t mask = *reinterpret_cast<volatile uint32_t *>(
+                  for (u64 i = 0; i < acount && i < 16; i++) {
+                    const u32 mask = *reinterpret_cast<volatile u32 *>(
                         slots + i * 0x120 + 0xf0);
                     BASE_LOGI("jobwatch",
                               "  L{} slot{} mask={:#x} -> {}",
@@ -1084,36 +1085,36 @@ void spawnJobWatcher(uint64_t base) {
                                   : "*** MASK EXCLUDES EVERY WORKER ***");
                   }
                 }
-                for (uint64_t i = 0; i < nodes && i < 32; i++) {
-                  const uint64_t n = *reinterpret_cast<volatile uint64_t *>(
+                for (u64 i = 0; i < nodes && i < 32; i++) {
+                  const u64 n = *reinterpret_cast<volatile u64 *>(
                       bucket + 0x38 + i * 8);
                   if (!mapped(n))
                     continue;
-                  const uint64_t head = *reinterpret_cast<volatile uint64_t *>(n);
-                  const uint64_t tail =
-                      *reinterpret_cast<volatile uint64_t *>(n + 8);
+                  const u64 head = *reinterpret_cast<volatile u64 *>(n);
+                  const u64 tail =
+                      *reinterpret_cast<volatile u64 *>(n + 8);
                   if (head == tail)
                     continue;  // empty: the claim skips it at 0x3913e
-                  const uint64_t dep =
-                      *reinterpret_cast<volatile uint64_t *>(n + 0x980);
-                  const uint64_t thresh =
-                      *reinterpret_cast<volatile uint64_t *>(n + 0x988);
-                  const uint32_t mode =
-                      *reinterpret_cast<volatile uint32_t *>(n + 0x990);
-                  const uint32_t aff =
-                      *reinterpret_cast<volatile uint32_t *>(n + 0x998);
-                  const int32_t prio =
-                      *reinterpret_cast<volatile int32_t *>(n + 0x9a0);
+                  const u64 dep =
+                      *reinterpret_cast<volatile u64 *>(n + 0x980);
+                  const u64 thresh =
+                      *reinterpret_cast<volatile u64 *>(n + 0x988);
+                  const u32 mode =
+                      *reinterpret_cast<volatile u32 *>(n + 0x990);
+                  const u32 aff =
+                      *reinterpret_cast<volatile u32 *>(n + 0x998);
+                  const i32 prio =
+                      *reinterpret_cast<volatile i32 *>(n + 0x9a0);
                   long long depval = 0;
                   bool depread = false;
                   if (mapped(dep)) {
                     depval =
-                        (long long)*reinterpret_cast<volatile uint64_t *>(dep);
+                        (long long)*reinterpret_cast<volatile u64 *>(dep);
                     depread = true;
                   }
                   const bool depok =
                       !dep || (depread && (mode == 0
-                                               ? (uint64_t)depval == thresh
+                                               ? (u64)depval == thresh
                                                : depval > (long long)thresh));
                   BASE_LOGI(
                       "jobwatch",
@@ -1136,18 +1137,18 @@ void spawnJobWatcher(uint64_t base) {
           // names only a core no live thread reports -- e.g. SotC's core-6
           // "Resource Loading" pin, mask 0x40 -- is unclaimable by anyone.
           {
-            std::vector<uint64_t> fsb;
+            std::vector<u64> fsb;
             cpu::guestThreadFsBases(fsb);
-            uint32_t present = 0;
+            u32 present = 0;
             int valid = 0;
             std::string list;
-            for (uint64_t f : fsb) {
+            for (u64 f : fsb) {
               if (!f)
                 continue;
-              uint64_t tcb = *reinterpret_cast<volatile uint64_t *>(f);
+              u64 tcb = *reinterpret_cast<volatile u64 *>(f);
               if (tcb < 0x10000)
                 continue;
-              uint64_t v = *reinterpret_cast<volatile uint64_t *>(tcb - 0x10);
+              u64 v = *reinterpret_cast<volatile u64 *>(tcb - 0x10);
               if (!(v & 0x8000))
                 continue;
               int ord = (int)(v & 0x7fff);
@@ -1173,28 +1174,28 @@ void spawnJobWatcher(uint64_t base) {
           // forever while the workers spin. Dump every node with pending work
           // so a stuck dependency shows its counter, target and mode.
           {
-            uint64_t tbl = *reinterpret_cast<volatile uint64_t *>(base + 0xb60);
+            u64 tbl = *reinterpret_cast<volatile u64 *>(base + 0xb60);
             int shown = 0;
             if (tbl > 0x10000) {
               for (int j = 0; j < 1024 && shown < 10; j++) {
-                const uint64_t node = tbl + (uint64_t)j * 0x9b8;
-                const uint64_t head = *reinterpret_cast<volatile uint64_t *>(node);
-                const uint64_t tail = *reinterpret_cast<volatile uint64_t *>(node + 8);
+                const u64 node = tbl + (u64)j * 0x9b8;
+                const u64 head = *reinterpret_cast<volatile u64 *>(node);
+                const u64 tail = *reinterpret_cast<volatile u64 *>(node + 8);
                 if (!head || head == tail)
                   continue;  // empty queue: nothing pending here
-                const uint64_t dep = *reinterpret_cast<volatile uint64_t *>(node + 0x980);
-                const uint64_t thresh = *reinterpret_cast<volatile uint64_t *>(node + 0x988);
-                const uint32_t mode = *reinterpret_cast<volatile uint32_t *>(node + 0x990);
-                const uint32_t aff = *reinterpret_cast<volatile uint32_t *>(node + 0x998);
+                const u64 dep = *reinterpret_cast<volatile u64 *>(node + 0x980);
+                const u64 thresh = *reinterpret_cast<volatile u64 *>(node + 0x988);
+                const u32 mode = *reinterpret_cast<volatile u32 *>(node + 0x990);
+                const u32 aff = *reinterpret_cast<volatile u32 *>(node + 0x998);
                 long long depval = -1;
                 bool readable = false;
                 if (dep > 0x10000 && dep < (1ULL << 47)) {
-                  const uint64_t inner = *reinterpret_cast<volatile uint64_t *>(dep);
+                  const u64 inner = *reinterpret_cast<volatile u64 *>(dep);
                   depval = (long long)inner;
                   readable = true;
                 }
                 const bool satisfied =
-                    !dep || (readable && (mode == 0 ? (uint64_t)depval == thresh
+                    !dep || (readable && (mode == 0 ? (u64)depval == thresh
                                                     : (long long)depval > (long long)thresh));
                 // NOTE: this walk covers the 1024-slot job TABLE, which is not
                 // what the claim scans -- so `aff` (+0x998) is the only gate
@@ -1205,8 +1206,8 @@ void spawnJobWatcher(uint64_t base) {
                 // slot array at [bucket+0x2070]. Both live in the bucket walk
                 // above; a table entry's +0x38 reads 0, which is exactly why
                 // that chase always reported nothing.
-                const uint64_t obj = 0;
-                uint32_t mask = 0;
+                const u64 obj = 0;
+                u32 mask = 0;
                 bool mask_read = false;
                 BASE_LOGI("jobwatch",
                           "node[{}] head={:#x} tail={:#x} dep={:#x} *dep={} "
@@ -1226,10 +1227,10 @@ void spawnJobWatcher(uint64_t base) {
             }
           }
           static int tableDumps = 0;
-          uint64_t defAff = *reinterpret_cast<volatile uint32_t *>(base + 0x3c);
-          uint64_t tab = *reinterpret_cast<volatile uint64_t *>(base + 0xb60);
-          const uint64_t *bm = reinterpret_cast<const uint64_t *>(base + 0xac0);
-          uint64_t used = 0;
+          u64 defAff = *reinterpret_cast<volatile u32 *>(base + 0x3c);
+          u64 tab = *reinterpret_cast<volatile u64 *>(base + 0xb60);
+          const u64 *bm = reinterpret_cast<const u64 *>(base + 0xac0);
+          u64 used = 0;
           for (int w = 0; w < 16; w++) used += __builtin_popcountll(~bm[w]);
           if (tableDumps < 200) {
             BASE_LOGI("jobwatch",
@@ -1243,21 +1244,21 @@ void spawnJobWatcher(uint64_t base) {
               for (int j = 0; j < 1024 && shown < 12; j++) {
                 // Print any table entry with a plausible live affinity word;
                 // polarity of the bitmap is unknown, so filter on content.
-                const uint8_t *job = reinterpret_cast<const uint8_t *>(tab + (uint64_t)j * 0x9b8);
-                uint32_t aff = *reinterpret_cast<const uint32_t *>(job + 0x998);
-                uint32_t prio = *reinterpret_cast<const uint32_t *>(job + 0x9a0);
+                const u8 *job = reinterpret_cast<const u8 *>(tab + (u64)j * 0x9b8);
+                u32 aff = *reinterpret_cast<const u32 *>(job + 0x998);
+                u32 prio = *reinterpret_cast<const u32 *>(job + 0x9a0);
                 // The mask the claim path actually tests (0x38fc5:
                 // `test [node+0xf0], 1<<ordinal`); kick's 0x34e60 helper
                 // copies the submitted spec here.
-                uint32_t mask = *reinterpret_cast<const uint32_t *>(job + 0xf0);
-                uint64_t q0 = *reinterpret_cast<const uint64_t *>(job);
+                u32 mask = *reinterpret_cast<const u32 *>(job + 0xf0);
+                u64 q0 = *reinterpret_cast<const u64 *>(job);
                 if (!aff && !q0)
                   continue;
                 BASE_LOGI("jobwatch",
                           "  job[{}] q0={:#x} claimMask[+0xf0]={:#x} "
                           "aff[+0x998]={:#x} prio={:#x} q+0x9a8={:#x}",
                           j, (unsigned long long)q0, mask, aff, prio,
-                          (unsigned long long)*reinterpret_cast<const uint64_t *>(job + 0x9a8));
+                          (unsigned long long)*reinterpret_cast<const u64 *>(job + 0x9a8));
                 shown++;
               }
               tableDumps++;
@@ -1274,9 +1275,9 @@ void spawnJobWatcher(uint64_t base) {
             for (int i = 4; i < 8; i++) {
               if (!slot[i])
                 continue;
-              auto *src = reinterpret_cast<volatile uint64_t *>(base + (uint64_t)i * 0x120 + 0xeb0);
-              auto *dst = reinterpret_cast<volatile uint64_t *>(base + 2ULL * 0x120 + 0xeb0);
-              uint64_t v = *src;
+              auto *src = reinterpret_cast<volatile u64 *>(base + (u64)i * 0x120 + 0xeb0);
+              auto *dst = reinterpret_cast<volatile u64 *>(base + 2ULL * 0x120 + 0xeb0);
+              u64 v = *src;
               *dst = v;
               *src = 0;
               BASE_LOGI("jobwatch",
@@ -1313,9 +1314,9 @@ void spawnJobWatcher(uint64_t base) {
 // answer.
 struct AllocLockSite {
   std::recursive_mutex m;
-  std::atomic<uint64_t> calls{0};
-  std::atomic<uint64_t> contended{0};
-  std::atomic<uint64_t> maxWaitNs{0};
+  std::atomic<u64> calls{0};
+  std::atomic<u64> contended{0};
+  std::atomic<u64> maxWaitNs{0};
   const char *name = "";
   bool serialise = false;  // only the tree mutators need the shared lock
 };
@@ -1349,23 +1350,23 @@ std::recursive_mutex g_allocSharedM;
 // failed try_lock is two threads inside the tree mutators of the SAME tree.
 constexpr int kAllocStates = 16;
 struct StateLock {
-  std::atomic<uint64_t> state{0};
+  std::atomic<u64> state{0};
   std::recursive_mutex m;
 };
 StateLock g_stateLocks[kAllocStates];
-std::atomic<uint64_t> g_stateLockOverflow{0};
+std::atomic<u64> g_stateLockOverflow{0};
 
-static std::recursive_mutex &allocMutexFor(int i, uint64_t a0) {
+static std::recursive_mutex &allocMutexFor(int i, u64 a0) {
   if (kSotcAllocLock == 2)
     return g_allocSites[i].m;
   if (!a0)
     return g_allocSharedM;
   for (int k = 0; k < kAllocStates; k++) {
-    uint64_t cur = g_stateLocks[k].state.load(std::memory_order_acquire);
+    u64 cur = g_stateLocks[k].state.load(std::memory_order_acquire);
     if (cur == a0)
       return g_stateLocks[k].m;
     if (cur == 0) {
-      uint64_t expect = 0;
+      u64 expect = 0;
       if (g_stateLocks[k].state.compare_exchange_strong(expect, a0))
         return g_stateLocks[k].m;
       if (g_stateLocks[k].state.load(std::memory_order_acquire) == a0)
@@ -1395,24 +1396,24 @@ static std::recursive_mutex &allocMutexFor(int i, uint64_t a0) {
 // bucket the chunk address by 256 MiB per state and print the table. Disjoint
 // buckets per state means chunks never cross heaps and the idea is dead; a bucket
 // shared by two states is where to look next.
-struct RouteBucket { uint64_t prefix; uint64_t count; };
+struct RouteBucket { u64 prefix; u64 count; };
 struct RouteTab {
-  std::atomic<uint64_t> state{0};
-  uint64_t inserts = 0;
-  uint64_t lo = ~0ull, hi = 0;
+  std::atomic<u64> state{0};
+  u64 inserts = 0;
+  u64 lo = ~0ull, hi = 0;
   RouteBucket b[12] {};
 };
 constexpr int kRouteTabs = 8;
 RouteTab g_routeTabs[kRouteTabs];
 std::mutex g_routeM;
 
-static void heapRouteNote(uint64_t state, uint64_t chunk) {
+static void heapRouteNote(u64 state, u64 chunk) {
   if (!state || !chunk || chunk < 0x8000000000ull || chunk >= 0x8700000000ull)
     return;
   std::lock_guard<std::mutex> lk(g_routeM);
   RouteTab *t = nullptr;
   for (int i = 0; i < kRouteTabs; i++) {
-    const uint64_t cur = g_routeTabs[i].state.load(std::memory_order_relaxed);
+    const u64 cur = g_routeTabs[i].state.load(std::memory_order_relaxed);
     if (cur == state) { t = &g_routeTabs[i]; break; }
     if (cur == 0) { g_routeTabs[i].state.store(state); t = &g_routeTabs[i]; break; }
   }
@@ -1421,7 +1422,7 @@ static void heapRouteNote(uint64_t state, uint64_t chunk) {
   t->inserts++;
   if (chunk < t->lo) t->lo = chunk;
   if (chunk > t->hi) t->hi = chunk;
-  const uint64_t pref = chunk >> 28;
+  const u64 pref = chunk >> 28;
   for (auto &e : t->b) {
     if (e.count && e.prefix == pref) { e.count++; return; }
     if (!e.count) { e.prefix = pref; e.count = 1; return; }
@@ -1431,7 +1432,7 @@ static void heapRouteNote(uint64_t state, uint64_t chunk) {
 static void heapRouteReport() {
   std::lock_guard<std::mutex> lk(g_routeM);
   for (auto &t : g_routeTabs) {
-    const uint64_t st = t.state.load(std::memory_order_relaxed);
+    const u64 st = t.state.load(std::memory_order_relaxed);
     if (!st) continue;
     base::String bytes;
     base::FormatTo(bytes, "state {:#x}: {} inserts, chunks {:#x}..{:#x}, 256MB buckets:",
@@ -1446,9 +1447,9 @@ static void heapRouteReport() {
 }
 
 struct LockHolder {
-  std::atomic<uint32_t> gtid{0};
-  std::atomic<uint32_t> site{0};
-  std::atomic<uint64_t> a0{0};
+  std::atomic<u32> gtid{0};
+  std::atomic<u32> site{0};
+  std::atomic<u64> a0{0};
 };
 LockHolder g_lockHolder;
 std::atomic<int> g_contendReported{0};
@@ -1457,11 +1458,11 @@ std::atomic<int> g_contendReported{0};
 // crashing thread spins on with MUTEX_WAIT/MUTEX_WAKE. FreeBSD's umutex keeps the
 // owner tid in the low bits of its first word with UMUTEX_CONTESTED (0x80000000)
 // on top, which is how sys_umtx_op reads it.
-static uint32_t umtxOwnerWord() {
-  const uint64_t a = kSotcUmtxAddr;
+static u32 umtxOwnerWord() {
+  const u64 a = kSotcUmtxAddr;
   if (a < 0x200000000ull || a >= 0x201000000ull)
     return 0xFFFFFFFFu;
-  return *reinterpret_cast<const volatile uint32_t *>(a);
+  return *reinterpret_cast<const volatile u32 *>(a);
 }
 
 // The discriminating report. Two threads inside the tree mutators at once is only a
@@ -1469,15 +1470,15 @@ static uint32_t umtxOwnerWord() {
 // title hands out per-scope allocators, so a0 (the state pointer for insert and
 // remove) has to match before the collision means anything. And if it does match,
 // the owner word says whether the guest's own mutex thought it was excluding them.
-static void reportContention(int site, uint64_t a0) {
+static void reportContention(int site, u64 a0) {
   if (g_contendReported.fetch_add(1) >= 24)
     return;
-  const uint32_t myGtid = *currentGuestTidPtr();
-  const uint32_t hg = g_lockHolder.gtid.load();
-  const uint32_t hs = g_lockHolder.site.load();
-  const uint64_t ha = g_lockHolder.a0.load();
-  const uint32_t ow = umtxOwnerWord();
-  const uint32_t owner = ow & ~0x80000000u;
+  const u32 myGtid = *currentGuestTidPtr();
+  const u32 hg = g_lockHolder.gtid.load();
+  const u32 hs = g_lockHolder.site.load();
+  const u64 ha = g_lockHolder.a0.load();
+  const u32 ow = umtxOwnerWord();
+  const u32 owner = ow & ~0x80000000u;
   const char *verdict =
       (ha && a0 && ha != a0)
           ? "DIFFERENT allocator states -- not one tree, not a race"
@@ -1496,39 +1497,39 @@ static void reportContention(int site, uint64_t a0) {
             (ow & 0x80000000u) ? 1 : 0, verdict);
 }
 
-struct AllocEvt { uint32_t site; uint32_t tid; uint64_t a0, a1; };
+struct AllocEvt { u32 site; u32 tid; u64 a0, a1; };
 // Big enough to cover the walk cadence: the walk only looks every N calls, so a
 // 64-entry ring showed nothing but the allocs immediately before the check and
 // none of the mutators in the window that actually did the damage.
 constexpr int kAllocRing = 8192;
 AllocEvt g_allocRing[kAllocRing];
-std::atomic<uint64_t> g_allocRingPos{0};
-std::atomic<uint64_t> g_allocCallSeq{0};
+std::atomic<u64> g_allocRingPos{0};
+std::atomic<u64> g_allocCallSeq{0};
 
 // Which allocator state this thread locked, per nesting level: the leave hook has
 // no argument to re-derive it from.
-static thread_local uint64_t t_lockedState[8];
+static thread_local u64 t_lockedState[8];
 static thread_local int t_lockDepth = 0;
 
 static void treeWatchAt(int site, bool onExit);
 static void treeWalkPeriodic();
 
-static void allocLockEnterAt(int i, uint64_t a0, uint64_t a1) {
+static void allocLockEnterAt(int i, u64 a0, u64 a1) {
   AllocLockSite &s = g_allocSites[i];
   s.calls.fetch_add(1, std::memory_order_relaxed);
   g_allocCallSeq.fetch_add(1, std::memory_order_relaxed);
   if (kSotcTreeWalk) {
-    const uint64_t k = g_allocRingPos.fetch_add(1, std::memory_order_relaxed);
+    const u64 k = g_allocRingPos.fetch_add(1, std::memory_order_relaxed);
     AllocEvt &e = g_allocRing[k % kAllocRing];
-    e.site = (uint32_t)i;
-    e.tid = (uint32_t)syscall(SYS_gettid);
+    e.site = (u32)i;
+    e.tid = (u32)syscall(SYS_gettid);
     e.a0 = a0;
     e.a1 = a1;
   }
   if (kSotcHeapRoute && i == 2 && a0 >= 0x200000000ull) {
     // site 2 is treeInsert: rdi is the state, and the chunk it will insert is the
     // designated victim cached at state+0xc0.
-    const uint64_t chunk = *reinterpret_cast<const volatile uint64_t *>(a0 + 0xc0);
+    const u64 chunk = *reinterpret_cast<const volatile u64 *>(a0 + 0xc0);
     heapRouteNote(a0, chunk);
   }
   if (kSotcTreeWatch)
@@ -1539,7 +1540,7 @@ static void allocLockEnterAt(int i, uint64_t a0, uint64_t a1) {
   if (mx.try_lock()) {
     if (t_lockDepth < 8) t_lockedState[t_lockDepth++] = a0;
     g_lockHolder.gtid.store(*currentGuestTidPtr());
-    g_lockHolder.site.store((uint32_t)i);
+    g_lockHolder.site.store((u32)i);
     g_lockHolder.a0.store(a0);
     return;
   }
@@ -1551,11 +1552,11 @@ static void allocLockEnterAt(int i, uint64_t a0, uint64_t a1) {
   mx.lock();
   if (t_lockDepth < 8) t_lockedState[t_lockDepth++] = a0;
   g_lockHolder.gtid.store(*currentGuestTidPtr());
-  g_lockHolder.site.store((uint32_t)i);
+  g_lockHolder.site.store((u32)i);
   g_lockHolder.a0.store(a0);
-  const uint64_t ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+  const u64 ns = (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - t0).count();
-  uint64_t prev = s.maxWaitNs.load(std::memory_order_relaxed);
+  u64 prev = s.maxWaitNs.load(std::memory_order_relaxed);
   while (ns > prev &&
          !s.maxWaitNs.compare_exchange_weak(prev, ns, std::memory_order_relaxed)) {}
 }
@@ -1575,9 +1576,9 @@ static void allocLockEnterAt(int i, uint64_t a0, uint64_t a1) {
 // so far is a mapped pointer into reused live data, so reading it is safe; a value
 // outside guest direct memory is reported without being dereferenced.
 static thread_local bool t_treeOkAtEntry = true;
-std::atomic<uint64_t> g_treeChecks{0};
-std::atomic<uint64_t> g_treeBadAtEntry{0};
-std::atomic<uint64_t> g_treeWentBad{0};
+std::atomic<u64> g_treeChecks{0};
+std::atomic<u64> g_treeBadAtEntry{0};
+std::atomic<u64> g_treeWentBad{0};
 std::atomic<int> g_treeReported{0};
 
 // The watched node does not exist at boot -- the heap has not grown into it yet --
@@ -1590,16 +1591,16 @@ std::atomic<bool> g_treeArmed{false};
 static void treeWatchArm() {
   std::thread([] {
     const long pg = sysconf(_SC_PAGESIZE);
-    void *page = reinterpret_cast<void *>(kSotcTreeNode & ~(uint64_t)(pg - 1));
+    void *page = reinterpret_cast<void *>(kSotcTreeNode & ~(u64)(pg - 1));
     // The walk reads the allocator STATE, the field watch reads the node: both
     // pages have to exist before either is allowed to dereference anything.
-    void *spage = reinterpret_cast<void *>(kSotcTreeState & ~(uint64_t)(pg - 1));
+    void *spage = reinterpret_cast<void *>(kSotcTreeState & ~(u64)(pg - 1));
     for (;;) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
       unsigned char vec = 0;
       if (mincore(page, 1, &vec) != 0 || mincore(spage, 1, &vec) != 0)
         continue;
-      const uint64_t own = *reinterpret_cast<const uint64_t *>(kSotcTreeNode - 8) & ~7ull;
+      const u64 own = *reinterpret_cast<const u64 *>(kSotcTreeNode - 8) & ~7ull;
       BASE_LOGI("treewatch",
                 "armed on node {:#x} (its own size word reads "
                 "{:#x}) state {:#x} sentinel {:#x}",
@@ -1612,9 +1613,9 @@ static void treeWatchArm() {
   }).detach();
 }
 
-static bool treeFieldOk(uint64_t &valOut, uint64_t &szOut) {
-  const uint64_t node = kSotcTreeNode;
-  const uint64_t sentinel = kSotcTreeState + 0x80;
+static bool treeFieldOk(u64 &valOut, u64 &szOut) {
+  const u64 node = kSotcTreeNode;
+  const u64 sentinel = kSotcTreeState + 0x80;
   valOut = szOut = 0;
   if (node < 0x8000000000ull || node >= 0x8700000000ull)
     return true;  // not the layout this watch was aimed at; stay quiet
@@ -1623,16 +1624,16 @@ static bool treeFieldOk(uint64_t &valOut, uint64_t &szOut) {
   // and calling that "bad" buries the real signal: the first run of this watch
   // reported 124 bad-on-entry hits with 0 transitions, which is what pre-
   // membership noise looks like.
-  const uint64_t own = *reinterpret_cast<const uint64_t *>(node - 8) & ~7ull;
+  const u64 own = *reinterpret_cast<const u64 *>(node - 8) & ~7ull;
   if (!own || own >= 0x8000000ull)
     return true;  // 8-granular sizes: masking with ~7 is the only test available
-  const uint64_t c = *reinterpret_cast<const uint64_t *>(node);
+  const u64 c = *reinterpret_cast<const u64 *>(node);
   valOut = c;
   if (c == sentinel)
     return true;
   if (c < 0x8000000000ull || c >= 0x8700000000ull)
     return false;  // not a guest pointer at all -- do not dereference it
-  const uint64_t sz = *reinterpret_cast<const uint64_t *>(c - 8) & ~7ull;
+  const u64 sz = *reinterpret_cast<const u64 *>(c - 8) & ~7ull;
   szOut = sz;
   return sz && sz < 0x8000000ull;
 }
@@ -1640,7 +1641,7 @@ static bool treeFieldOk(uint64_t &valOut, uint64_t &szOut) {
 static void treeWatchAt(int site, bool onExit) {
   if (!g_treeArmed.load(std::memory_order_acquire))
     return;
-  uint64_t val = 0, sz = 0;
+  u64 val = 0, sz = 0;
   const bool ok = treeFieldOk(val, sz);
   g_treeChecks.fetch_add(1, std::memory_order_relaxed);
   if (!onExit) {
@@ -1676,38 +1677,38 @@ static void treeWatchAt(int site, bool onExit) {
 // dereference, so a corrupt link cannot fault the walker.
 std::atomic<bool> g_treeWalkTripped{false};
 
-static inline bool inDmem(uint64_t p) {
+static inline bool inDmem(u64 p) {
   return p >= 0x8000000000ull && p < 0x8700000000ull;
 }
 
 static void treeWalkPeriodic() {
-  const uint64_t n = kSotcTreeWalk;
+  const u64 n = kSotcTreeWalk;
   if (!n || g_treeWalkTripped.load(std::memory_order_relaxed))
     return;
   if ((g_allocCallSeq.load(std::memory_order_relaxed) % n) != 0)
     return;
   if (!g_treeArmed.load(std::memory_order_acquire))
     return;
-  const uint64_t state = kSotcTreeState;
-  const uint64_t sentinel = state + 0x80;
+  const u64 state = kSotcTreeState;
+  const u64 sentinel = state + 0x80;
   if (!inDmem(sentinel))
     return;
-  uint64_t stack[256], fields[256];
+  u64 stack[256], fields[256];
   int sp = 0, visited = 0;
-  stack[sp] = *reinterpret_cast<const uint64_t *>(sentinel);
+  stack[sp] = *reinterpret_cast<const u64 *>(sentinel);
   fields[sp] = sentinel;
   sp++;
   while (sp > 0) {
     --sp;
-    const uint64_t cur = stack[sp], field = fields[sp];
+    const u64 cur = stack[sp], field = fields[sp];
     if (cur == sentinel || cur == 0)
       continue;
     if (++visited > 4096)
       return;  // pathological; say nothing rather than guess
     bool bad = !inDmem(cur);
-    uint64_t sz = 0;
+    u64 sz = 0;
     if (!bad) {
-      sz = *reinterpret_cast<const uint64_t *>(cur - 8) & ~7ull;
+      sz = *reinterpret_cast<const u64 *>(cur - 8) & ~7ull;
       bad = !sz || sz >= 0x8000000ull;
     }
     if (bad) {
@@ -1720,7 +1721,7 @@ static void treeWalkPeriodic() {
                 (unsigned long long)g_allocCallSeq.load(), visited,
                 (unsigned long long)field, (unsigned long long)cur,
                 (unsigned long long)sz);
-      const uint64_t pos = g_allocRingPos.load(std::memory_order_relaxed);
+      const u64 pos = g_allocRingPos.load(std::memory_order_relaxed);
       const int have = (int)(pos < kAllocRing ? pos : kAllocRing);
       BASE_LOGI("treewalk",
                 "the last {} allocator calls, oldest first (the "
@@ -1734,8 +1735,8 @@ static void treeWalkPeriodic() {
       return;
     }
     for (int c = 0; c < 2 && sp < 254; c++) {
-      const uint64_t f = cur + (uint64_t)c * 8;
-      stack[sp] = *reinterpret_cast<const uint64_t *>(f);
+      const u64 f = cur + (u64)c * 8;
+      stack[sp] = *reinterpret_cast<const u64 *>(f);
       fields[sp] = f;
       sp++;
     }
@@ -1746,7 +1747,7 @@ static void allocLockLeaveAt(int i) {
   if (kSotcAllocLock && g_allocSites[i].serialise) {
     // Unlock the same mutex the entry took: arg0 is not available here, so the
     // entry records which state it locked on a small per-thread stack.
-    const uint64_t a0 = t_lockDepth > 0 ? t_lockedState[--t_lockDepth] : 0;
+    const u64 a0 = t_lockDepth > 0 ? t_lockedState[--t_lockDepth] : 0;
     allocMutexFor(i, a0).unlock();
   }
   if (kSotcTreeWatch)
@@ -1756,16 +1757,16 @@ static void allocLockLeaveAt(int i) {
 }
 
 template <int N>
-static void PS4ABI allocLockEnterT(uint64_t a0, uint64_t a1) {
+static void PS4ABI allocLockEnterT(u64 a0, u64 a1) {
   allocLockEnterAt(N, a0, a1);
 }
 template <int N> static void PS4ABI allocLockLeaveT() { allocLockLeaveAt(N); }
 
 // Install an entry detour on an eboot-internal function. prologueLen must be the
 // smallest instruction boundary >= 14 in the prologue (position-independent).
-void installInternalHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
-                         uint32_t hookId, const char *name) {
-  uint8_t *target = base + off;
+void installInternalHook(u8 *base, u32 off, u32 prologueLen,
+                         u32 hookId, const char *name) {
+  u8 *target = base + off;
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(target) & ~0xFFFull),
                   0x2000, utl::pageProtection::rwx);
   uintptr_t tramp = cpu::makeGuestTrampoline(target, prologueLen, target + prologueLen);
@@ -1773,20 +1774,20 @@ void installInternalHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
   uintptr_t wrap = cpu::makeGuestReturnHook(reinterpret_cast<void *>(tramp), hookId,
                                             reinterpret_cast<void *>(&jobTraceLogger), name);
   if (!wrap) { LOG_WARNING("jobtrace: wrapper failed for {}", name); return; }
-  uint8_t patch[32];
+  u8 patch[32];
   patch[0] = 0xFF; patch[1] = 0x25;
   patch[2] = patch[3] = patch[4] = patch[5] = 0x00;   // jmp qword [rip+0]
-  uint64_t w = wrap; std::memcpy(patch + 6, &w, 8);
-  for (uint32_t i = 14; i < prologueLen; i++) patch[i] = 0x90;
+  u64 w = wrap; std::memcpy(patch + 6, &w, 8);
+  for (u32 i = 14; i < prologueLen; i++) patch[i] = 0x90;
   std::memcpy(target, patch, prologueLen);
   LOG_INFO("jobtrace: hooked {} eboot+{:#x} tramp={:#x} wrapper={:#x}", name, off,
            (unsigned long)tramp, (unsigned long)wrap);
 }
 
 // Same detour, but the wrapper takes the host allocator mutex across the call.
-static void installAllocLockHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
+static void installAllocLockHook(u8 *base, u32 off, u32 prologueLen,
                                  const char *name, void *enterFn, void *leaveFn) {
-  uint8_t *target = base + off;
+  u8 *target = base + off;
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(target) & ~0xFFFull),
                   0x2000, utl::pageProtection::rwx);
   uintptr_t tramp = cpu::makeGuestTrampoline(target, prologueLen, target + prologueLen);
@@ -1794,11 +1795,11 @@ static void installAllocLockHook(uint8_t *base, uint32_t off, uint32_t prologueL
   uintptr_t wrap = cpu::makeGuestLockWrapper(reinterpret_cast<void *>(tramp),
                                              enterFn, leaveFn, name);
   if (!wrap) { LOG_WARNING("alloclock: wrapper failed for {}", name); return; }
-  uint8_t patch[32];
+  u8 patch[32];
   patch[0] = 0xFF; patch[1] = 0x25;
   patch[2] = patch[3] = patch[4] = patch[5] = 0x00;   // jmp qword [rip+0]
-  uint64_t w = wrap; std::memcpy(patch + 6, &w, 8);
-  for (uint32_t i = 14; i < prologueLen; i++) patch[i] = 0x90;
+  u64 w = wrap; std::memcpy(patch + 6, &w, 8);
+  for (u32 i = 14; i < prologueLen; i++) patch[i] = 0x90;
   std::memcpy(target, patch, prologueLen);
   LOG_INFO("alloclock: serialising {} eboot+{:#x} tramp={:#x} wrapper={:#x}", name,
            off, (unsigned long)tramp, (unsigned long)wrap);
@@ -1814,8 +1815,8 @@ static void installAllocLockHook(uint8_t *base, uint32_t off, uint32_t prologueL
 static void installAllocLock(smodule &m) {
   if (!kSotcAllocLock && !kSotcTreeWatch && !kSotcTreeWalk && !kSotcHeapRoute)
     return;
-  uint8_t *base = m.getInfo().base;
-  struct Site { uint32_t off; uint32_t cut; const char *name; bool lock; };
+  u8 *base = m.getInfo().base;
+  struct Site { u32 off; u32 cut; const char *name; bool lock; };
   // Prologue cuts are the smallest position-independent instruction boundary >= 14,
   // each stopping before the function's first rip-relative load; every one was
   // checked for positive-rbp stack-argument reads, which an entry detour breaks.
@@ -1918,7 +1919,7 @@ static void installMatTrace(smodule &m) {
 static void installJobTrace(smodule &m) {
   if (!kJobTrace)
     return;
-  uint8_t *base = m.getInfo().base;
+  u8 *base = m.getInfo().base;
   // prologue cut points (smallest instr boundary >= 14, verified by disasm):
   //   claim 0x38d40 -> 20 (through `sub rsp,0xa8`)
   //   kick  0x35480 -> 17 (through `sub rsp,0x38`)
@@ -1936,8 +1937,8 @@ static void installJobTrace(smodule &m) {
 static void investigateDcbGate(smodule &m) {
   if (!kPs5Dcbwatch)
     return;
-  uint8_t *base = m.getInfo().base;
-  struct { uint32_t off; const char *label; } pts[] = {
+  u8 *base = m.getInfo().base;
+  struct { u32 off; const char *label; } pts[] = {
       {0x425ef0, "app_main(0x425ef0)"},   {0x4cc830, "app_render(0x4cc830)"},
       {0x5535d0, "RenderInit(0x5535d0)"}, {0x58fb10, "VOInit(0x58fb10)"},
       {0x58fd50, "DCBframeInit(0x58fd50)"}, {0x5901a0, "rendererFrame(0x5901a0)"},
@@ -1957,7 +1958,7 @@ static void investigateDcbGate(smodule &m) {
   // sceVideoOutOpen; when it returns non-zero VOInit bails and the DCB is never
   // created. It accumulates its error in ebx from three sub-calls; trace each
   // `mov ebx,eax` return so we see which import fails.
-  struct { uint32_t off; const char *label; } rets[] = {
+  struct { u32 off; const char *label; } rets[] = {
       {0x69e761, "0x69e720:vSMAm3cxYTY#1"},
       {0x69e78f, "0x69e720:vSMAm3cxYTY#2"},
       {0x69e7aa, "0x69e720:23LRUSvYu1M"},
@@ -1976,18 +1977,18 @@ static void investigateDcbGate(smodule &m) {
   // Identify the imports 0x69e720 calls by symbolizing their resolved GOT slots
   // (imports are already bound at this point).
   auto *p = proc::getActive();
-  struct { uint32_t got; const char *nid; } gots[] = {
+  struct { u32 got; const char *nid; } gots[] = {
       {0x8e8e38, "vSMAm3cxYTY"}, {0x8e8e40, "23LRUSvYu1M(FAILING)"},
       {0x8e8e48, "2JtWUUiYBXs"}, {0x8e8d80, "1jfXLRVzisc"},
   };
   for (auto &g : gots) {
-    uint64_t tgt = *reinterpret_cast<uint64_t *>(base + g.got);
+    u64 tgt = *reinterpret_cast<u64 *>(base + g.got);
     const char *mod = "??";
-    uint64_t off = tgt;
+    u64 off = tgt;
     if (p)
       for (auto &mm : p->getModuleList()) {
         auto &mi = mm->getInfo();
-        auto tb = reinterpret_cast<uint64_t>(mi.textSeg.addr);
+        auto tb = reinterpret_cast<u64>(mi.textSeg.addr);
         if (tb && tgt >= tb && tgt < tb + mi.textSeg.size) {
           mod = mi.name.c_str();
           off = tgt - tb;
@@ -1995,9 +1996,9 @@ static void investigateDcbGate(smodule &m) {
         }
       }
     // Does any loaded module export this NID's hash? (is it resolvable?)
-    uint64_t hid = 0;
+    u64 hid = 0;
     const char *expMod = "NONE";
-    uint64_t expAddr = 0;
+    u64 expAddr = 0;
     if (runtime::decode_nid(g.nid, 11, hid) && p)
       for (auto &mm : p->getModuleList())
         if (uintptr_t a = mm->getExport(hid)) {
@@ -2008,11 +2009,11 @@ static void investigateDcbGate(smodule &m) {
     BASE_LOGI("dcbimp", "{} got={}+{:#x} exportedBy={}({:#x})", g.nid, mod,
               (unsigned long long)off, expMod, (unsigned long long)expAddr);
   }
-  auto *slot = reinterpret_cast<volatile uint64_t *>(base + 0x985a00);
+  auto *slot = reinterpret_cast<volatile u64 *>(base + 0x985a00);
   std::thread([slot] {
-    uint64_t last = ~1ull;
+    u64 last = ~1ull;
     for (int i = 0; i < 400000; i++) {
-      uint64_t v = *slot;
+      u64 v = *slot;
       if (v != last) {
         BASE_LOGI("dcbwatch", "t={}ms manager[0] (eboot+0x985a00) = {:#x}",
                   i / 2, (unsigned long long)v);
@@ -2032,7 +2033,7 @@ modulePtr proc::getModule(base::StringRef name) {
   return {nullptr};
 }
 
-modulePtr proc::getModule(uint32_t handle) {
+modulePtr proc::getModule(u32 handle) {
   for (auto &mod : modules) {
     if (mod->getInfo().handle == handle)
       return mod;
@@ -2055,20 +2056,20 @@ modulePtr proc::getModule(uint32_t handle) {
 // later runs. The map then works as a valid empty registry independent of order
 // or the missing gfx init. (Verified offsets via the decrypted rebirth.elf.)
 static void bringUpRebirthSurfaceRegistry(smodule &m) {
-  uint8_t *base = m.getInfo().base;
-  constexpr uint32_t kRegistryOff = 0x687a90; // bucket-array base pointer
-  constexpr uint32_t kCtorZeroOff = 0x1e9bcd; // `mov qword [registry], 0` (11 bytes)
+  u8 *base = m.getInfo().base;
+  constexpr u32 kRegistryOff = 0x687a90; // bucket-array base pointer
+  constexpr u32 kCtorZeroOff = 0x1e9bcd; // `mov qword [registry], 0` (11 bytes)
   constexpr size_t kBucketBytes = 0x20 * 0x20; // N buckets * stride
 
-  uint8_t *buckets = allocLowGuest(kBucketBytes);
+  u8 *buckets = allocLowGuest(kBucketBytes);
   if (!buckets) {
     LOG_ERROR("rebirth surface-registry: bucket alloc failed");
     return;
   }
-  *reinterpret_cast<uint64_t *>(base + kRegistryOff) =
-      reinterpret_cast<uint64_t>(buckets);
+  *reinterpret_cast<u64 *>(base + kRegistryOff) =
+      reinterpret_cast<u64>(buckets);
 
-  uint8_t *ctor = base + kCtorZeroOff;
+  u8 *ctor = base + kCtorZeroOff;
   utl::protectMem(
       reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(ctor) & ~0xFFFull),
       0x1000, utl::pageProtection::rwx);
@@ -2082,11 +2083,11 @@ static void bringUpRebirthSurfaceRegistry(smodule &m) {
   // thread faults at rebirth+0x23f027 dereferencing this when it is null; this
   // shows whether/when it gets allocated. Logs every transition.
   if (kGfxctxWatch) {
-    auto *slot = reinterpret_cast<volatile uint64_t *>(base + 0x687b30 + 0x38);
+    auto *slot = reinterpret_cast<volatile u64 *>(base + 0x687b30 + 0x38);
     std::thread([slot] {
-      uint64_t last = ~0ull;
+      u64 last = ~0ull;
       for (int i = 0; i < 200000; i++) {
-        uint64_t v = *slot;
+        u64 v = *slot;
         if (v != last) {
           BASE_LOGI("gfxctx", "+0x38 = {:#x}  (t={}ms)",
                     (unsigned long long)v, i / 2);
@@ -2110,26 +2111,26 @@ static void bringUpRebirthSurfaceRegistry(smodule &m) {
 // on PS4. Guarded by the exact ctor-instruction bytes so a different PS5 title's
 // eboot is left untouched. (Offsets verified against the decrypted eboot.)
 static void bringUpRebirthEbootRegistry(smodule &m) {
-  uint8_t *base = m.getInfo().base;
-  constexpr uint32_t kRegistryOff = 0x985458; // bucket-array base pointer
-  constexpr uint32_t kCtorZeroOff = 0x56a5e7; // `mov qword [registry], 0` (11 bytes)
+  u8 *base = m.getInfo().base;
+  constexpr u32 kRegistryOff = 0x985458; // bucket-array base pointer
+  constexpr u32 kCtorZeroOff = 0x56a5e7; // `mov qword [registry], 0` (11 bytes)
   constexpr size_t kBucketBytes = 0x20 * 0x20; // N buckets * stride
 
   // `mov qword [rip+0x41ae66], 0` -> eboot+0x985458. Only this build has it.
-  static const uint8_t kCtorBytes[] = {0x48, 0xc7, 0x05, 0x66, 0xae, 0x41,
+  static const u8 kCtorBytes[] = {0x48, 0xc7, 0x05, 0x66, 0xae, 0x41,
                                        0x00, 0x00, 0x00, 0x00, 0x00};
   if (std::memcmp(base + kCtorZeroOff, kCtorBytes, sizeof(kCtorBytes)) != 0)
     return; // not this title's eboot; nothing to bring up
 
-  uint8_t *buckets = allocLowGuest(kBucketBytes);
+  u8 *buckets = allocLowGuest(kBucketBytes);
   if (!buckets) {
     LOG_ERROR("rebirth eboot-registry: bucket alloc failed");
     return;
   }
-  *reinterpret_cast<uint64_t *>(base + kRegistryOff) =
-      reinterpret_cast<uint64_t>(buckets);
+  *reinterpret_cast<u64 *>(base + kRegistryOff) =
+      reinterpret_cast<u64>(buckets);
 
-  uint8_t *ctor = base + kCtorZeroOff;
+  u8 *ctor = base + kCtorZeroOff;
   utl::protectMem(
       reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(ctor) & ~0xFFFull),
       0x1000, utl::pageProtection::rwx);
@@ -2150,21 +2151,21 @@ static void bringUpRebirthEbootRegistry(smodule &m) {
 static void watchVideoOutState(smodule &m) {
   if (!kVoWatch)
     return;
-  uint8_t *base = m.getInfo().base;
+  u8 *base = m.getInfo().base;
   std::thread([base] {
-    int32_t lc = 0x7fffffff, li = 0x7fffffff;
-    uint32_t lf[3] = {0xdead, 0xdead, 0xdead};
+    i32 lc = 0x7fffffff, li = 0x7fffffff;
+    u32 lf[3] = {0xdead, 0xdead, 0xdead};
     for (int i = 0; i < 120000; i++) {
-      int32_t c = *reinterpret_cast<volatile int32_t *>(base + 0x1cb30);
-      int32_t idx = *reinterpret_cast<volatile int32_t *>(base + 0x1cb40);
-      uint32_t f[3];
+      i32 c = *reinterpret_cast<volatile i32 *>(base + 0x1cb30);
+      i32 idx = *reinterpret_cast<volatile i32 *>(base + 0x1cb40);
+      u32 f[3];
       for (int s = 0; s < 3; s++)
-        f[s] = *reinterpret_cast<volatile uint32_t *>(base + 0x1cb50 + s * 0x140);
+        f[s] = *reinterpret_cast<volatile u32 *>(base + 0x1cb50 + s * 0x140);
       // port[0] @ vaddr 0x1d550 (stride 0xb0): field@0x14=open flag; field@0x48 set
       // to 0xfffffff3 once Open reaches the deep success path (just before op@0x580).
-      uint32_t portOpen = *reinterpret_cast<volatile uint32_t *>(base + 0x1d564);
-      uint32_t port48 = *reinterpret_cast<volatile uint32_t *>(base + 0x1d550 + 0x48);
-      static uint32_t lpo = 0xdead, lp48 = 0xdead;
+      u32 portOpen = *reinterpret_cast<volatile u32 *>(base + 0x1d564);
+      u32 port48 = *reinterpret_cast<volatile u32 *>(base + 0x1d550 + 0x48);
+      static u32 lpo = 0xdead, lp48 = 0xdead;
       if (c != lc || idx != li || f[0] != lf[0] || f[1] != lf[1] || f[2] != lf[2] ||
           portOpen != lpo || port48 != lp48) {
         BASE_LOGI("vowatch",
@@ -2181,10 +2182,10 @@ static void watchVideoOutState(smodule &m) {
       static bool patched = false;
       if (kVoForceConnect && !patched && idx >= 1 &&
           idx < 8 && f[0] == 0 && f[1] == 0xffffffff) {
-        uint8_t *cfg0 = base + 0x1cb50;
-        uint8_t *cfgi = base + 0x1cb50 + (size_t)idx * 0x140;
+        u8 *cfg0 = base + 0x1cb50;
+        u8 *cfgi = base + 0x1cb50 + (size_t)idx * 0x140;
         std::memcpy(cfgi, cfg0, 0x140);                 // copy ops/vtable
-        *reinterpret_cast<uint32_t *>(cfgi) = 4;        // f0 = connected
+        *reinterpret_cast<u32 *>(cfgi) = 4;        // f0 = connected
         patched = true;
         BASE_LOGI("vowatch", "FORCE_CONNECT: cfg[{}] <- cfg[0], f0=4", idx);
       }
@@ -2198,11 +2199,11 @@ static void watchVideoOutState(smodule &m) {
 // in args (rsi,rdx,r10,r8) -> a2,a3,a4,a5. Logs the title's real Open() args and
 // returns 0 (the op's value for the main display). If this never logs, Open failed
 // before the op (count/f0/param gate).
-static uint64_t PS4ABI voOpMapLog(uint64_t a1, uint64_t userId, uint64_t busType,
-                                  uint64_t index, uint64_t param, uint64_t a6) {
-  uint32_t pv = 0;
+static u64 PS4ABI voOpMapLog(u64 a1, u64 userId, u64 busType,
+                                  u64 index, u64 param, u64 a6) {
+  u32 pv = 0;
   if (param > 0x10000 && param < 0x800000000000ull)
-    pv = *reinterpret_cast<uint32_t *>(param);
+    pv = *reinterpret_cast<u32 *>(param);
   BASE_LOGI("voop",
             "sceVideoOutOpen(userId={:#x} busType={} index={} param={:#x} "
             "[param]={:#x} [param]&0xf={:#x}) -> map-op returns 0",
@@ -2215,11 +2216,11 @@ static void patchVideoOutDiag(smodule &m) {
   watchVideoOutState(m);
   if (kVoOplog) {
     uintptr_t thunk = cpu::makeHostThunk(reinterpret_cast<void *>(&voOpMapLog));
-    uint8_t *o = m.getInfo().base + 0x1020;
+    u8 *o = m.getInfo().base + 0x1020;
     utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(o) & ~0xFFFull),
                     0x2000, utl::pageProtection::rwx);
     o[0] = 0x48; o[1] = 0xb8;                       // mov rax, imm64
-    *reinterpret_cast<uint64_t *>(o + 2) = thunk;
+    *reinterpret_cast<u64 *>(o + 2) = thunk;
     o[10] = 0xff; o[11] = 0xe0;                     // jmp rax
     BASE_LOGI("voop", "hooked map-op @ +0x1020 -> thunk {:#x}",
               (unsigned long)thunk);
@@ -2227,7 +2228,7 @@ static void patchVideoOutDiag(smodule &m) {
   // TEST (DELTA_VO_SKIP_580): nop the `js error` after Open's `call op@0x580`
   // (config-validate op). If Open then progresses, op@0x580's return was a gate.
   if (kVoSkip580) {
-    uint8_t *c = m.getInfo().base + 0xaeb8;  // js 0xef09 after the op call
+    u8 *c = m.getInfo().base + 0xaeb8;  // js 0xef09 after the op call
     utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(c) & ~0xFFFull),
                     0x2000, utl::pageProtection::rwx);
     if (c[0] == 0x78) {  // js rel8
@@ -2240,14 +2241,14 @@ static void patchVideoOutDiag(smodule &m) {
   const char *list = kVoPatch;
   if (!list)
     return;
-  uint8_t *base = m.getInfo().base;
-  struct { const char *name; uint32_t off; uint8_t ret; } fns[] = {
+  u8 *base = m.getInfo().base;
+  struct { const char *name; u32 off; u8 ret; } fns[] = {
       {"open", 0xaad0, 1}, {"regbuf", 0xb620, 0}, {"fliprate", 0xbde0, 0},
       {"addflip", 0xc6c0, 0}, {"getlabel", 0xbb80, 0}};
   for (auto &fn : fns) {
     if (!std::strstr(list, fn.name))
       continue;
-    uint8_t *c = base + fn.off;
+    u8 *c = base + fn.off;
     utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(c) & ~0xFFFull),
                     0x2000, utl::pageProtection::rwx);
     c[0] = 0xb8; c[1] = fn.ret; c[2] = 0; c[3] = 0; c[4] = 0;  // mov eax, imm32
@@ -2386,11 +2387,11 @@ modulePtr proc::loadModule(base::StringRef name) {
 
 // Patch a guest function to `xor eax,eax; ret`. Steps over libkernel-internal
 // validation that rejects our externally-loaded module set (11.00 offsets).
-static void forceReturn0(proc &p, const char *mod, uint32_t off) {
+static void forceReturn0(proc &p, const char *mod, u32 off) {
   auto m = p.getModule(base::StringRef(mod));
   if (!m)
     return;
-  uint8_t *c = m->getInfo().base + off;
+  u8 *c = m->getInfo().base + off;
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(c) & ~0xFFFull),
                   0x1000, utl::pageProtection::rwx);
   c[0] = 0x31;  // xor eax, eax
@@ -2399,11 +2400,11 @@ static void forceReturn0(proc &p, const char *mod, uint32_t off) {
 }
 
 // Patch a (rdi=paramId, rsi=int* out) getter to `*out = val; return 0`.
-static void forceGetterOk(proc &p, const char *mod, uint32_t off, uint32_t val) {
+static void forceGetterOk(proc &p, const char *mod, u32 off, u32 val) {
   auto m = p.getModule(base::StringRef(mod));
   if (!m)
     return;
-  uint8_t *c = m->getInfo().base + off;
+  u8 *c = m->getInfo().base + off;
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(c) & ~0xFFFull),
                   0x1000, utl::pageProtection::rwx);
   c[0] = 0xC7; c[1] = 0x06;  // mov dword [rsi], imm32
@@ -2426,22 +2427,22 @@ static void forceGetterOk(proc &p, const char *mod, uint32_t off, uint32_t val) 
 // re-entrant call -- the bootstrap -- is served from a small malloc-free bump
 // pool so the mutex can finish initialising. Native x86 only (the thunk is a host
 // function the guest calls directly); PS5 only.
-using PthreadAllocFn = uint64_t(PS4ABI *)(uint64_t op, uint64_t arg);
+using PthreadAllocFn = u64(PS4ABI *)(u64 op, u64 arg);
 static PthreadAllocFn g_origPthreadAlloc = nullptr;
 static thread_local int g_pthreadAllocDepth = 0;
 
-static uint64_t PS4ABI ps5PthreadAlloc(uint64_t op, uint64_t arg) {
+static u64 PS4ABI ps5PthreadAlloc(u64 op, u64 arg) {
   if (op == 1 && g_pthreadAllocDepth > 0) {
     static std::atomic<size_t> off{0};
-    static uint8_t pool[64 * 1024];
+    static u8 pool[64 * 1024];
     size_t sz = (arg + 0xF) & ~size_t(0xF);
     size_t o = off.fetch_add(sz, std::memory_order_relaxed);
-    return o + sz <= sizeof(pool) ? reinterpret_cast<uint64_t>(pool + o) : 0;
+    return o + sz <= sizeof(pool) ? reinterpret_cast<u64>(pool + o) : 0;
   }
   if (!g_origPthreadAlloc)
     return 0;
   ++g_pthreadAllocDepth;
-  uint64_t r = g_origPthreadAlloc(op, arg);
+  u64 r = g_origPthreadAlloc(op, arg);
   --g_pthreadAllocDepth;
   return r;
 }
@@ -2461,16 +2462,16 @@ void ps5MaybeInterposePthreadAlloc() {
   auto k = p->getModule(base::StringRef("libkernel"));
   if (!k)
     return;
-  auto *slot = reinterpret_cast<uint64_t *>(k->getInfo().base + kPthreadAllocSlot);
-  uint64_t cur = *slot;
-  if (!cur || cur == reinterpret_cast<uint64_t>(&ps5PthreadAlloc))
+  auto *slot = reinterpret_cast<u64 *>(k->getInfo().base + kPthreadAllocSlot);
+  u64 cur = *slot;
+  if (!cur || cur == reinterpret_cast<u64>(&ps5PthreadAlloc))
     return;  // not populated yet, or already ours
   if (done.exchange(true))
     return;
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(slot) & ~0xFFFull),
                   0x1000, utl::pageProtection::rwx);
   g_origPthreadAlloc = reinterpret_cast<PthreadAllocFn>(cur);
-  *slot = reinterpret_cast<uint64_t>(&ps5PthreadAlloc);
+  *slot = reinterpret_cast<u64>(&ps5PthreadAlloc);
   LOG_INFO("interposed libkernel pthread-state alloc (+{:#x}) orig={:#x}",
            kPthreadAllocSlot, cur);
 #endif
@@ -2491,13 +2492,13 @@ static void applyBootPatches(proc &p) {
 #if defined(DELTA_BACKEND_NATIVE)
   if (auto k = p.getModule(base::StringRef("libkernel"))) {
     if (uintptr_t a = k->getSymbolByNid("vNe1w4diLCs")) {
-      auto *c = reinterpret_cast<uint8_t *>(a);
+      auto *c = reinterpret_cast<u8 *>(a);
       utl::protectMem(reinterpret_cast<void *>(a & ~0xFFFull), 0x2000,
                       utl::pageProtection::rwx);
       c[0] = 0x48;  // movabs rax, imm64
       c[1] = 0xB8;
-      *reinterpret_cast<uint64_t *>(c + 2) =
-          reinterpret_cast<uint64_t>(&guest_tls_get_addr);
+      *reinterpret_cast<u64 *>(c + 2) =
+          reinterpret_cast<u64>(&guest_tls_get_addr);
       c[10] = 0xFF;  // jmp rax
       c[11] = 0xE0;
       LOG_INFO("patched libkernel __tls_get_addr -> host HLE");
@@ -2509,11 +2510,11 @@ static void applyBootPatches(proc &p) {
   // bridges to krnl::guest_tls_get_addr (tls_index ptr arrives in rdi).
   if (auto k = p.getModule(base::StringRef("libkernel"))) {
     if (uintptr_t a = k->getSymbolByNid("vNe1w4diLCs")) {
-      auto *c = reinterpret_cast<uint8_t *>(a);
+      auto *c = reinterpret_cast<u8 *>(a);
       utl::protectMem(reinterpret_cast<void *>(a & ~0xFFFull), 0x2000,
                       utl::pageProtection::rwx);
       c[0] = 0xB8; // mov eax, imm32
-      *reinterpret_cast<uint32_t *>(c + 1) = cpu::kTlsGetAddrSyscall;
+      *reinterpret_cast<u32 *>(c + 1) = cpu::kTlsGetAddrSyscall;
       c[5] = 0x0F; // syscall
       c[6] = 0x05;
       c[7] = 0xC3; // ret
@@ -2530,9 +2531,9 @@ static void applyBootPatches(proc &p) {
     base::String spec(t);
     char *cur = const_cast<char *>(spec.c_str());
     while (cur && *cur) {
-      uint64_t addr = std::strtoull(cur, &cur, 0);
+      u64 addr = std::strtoull(cur, &cur, 0);
       if (addr) {
-        auto *c = reinterpret_cast<uint8_t *>(addr);
+        auto *c = reinterpret_cast<u8 *>(addr);
         utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                         utl::pageProtection::rwx);
         c[0] = 0xCC; // int3 -> SIGTRAP -> crash handler dump
@@ -2547,8 +2548,8 @@ static void applyBootPatches(proc &p) {
   // see what fills a fixed heap (e.g. SOTTR's 1 GiB pool) without gdb.
   if (const char *at = kAllocTrace) {
     char *end = nullptr;
-    uint64_t addr = std::strtoull(at, &end, 0);
-    uint64_t minB = 0x1000000;
+    u64 addr = std::strtoull(at, &end, 0);
+    u64 minB = 0x1000000;
     if (end && *end == ',') minB = std::strtoull(end + 1, nullptr, 0) * 1024 * 1024;
     // DELTA_ALLOC_TRACE doubles as a boolean toggle for the [lowalloc] tracer in
     // sys_mem.cpp, so a bare "=1" is legitimate and must NOT be treated as a code
@@ -2556,7 +2557,7 @@ static void applyBootPatches(proc &p) {
     // A real allocator entry is a guest .text vaddr (>= 64 KiB); ignore anything
     // smaller so tracing can be enabled without planting an int3 at a bogus addr.
     if (addr >= 0x10000) {
-      auto *c = reinterpret_cast<uint8_t *>(addr);
+      auto *c = reinterpret_cast<u8 *>(addr);
       utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                       utl::pageProtection::rwx);
       if (c[0] == 0x55) {  // push rbp
@@ -2576,8 +2577,8 @@ static void applyBootPatches(proc &p) {
   // each site by whether the thread had a scoped allocator live (see crash.h).
   if (const char *hs = kHeapProfScope) {
     char *cur = const_cast<char *>(hs);
-    const uint64_t slot = std::strtoull(cur, &cur, 0);
-    const uint64_t depth = (*cur == ':') ? std::strtoull(cur + 1, nullptr, 0) : 0;
+    const u64 slot = std::strtoull(cur, &cur, 0);
+    const u64 depth = (*cur == ':') ? std::strtoull(cur + 1, nullptr, 0) : 0;
     if (slot >= 0x10000) {
       setHeapProfScope(slot, depth);
       LOG_INFO("DELTA_HEAP_PROF_SCOPE: tls slot {:#x} depth +{:#x}", slot, depth);
@@ -2586,7 +2587,7 @@ static void applyBootPatches(proc &p) {
   if (const char *hp = kHeapProf) {
     char *cur = const_cast<char *>(hp);
     while (cur && *cur) {
-      uint64_t addr = std::strtoull(cur, &cur, 0);
+      u64 addr = std::strtoull(cur, &cur, 0);
       // "<addr>:c" marks a deallocator: its first argument is a pointer, so
       // the site is reported by call count instead of by bytes.
       bool countOnly = false;
@@ -2595,7 +2596,7 @@ static void applyBootPatches(proc &p) {
         cur += 2;
       }
       if (addr >= 0x10000) {
-        auto *c = reinterpret_cast<uint8_t *>(addr);
+        auto *c = reinterpret_cast<u8 *>(addr);
         utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                         utl::pageProtection::rwx);
         if (c[0] == 0x55) { c[0] = 0xCC; setHeapProf(addr, countOnly);
@@ -2608,18 +2609,18 @@ static void applyBootPatches(proc &p) {
     }
   }
   if (const char *ct = kCntTrace) {
-    uint64_t addr = std::strtoull(ct, nullptr, 0);
+    u64 addr = std::strtoull(ct, nullptr, 0);
     if (addr) {
-      auto *c = reinterpret_cast<uint8_t *>(addr);
+      auto *c = reinterpret_cast<u8 *>(addr);
       utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                       utl::pageProtection::rwx);
       if (c[0] == 0x55) { c[0] = 0xCC; setCntTrace(addr); }
     }
   }
   if (const char *ft = kFatalTrace) {
-    uint64_t addr = std::strtoull(ft, nullptr, 0);
+    u64 addr = std::strtoull(ft, nullptr, 0);
     if (addr) {
-      auto *c = reinterpret_cast<uint8_t *>(addr);
+      auto *c = reinterpret_cast<u8 *>(addr);
       utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                       utl::pageProtection::rwx);
       if (c[0] == 0x55) { c[0] = 0xCC; setFatalTrace(addr); }
@@ -2630,9 +2631,9 @@ static void applyBootPatches(proc &p) {
     const char *s = ht;
     while (*s) {
       char *end = nullptr;
-      uint64_t addr = std::strtoull(s, &end, 0);
+      u64 addr = std::strtoull(s, &end, 0);
       if (addr) {
-        auto *c = reinterpret_cast<uint8_t *>(addr);
+        auto *c = reinterpret_cast<u8 *>(addr);
         utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                         utl::pageProtection::rwx);
         if (c[0] == 0x55) { c[0] = 0xCC; setHdrTrace(addr); }
@@ -2642,9 +2643,9 @@ static void applyBootPatches(proc &p) {
     }
   }
   if (const char *ro = kRdoffFix) {
-    uint64_t addr = std::strtoull(ro, nullptr, 0);
+    u64 addr = std::strtoull(ro, nullptr, 0);
     if (addr) {
-      auto *c = reinterpret_cast<uint8_t *>(addr);
+      auto *c = reinterpret_cast<u8 *>(addr);
       utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                       utl::pageProtection::rwx);
       if (c[0] == 0x55) { c[0] = 0xCC; setRdoffFix(addr); }
@@ -2654,9 +2655,9 @@ static void applyBootPatches(proc &p) {
     const char *s2 = sf;
     while (*s2) {
       char *end = nullptr;
-      uint64_t addr = std::strtoull(s2, &end, 0);
+      u64 addr = std::strtoull(s2, &end, 0);
       if (addr) {
-        auto *c = reinterpret_cast<uint8_t *>(addr);
+        auto *c = reinterpret_cast<u8 *>(addr);
         utl::protectMem(reinterpret_cast<void *>(addr & ~0xFFFull), 0x1000,
                         utl::pageProtection::rwx);
         if (c[0] == 0x55) { c[0] = 0xCC; setSkipFn(addr); }
@@ -2692,7 +2693,7 @@ void proc::start() {
 
   union stack_entry {
     const void *ptr;
-    uint64_t val;
+    u64 val;
   } stack[128];
 
   stack[0].val = 1 + 0; // argc
@@ -2709,7 +2710,7 @@ void proc::start() {
   // backend runs it natively (x86 host) or via the FEXCore JIT (aarch64 host).
   // PS5 starts with the TCB its kernel would have installed; libkernel reads
   // fs:0x10 before it gets around to setting up its own (see makeInitialTcb).
-  const uint64_t fsbase = plat == platform::ps5 ? ps5::makeInitialTcb() : 0;
+  const u64 fsbase = plat == platform::ps5 ? ps5::makeInitialTcb() : 0;
   cpu::backend().enterGuest(reinterpret_cast<uintptr_t>(kinfo.entry), stack,
                             fsbase);
 }

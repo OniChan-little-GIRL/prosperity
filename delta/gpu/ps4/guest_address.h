@@ -16,15 +16,16 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu::ps4 {
 
 // Guest GPU allocations (Onion/Garlic) start at 0x10_0000_0000; the guest map
 // ends below 0x200_0000_0000.
-inline constexpr uint64_t kGuestBase = 0x1000000000ull;
-inline constexpr uint64_t kGuestEnd = 0x20000000000ull;
+inline constexpr u64 kGuestBase = 0x1000000000ull;
+inline constexpr u64 kGuestEnd = 0x20000000000ull;
 
-inline bool IsGuestAddress(uint64_t address) {
+inline bool IsGuestAddress(u64 address) {
   return address >= kGuestBase && address < kGuestEnd;
 }
 
@@ -32,7 +33,7 @@ inline bool IsGuestAddress(uint64_t address) {
 // `address < kGuestEnd` test is load-bearing, not implied by the one after it:
 // without it `kGuestEnd - address` wraps and everything above the window
 // passes.
-inline bool IsGuestRange(uint64_t address, uint64_t bytes) {
+inline bool IsGuestRange(u64 address, u64 bytes) {
   return bytes && address >= kGuestBase && address < kGuestEnd &&
          bytes <= kGuestEnd - address;
 }

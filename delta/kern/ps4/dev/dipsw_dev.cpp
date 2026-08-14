@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -17,16 +18,16 @@ namespace krnl {
 dipswDevice::dipswDevice(proc *p) : device(p) {}
 
 /* dipsw_dev_ioctl */
-int32_t dipswDevice::ioctl(uint32_t cmd, void *data) {
+i32 dipswDevice::ioctl(u32 cmd, void *data) {
   switch (cmd) {
   case 0x40048806: /*sceKernelCheckDipsw*/
-    *static_cast<uint32_t *>(data) = 1;
+    *static_cast<u32 *>(data) = 1;
     break;
   /* dont seem to be implemented ? */
   case 0x40048807:
   case 0x40088808:
   case 0x40088809:
-    *static_cast<uint32_t *>(data) = 0;
+    *static_cast<u32 *>(data) = 0;
     break;
   default:
     // Unknown dipsw command (e.g. PS5-era 0x40080002, an 8-byte IOC_OUT read).
@@ -34,7 +35,7 @@ int32_t dipswDevice::ioctl(uint32_t cmd, void *data) {
     // reads a benign 0 instead of trapping.
     BASE_LOGI("dipsw", "UNHANDLED ioctl({:x}) data={:p}", cmd, data);
     if (data && (cmd & 0x40000000u)) {
-      uint32_t len = (cmd >> 16) & 0x1fff;
+      u32 len = (cmd >> 16) & 0x1fff;
       if (len)
         std::memset(data, 0, len);
     }

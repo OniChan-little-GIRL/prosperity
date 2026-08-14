@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <atomic>
 #include <cstdint>
@@ -61,23 +62,23 @@ namespace krnl {
 // Read by null_handler and the trampoline alike, so it is a krnl symbol rather
 // than a file-local one.
 DELTA_OPTION(bool, g_scHist, "DELTA_SCHIST", false);
-const char *syscall_getname(uint32_t idx);
+const char *syscall_getname(u32 idx);
 
-int sys_write(uint32_t fd, const void *buf, size_t nbytes);
+int sys_write(u32 fd, const void *buf, size_t nbytes);
 int sys_sigprocmask(int, const int *, int *);
 int sys_sigaction(int sig, const void *act, void *oact);
-int sys_regmgr_call(uint32_t op, uint32_t id, void *result, void *value,
-                    uint64_t type);
+int sys_regmgr_call(u32 op, u32 id, void *result, void *value,
+                    u64 type);
 
-int PS4ABI sys_ipmimgr_call(uint32_t op, uint32_t kid, void *out, void *in,
-                            uint64_t insize, uint64_t arg6);
+int PS4ABI sys_ipmimgr_call(u32 op, u32 kid, void *out, void *in,
+                            u64 insize, u64 arg6);
 
 int sys_randomized_path(const char *set_path, char *out, size_t *out_len);
 int sys_workaround8849();
 int sys_blockpool_open();
 int sys_dynlib_do_copy_relocations();
 
-int sys_namedobj_create(const char *name, void *arg2, uint32_t arg3);
+int sys_namedobj_create(const char *name, void *arg2, u32 arg3);
 int sys_namedobj_delete();
 
 int sys_budget_get_ptype();
@@ -114,8 +115,8 @@ static int PS4ABI null_handler() {
 #endif
   called_in(ret);
 
-  static std::atomic<uint64_t> nulls{0};
-  const uint64_t n = ++nulls;
+  static std::atomic<u64> nulls{0};
+  const u64 n = ++nulls;
   if (n == 1 || (g_scHist && n % 400 == 0)) {
     BASE_LOGI("nullhandler", ">>>>>>>>>>>>> NULL HANDLER called {} times",
               (unsigned long long)n);
@@ -138,7 +139,7 @@ static int PS4ABI null_handler_notable() {
 }
 
 struct syscall_Reg {
-  uint32_t id;
+  u32 id;
   const void *ptr;
 };
 
@@ -769,15 +770,15 @@ static const syscall_Reg syscall_dpt[] = {
 // errno, or the result, in rax). Classify a raw handler return for both the
 // native trampoline and the FEX syscall bridge.
 //
-// An `int` handler zero-extends its 32-bit result into rax, an `int64_t` handler
+// An `int` handler zero-extends its 32-bit result into rax, an `i64` handler
 // fills all 64 bits, so a negative errno arrives as either 0x00000000_FFFFFFxx or
 // 0xFFFFFFFF_FFFFFFxx. Guest pointers live at >= 64 GiB and cannot match this.
-extern "C" uint32_t krnl_syscall_errno(uint64_t raw) {
-  int32_t lo = static_cast<int32_t>(static_cast<uint32_t>(raw));
-  uint32_t hi = static_cast<uint32_t>(raw >> 32);
-  if (lo < 0 && lo >= -static_cast<int32_t>(SysError::eLAST) &&
+extern "C" u32 krnl_syscall_errno(u64 raw) {
+  i32 lo = static_cast<i32>(static_cast<u32>(raw));
+  u32 hi = static_cast<u32>(raw >> 32);
+  if (lo < 0 && lo >= -static_cast<i32>(SysError::eLAST) &&
       (hi == 0 || hi == 0xFFFFFFFFu))
-    return static_cast<uint32_t>(-lo);
+    return static_cast<u32>(-lo);
   return 0;
 }
 
@@ -794,9 +795,9 @@ extern "C" uint32_t krnl_syscall_errno(uint64_t raw) {
 // Returns 0 when no switch is wanted, which is also how nesting is handled: a
 // guest callback invoked from a handler makes its syscalls on the stack we
 // already switched to, and it just grows further down.
-extern "C" uint64_t krnl_kstack_top() {
+extern "C" u64 krnl_kstack_top() {
   constexpr size_t kSize = 1u << 20;  // 1 MiB, lazily backed
-  static thread_local uint8_t *base = nullptr;
+  static thread_local u8 *base = nullptr;
   const auto here = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
   if (base) {
     if (here > reinterpret_cast<uintptr_t>(base) &&
@@ -807,19 +808,19 @@ extern "C" uint64_t krnl_kstack_top() {
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (p == MAP_FAILED)
       return 0;
-    base = static_cast<uint8_t *>(p);
+    base = static_cast<u8 *>(p);
   }
   // Where the guest's own stack was, so a handler-side stack scan (see
   // crash.cpp guestStackTrace) still finds the guest frames it is after.
   setGuestStackScanBase(here);
-  return reinterpret_cast<uint64_t>(base + kSize);
+  return reinterpret_cast<u64>(base + kSize);
 }
 
 static void PS4ABI trace_syscall(const char *name, int index, void *addr) {
   BASE_LOGI("syscall", "{} {}", index, name);
 }
 
-static void PS4ABI trace_ret(int index, int64_t ret) {
+static void PS4ABI trace_ret(int index, i64 ret) {
   BASE_LOGI("syscall", "  -> {} returned {} ({:#x})", index, (long long)ret,
             (unsigned long long)ret);
 }
@@ -828,16 +829,16 @@ static void PS4ABI trace_ret(int index, int64_t ret) {
 // see exactly which syscall returned which errno just before a guest abort. The
 // errno is the BSD-style positive value the guest's libkernel turns into an SCE
 // error (0x80020000 | errno), e.g. errno 1 -> 0x80020001.
-static void PS4ABI trace_syscall_err(uint32_t sid, uint32_t err) {
+static void PS4ABI trace_syscall_err(u32 sid, u32 err) {
   const char *name = syscall_getname(sid);
   BASE_LOGI("syscallerr", "{} {} -> errno {} (SCE {:#010x})", sid,
             name ? name : "?", err, 0x80020000u | err);
 }
 
-static uintptr_t emit_calltrace(const char *name, uint32_t sid,
+static uintptr_t emit_calltrace(const char *name, u32 sid,
                                 const void *dest) {
   struct callTrace : Xbyak::CodeGenerator {
-    callTrace(uintptr_t name, uint32_t sid, uintptr_t dest) {
+    callTrace(uintptr_t name, u32 sid, uintptr_t dest) {
       push(rdi);
       push(rsi);
       push(rdx);
@@ -898,7 +899,7 @@ static uintptr_t emit_calltrace(const char *name, uint32_t sid,
 // Deliberately outside the DELTA_BACKEND_NATIVE guard: null_handler reads
 // g_scHist/dumpSyscallHist unconditionally, so the FEX build must link them too
 // (only the trampoline that increments g_sysHist is native-only).
-extern "C" uint64_t g_sysHist[1024] = {};
+extern "C" u64 g_sysHist[1024] = {};
 
 // The histogram was only ever printed by the crash reporter, so a clean run
 // discarded it. "Which syscall is this title hammering" is the question it
@@ -936,7 +937,7 @@ static const bool g_scHistDump = [] {
 // One-time trampoline per handler: call it with the guest's arg registers
 // untouched, then set/clear the carry flag and normalise rax per the convention
 // above. Replaces the bare `call handler` so the guest sees faithful errors.
-static uintptr_t emit_bsd_trampoline(const void *handler, uint32_t sid,
+static uintptr_t emit_bsd_trampoline(const void *handler, u32 sid,
                                      bool trace, bool count) {
   // The two handlers that never return -- they longjmp out of the guest call
   // chain (cpu::exitGuestThread) -- must stay on the guest stack: glibc's
@@ -944,7 +945,7 @@ static uintptr_t emit_bsd_trampoline(const void *handler, uint32_t sid,
   // Neither needs the room anyway.
   const bool ownStack = sid != 1 /*exit*/ && sid != 431 /*thr_exit*/;
   struct bsdRet : Xbyak::CodeGenerator {
-    bsdRet(uintptr_t handler, uint32_t sid, bool trace, bool count,
+    bsdRet(uintptr_t handler, u32 sid, bool trace, bool count,
            bool ownStack) {
       if (count) {          // DELTA_SCHIST: ++g_sysHist[sid] (rax is caller-saved)
         mov(rax, reinterpret_cast<uintptr_t>(&g_sysHist[sid & 1023]));
@@ -1005,7 +1006,7 @@ static uintptr_t emit_bsd_trampoline(const void *handler, uint32_t sid,
 }
 #endif // DELTA_BACKEND_NATIVE
 
-uintptr_t lv2_get(uint32_t sid) {
+uintptr_t lv2_get(u32 sid) {
   const void *handler = reinterpret_cast<const void *>(&null_handler_notable);
   for (auto &it : syscall_dpt) {
     if (sid == it.id) {
@@ -1021,12 +1022,12 @@ uintptr_t lv2_get(uint32_t sid) {
   // DELTA_SCERR_TRACE is set the stub also logs its errno on the error path, so
   // key the cache by sid instead (each id reports its own name).
   static std::mutex trMutex;
-  static std::unordered_map<uint64_t, uintptr_t> trCache;
+  static std::unordered_map<u64, uintptr_t> trCache;
   std::lock_guard<std::mutex> lk(trMutex);
   // Per-sid stub (not deduped by handler) when tracing errors OR counting, so
   // each id reports/counts under its own number.
-  uint64_t key = (kScerrTrace || g_scHist) ? static_cast<uint64_t>(sid)
-                                        : reinterpret_cast<uint64_t>(handler);
+  u64 key = (kScerrTrace || g_scHist) ? static_cast<u64>(sid)
+                                        : reinterpret_cast<u64>(handler);
   auto it = trCache.find(key);
   if (it != trCache.end())
     return it->second;
@@ -1040,12 +1041,12 @@ uintptr_t lv2_get(uint32_t sid) {
 
 // Exposed so the PS5 syscall layer (kern/ps5/lv2) can wrap its own handlers in
 // the same BSD carry/errno trampoline without duplicating the codegen.
-uintptr_t lv2_trampoline(const void *handler, uint32_t sid) {
+uintptr_t lv2_trampoline(const void *handler, u32 sid) {
 #if defined(DELTA_BACKEND_NATIVE)
   static std::mutex m;
-  static std::unordered_map<uint64_t, uintptr_t> cache;
+  static std::unordered_map<u64, uintptr_t> cache;
   std::lock_guard<std::mutex> lk(m);
-  uint64_t key = reinterpret_cast<uint64_t>(handler);
+  u64 key = reinterpret_cast<u64>(handler);
   auto it = cache.find(key);
   if (it != cache.end())
     return it->second;

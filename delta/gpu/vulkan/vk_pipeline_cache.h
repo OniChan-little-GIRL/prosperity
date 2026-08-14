@@ -8,6 +8,7 @@
 // pipelines (shader pair + blend + vertex layout + depth/raster state).
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -24,7 +25,7 @@ struct QuadPipelines {
   VkPipelineLayout tex_layout = VK_NULL_HANDLE;
   VkPipeline tex_pipeline = VK_NULL_HANDLE;
   // Keyed by (textured<<0, enable<<1, blend_control<<2), mixed with the format.
-  std::unordered_map<uint64_t, VkPipeline> cache;
+  std::unordered_map<u64, VkPipeline> cache;
 };
 
 extern QuadPipelines& g_quad;
@@ -32,7 +33,7 @@ extern QuadPipelines& g_quad;
 bool CreatePipeline();
 bool CreateTexPipeline();
 VkPipeline GetPipeline(bool textured,
-                       uint32_t bc,
+                       u32 bc,
                        bool en,
                        VkFormat color_format);
 
@@ -50,11 +51,11 @@ struct RecompPipe {
 
 class RecompiledPipelineCache {
  public:
-  RecompPipe* Find(uint64_t key);
-  RecompPipe* Store(uint64_t key, RecompPipe pipeline);
+  RecompPipe* Find(u64 key);
+  RecompPipe* Store(u64 key, RecompPipe pipeline);
 
  private:
-  std::unordered_map<uint64_t, RecompPipe> pipelines_;
+  std::unordered_map<u64, RecompPipe> pipelines_;
 };
 
 // Transitional alias into rhi::BackendState while pipeline creation is

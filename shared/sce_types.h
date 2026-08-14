@@ -10,10 +10,11 @@
 // Sony Elf custom extensions
 
 #include <cstdint>
+#include "base/arch.h"
 
 // increments by 0x10 for each new
 // revision
-enum class SELFProductType : uint8_t {
+enum class SELFProductType : u8 {
   PUP,
   K = 0xC,
   SL = 0xF,
@@ -22,7 +23,7 @@ enum class SELFProductType : uint8_t {
   SPRX = 0x9  //< applies to SPRX, SDLL and SEXE
 };
 
-enum class SELFContentType : uint8_t { SELF = 1, PUP = 4 };
+enum class SELFContentType : u8 { SELF = 1, PUP = 4 };
 
 enum SegFlags {
   SF_ORDR = 0x1,   //< ordered?
@@ -32,43 +33,43 @@ enum SegFlags {
   SF_BFLG = 0x800, //< block segment
 };
 
-static constexpr uint32_t SELF_MAGIC = 0x1D3D154F;
+static constexpr u32 SELF_MAGIC = 0x1D3D154F;
 // PS5 titles wrap the same header layout in a different container magic.
-static constexpr uint32_t SELF_MAGIC_PS5 = 0xEEF51454;
+static constexpr u32 SELF_MAGIC_PS5 = 0xEEF51454;
 
-inline bool isSelfMagic(uint32_t magic) {
+inline bool isSelfMagic(u32 magic) {
   return magic == SELF_MAGIC || magic == SELF_MAGIC_PS5;
 }
 
 struct SELFHeader {
-  uint32_t magic;
-  uint8_t version;
-  uint8_t mode;
-  uint8_t endian;
-  uint8_t attr;
+  u32 magic;
+  u8 version;
+  u8 mode;
+  u8 endian;
+  u8 attr;
 
   // actually keyType
   SELFContentType contentType;
   SELFProductType productType;
-  uint16_t pad;
+  u16 pad;
 
-  uint16_t headerSize;
-  uint16_t metaSize; // < sce Special
-  uint32_t sizeSELF; // < unrounded img size
-  uint32_t fileSize;
+  u16 headerSize;
+  u16 metaSize; // < sce Special
+  u32 sizeSELF; // < unrounded img size
+  u32 fileSize;
 
-  uint16_t numSegments;
-  uint16_t flags; //< always 0x22
-  uint32_t pad2;  //<alignment
+  u16 numSegments;
+  u16 flags; //< always 0x22
+  u32 pad2;  //<alignment
 };
 
 struct SELFSegmentTable {
-  uint64_t flags;
-  uint64_t offset;
-  uint64_t fileSize;
-  uint64_t memSize;
+  u64 flags;
+  u64 offset;
+  u64 fileSize;
+  u64 memSize;
 
-  uint32_t Id() { return static_cast<uint32_t>((uint64_t)flags >> 20); }
+  u32 Id() { return static_cast<u32>((u64)flags >> 20); }
 };
 
 struct SCEContentId {
@@ -77,19 +78,19 @@ struct SCEContentId {
 
 // is it really called "SCESPECIAL"?
 struct SCESpecial {
-  uint64_t authId;
-  uint64_t productType;
-  uint64_t version1;
-  uint64_t version2;
+  u64 authId;
+  u64 productType;
+  u64 version1;
+  u64 version2;
   SCEContentId contentId;
   char shaSum[0x20];
 };
 
 // similar to MS PDB_CODEVIEW
 struct SCEComment {
-  uint32_t magic; // "PATH"
-  uint32_t unk;
-  uint32_t pathLength; // length of the following path
+  u32 magic; // "PATH"
+  u32 unk;
+  u32 pathLength; // length of the following path
 };
 
 static_assert(sizeof(SELFHeader) == 32, "header size mismatch");

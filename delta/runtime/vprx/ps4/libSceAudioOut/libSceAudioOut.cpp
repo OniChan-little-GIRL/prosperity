@@ -75,6 +75,7 @@
  */
 
 #include "libSceAudioOut.h"
+#include "base/arch.h"
 
 #include "gfx/gfx_audio.h"
 
@@ -99,8 +100,8 @@ namespace {
 
 struct Port {
   int bridge = -1;     // gfx_audio handle
-  uint32_t grain = 0;  // samples per channel per Output (the open `length`)
-  uint32_t channels = 2;
+  u32 grain = 0;  // samples per channel per Output (the open `length`)
+  u32 channels = 2;
   bool open = false;
 };
 
@@ -108,7 +109,7 @@ std::mutex g_mtx;
 std::vector<Port> g_ports;  // SCE handle = index + 1
 
 // SceAudioOutParamFormat (param low byte) -> (channels, isFloat).
-void decodeFormat(uint32_t param, uint32_t &channels, int &isFloat) {
+void decodeFormat(u32 param, u32 &channels, int &isFloat) {
   switch (param & 0xFF) {
   case 0: channels = 1; isFloat = 0; break;  // S16 mono
   case 1: channels = 2; isFloat = 0; break;  // S16 stereo
@@ -122,8 +123,8 @@ void decodeFormat(uint32_t param, uint32_t &channels, int &isFloat) {
   }
 }
 
-Port *port(int32_t handle) {
-  if (handle <= 0 || handle > static_cast<int32_t>(g_ports.size())) return nullptr;
+Port *port(i32 handle) {
+  if (handle <= 0 || handle > static_cast<i32>(g_ports.size())) return nullptr;
   Port &p = g_ports[handle - 1];
   return p.open ? &p : nullptr;
 }
@@ -134,11 +135,11 @@ extern "C" {
 
 int PS4ABI sceAudioOutInit() { return 0; }
 
-int PS4ABI sceAudioOutInitIpmiGetSession(int32_t) { return 0; }
+int PS4ABI sceAudioOutInitIpmiGetSession(i32) { return 0; }
 
-int PS4ABI sceAudioOutOpen(int32_t /*userId*/, int32_t /*type*/, int32_t /*index*/,
-                           uint32_t length, uint32_t freq, uint32_t param) {
-  uint32_t channels = 2;
+int PS4ABI sceAudioOutOpen(i32 /*userId*/, i32 /*type*/, i32 /*index*/,
+                           u32 length, u32 freq, u32 param) {
+  u32 channels = 2;
   int isFloat = 0;
   decodeFormat(param, channels, isFloat);
   if (!freq) freq = 48000;
@@ -156,7 +157,7 @@ int PS4ABI sceAudioOutOpen(int32_t /*userId*/, int32_t /*type*/, int32_t /*index
   return static_cast<int>(g_ports.size());  // SCE handle = index + 1 (>0)
 }
 
-int PS4ABI sceAudioOutOutput(int32_t handle, const void *ptr) {
+int PS4ABI sceAudioOutOutput(i32 handle, const void *ptr) {
   std::lock_guard<std::mutex> lk(g_mtx);
   Port *p = port(handle);
   if (!p) return -1;
@@ -166,11 +167,11 @@ int PS4ABI sceAudioOutOutput(int32_t handle, const void *ptr) {
   return static_cast<int>(p->grain);
 }
 
-// SceAudioOutOutputParam { int32_t handle; void *ptr; } (ptr is 8-aligned, so the
+// SceAudioOutOutputParam { i32 handle; void *ptr; } (ptr is 8-aligned, so the
 // struct is 16 bytes: handle@0, ptr@8).
-struct OutputParam { int32_t handle; uint32_t pad; const void *ptr; };
+struct OutputParam { i32 handle; u32 pad; const void *ptr; };
 
-int PS4ABI sceAudioOutOutputs(void *params, uint32_t num) {
+int PS4ABI sceAudioOutOutputs(void *params, u32 num) {
   if (!params) return -1;
   // DELTA_AUDIO_TRACE: the raw param array next to how we parse it. The struct
   // stride is the whole ballgame -- misread it and every handle/ptr past the
@@ -178,25 +179,25 @@ int PS4ABI sceAudioOutOutputs(void *params, uint32_t num) {
   static int dumped = 0;
   if (kAudioTrace && dumped < 4) {
     dumped++;
-    const auto *b = static_cast<const uint8_t *>(params);
+    const auto *b = static_cast<const u8 *>(params);
     base::String raw;
     base::FormatTo(raw, "[audioparam] num={} raw:", num);
-    for (uint32_t i = 0; i < num * 16 && i < 96; i++)
+    for (u32 i = 0; i < num * 16 && i < 96; i++)
       base::FormatTo(raw, "{}{:02x}", (i % 16) ? "" : " ", b[i]);
     BASE_LOGI("audioparam", "{}", raw.c_str());
     const OutputParam *q = static_cast<const OutputParam *>(params);
-    for (uint32_t i = 0; i < num && i < 6; i++)
+    for (u32 i = 0; i < num && i < 6; i++)
       BASE_LOGI("audioparam", "  [{}] handle={} ptr={:p}", i, q[i].handle,
                 q[i].ptr);
   }
   const OutputParam *pp = static_cast<const OutputParam *>(params);
   int last = 0;
-  for (uint32_t i = 0; i < num; i++)
+  for (u32 i = 0; i < num; i++)
     last = sceAudioOutOutput(pp[i].handle, pp[i].ptr);
   return last;
 }
 
-int PS4ABI sceAudioOutClose(int32_t handle) {
+int PS4ABI sceAudioOutClose(i32 handle) {
   std::lock_guard<std::mutex> lk(g_mtx);
   Port *p = port(handle);
   if (!p) return -1;
@@ -206,7 +207,7 @@ int PS4ABI sceAudioOutClose(int32_t handle) {
   return 0;
 }
 
-int PS4ABI sceAudioOutSetVolume(int32_t handle, int32_t /*flag*/, int32_t *vol) {
+int PS4ABI sceAudioOutSetVolume(i32 handle, i32 /*flag*/, i32 *vol) {
   std::lock_guard<std::mutex> lk(g_mtx);
   Port *p = port(handle);
   if (!p) return -1;
@@ -215,9 +216,9 @@ int PS4ABI sceAudioOutSetVolume(int32_t handle, int32_t /*flag*/, int32_t *vol) 
   return 0;
 }
 
-int PS4ABI sceAudioOutSetVolumeDc(int32_t, void *) { return 0; }
+int PS4ABI sceAudioOutSetVolumeDc(i32, void *) { return 0; }
 
-int PS4ABI sceAudioOutGetPortState(int32_t handle, void *state) {
+int PS4ABI sceAudioOutGetPortState(i32 handle, void *state) {
   // SceAudioOutPortState is 32 bytes; zero it and report a connected port so the
   // caller doesn't read garbage (see the output-buffer convention).
   if (state) {
@@ -225,13 +226,13 @@ int PS4ABI sceAudioOutGetPortState(int32_t handle, void *state) {
     std::lock_guard<std::mutex> lk(g_mtx);
     Port *p = port(handle);
     if (p) {
-      reinterpret_cast<uint16_t *>(state)[0] = 1;             // output: connected
-      reinterpret_cast<uint8_t *>(state)[2] = (uint8_t)p->channels;
+      reinterpret_cast<u16 *>(state)[0] = 1;             // output: connected
+      reinterpret_cast<u8 *>(state)[2] = (u8)p->channels;
     }
   }
   return 0;
 }
 
-int64_t PS4ABI sceAudioOutGetLastOutputTime(int32_t) { return 0; }
+i64 PS4ABI sceAudioOutGetLastOutputTime(i32) { return 0; }
 
 }  // extern "C"

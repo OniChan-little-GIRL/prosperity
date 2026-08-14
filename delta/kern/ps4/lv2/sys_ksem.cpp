@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <atomic>
 #include <chrono>
@@ -63,7 +64,7 @@ int PS4ABI sys_ksem_init(int *idp, unsigned value) {
   return 0;
 }
 
-int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, uint16_t mode,
+int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, u16 mode,
                          unsigned value) {
   std::string key = name ? name : "";
   std::lock_guard<std::mutex> lk(g_ksemMutex);

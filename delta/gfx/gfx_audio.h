@@ -10,16 +10,17 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 extern "C" {
 
 // Open a playback port: freq Hz, channels (1/2/8), isFloat (0 = S16, 1 = F32).
 // Returns a handle >= 0, or -1 on failure.
-int prosperity_audio_open(uint32_t freq, uint32_t channels, int isFloat);
+int prosperity_audio_open(u32 freq, u32 channels, int isFloat);
 
 // Queue `frames` interleaved frames (frames*channels samples) for playback.
 // Returns frames queued, or -1 on a bad handle. Bounds latency internally.
-int prosperity_audio_output(int handle, const void *samples, uint32_t frames);
+int prosperity_audio_output(int handle, const void *samples, u32 frames);
 
 // Set a port's linear gain (0..1), applied on output. flag selects channels;
 // we apply it uniformly.

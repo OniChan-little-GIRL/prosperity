@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 // libSceSaveData HLE. PS4 savedata is client/server: the LLE libSceSaveData.sprx
 // only forwards each call over IPMI to the SceSaveData system-service process,
@@ -53,11 +54,11 @@ int PS4ABI sceSaveDataMount3(const void *mount, void *result);
 int PS4ABI sceSaveDataMount5(const void *mount, void *result);
 int PS4ABI sceSaveDataUmount(const void *mountPoint);
 int PS4ABI sceSaveDataUmountWithBackup(const void *mountPoint);
-int PS4ABI sceSaveDataUmount2(uint32_t mode, const void *mountPoint);
+int PS4ABI sceSaveDataUmount2(u32 mode, const void *mountPoint);
 int PS4ABI sceSaveDataGetMountInfo(const void *mountPoint, void *info);
 
-int PS4ABI sceSaveDataCreateTransactionResource(uint32_t size);
-int PS4ABI sceSaveDataDeleteTransactionResource(int32_t resource);
+int PS4ABI sceSaveDataCreateTransactionResource(u32 size);
+int PS4ABI sceSaveDataDeleteTransactionResource(i32 resource);
 int PS4ABI sceSaveDataPrepare(const void *mountPoint, const void *param);
 int PS4ABI sceSaveDataCommit(const void *param);
 
@@ -66,23 +67,23 @@ int PS4ABI sceSaveDataDelete(const void *del);
 int PS4ABI sceSaveDataCheckBackupData(const void *check);
 int PS4ABI sceSaveDataRestoreBackupData(const void *restore);
 
-int PS4ABI sceSaveDataGetParam(const void *mountPoint, uint32_t paramType,
-                               void *buf, uint64_t size, uint64_t *result);
-int PS4ABI sceSaveDataSetParam(const void *mountPoint, uint32_t paramType,
-                               const void *buf, uint64_t size);
+int PS4ABI sceSaveDataGetParam(const void *mountPoint, u32 paramType,
+                               void *buf, u64 size, u64 *result);
+int PS4ABI sceSaveDataSetParam(const void *mountPoint, u32 paramType,
+                               const void *buf, u64 size);
 int PS4ABI sceSaveDataSaveIcon(const void *mountPoint, const void *icon);
 int PS4ABI sceSaveDataLoadIcon(const void *mountPoint, void *icon);
 
 // SaveDataMemory: a small fixed-size memory blob per (title, slot), used for
 // auto-save style data. Backed by a host file under sce_sdmemory/.
-int PS4ABI sceSaveDataSetupSaveDataMemory(uint32_t userId, uint64_t memorySize,
+int PS4ABI sceSaveDataSetupSaveDataMemory(u32 userId, u64 memorySize,
                                           void *param);
 int PS4ABI sceSaveDataSetupSaveDataMemory2(const void *setupParam, void *result);
-int PS4ABI sceSaveDataGetSaveDataMemory(uint32_t userId, void *buf,
-                                        uint64_t bufSize, int64_t offset);
+int PS4ABI sceSaveDataGetSaveDataMemory(u32 userId, void *buf,
+                                        u64 bufSize, i64 offset);
 int PS4ABI sceSaveDataGetSaveDataMemory2(void *getParam);
-int PS4ABI sceSaveDataSetSaveDataMemory(uint32_t userId, const void *buf,
-                                        uint64_t bufSize, int64_t offset);
+int PS4ABI sceSaveDataSetSaveDataMemory(u32 userId, const void *buf,
+                                        u64 bufSize, i64 offset);
 int PS4ABI sceSaveDataSetSaveDataMemory2(const void *setParam);
 int PS4ABI sceSaveDataSyncSaveDataMemory(void *syncParam);
 int PS4ABI sceSaveDataRestoreLoadSaveDataMemory(const void *param);

@@ -13,6 +13,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <string>
 
 #include "gpu/gcn/gcn_decode.h"
@@ -35,6 +36,6 @@ std::string DisasmLine(const Inst& inst);
 
 // Disassemble a code range to stderr (debug aid; decodes with the
 // stop-at-endpgm heuristic exactly like the old raw dump did).
-void Disassemble(const uint32_t* code, uint32_t max_dwords, const char* tag);
+void Disassemble(const u32* code, u32 max_dwords, const char* tag);
 
 }  // namespace gpu::gcn

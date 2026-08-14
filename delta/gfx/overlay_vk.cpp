@@ -10,6 +10,7 @@
 #ifndef __ANDROID__
 
 #include "overlay_vk.h"
+#include "base/arch.h"
 
 #include <cstdio>
 #include <cstring>
@@ -56,10 +57,10 @@ struct {
   bool ready = false;
 } v;
 
-uint32_t memType(uint32_t bits, VkMemoryPropertyFlags props) {
+u32 memType(u32 bits, VkMemoryPropertyFlags props) {
   VkPhysicalDeviceMemoryProperties mp;
   vkGetPhysicalDeviceMemoryProperties(v.phys, &mp);
-  for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+  for (u32 i = 0; i < mp.memoryTypeCount; i++)
     if ((bits & (1u << i)) &&
         (mp.memoryTypes[i].propertyFlags & props) == props)
       return i;
@@ -86,7 +87,7 @@ bool makeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
   return true;
 }
 
-VkShaderModule makeModule(const uint32_t *code, size_t bytes) {
+VkShaderModule makeModule(const u32 *code, size_t bytes) {
   VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   ci.codeSize = bytes;
   ci.pCode = code;
@@ -161,9 +162,9 @@ bool createPipeline() {
   VkVertexInputBindingDescription bind{0, sizeof(ImDrawVert),
                                        VK_VERTEX_INPUT_RATE_VERTEX};
   VkVertexInputAttributeDescription attr[3]{
-      {0, 0, VK_FORMAT_R32G32_SFLOAT, (uint32_t)IM_OFFSETOF(ImDrawVert, pos)},
-      {1, 0, VK_FORMAT_R32G32_SFLOAT, (uint32_t)IM_OFFSETOF(ImDrawVert, uv)},
-      {2, 0, VK_FORMAT_R8G8B8A8_UNORM, (uint32_t)IM_OFFSETOF(ImDrawVert, col)}};
+      {0, 0, VK_FORMAT_R32G32_SFLOAT, (u32)IM_OFFSETOF(ImDrawVert, pos)},
+      {1, 0, VK_FORMAT_R32G32_SFLOAT, (u32)IM_OFFSETOF(ImDrawVert, uv)},
+      {2, 0, VK_FORMAT_R8G8B8A8_UNORM, (u32)IM_OFFSETOF(ImDrawVert, col)}};
   VkPipelineVertexInputStateCreateInfo vi{
       VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
   vi.vertexBindingDescriptionCount = 1;
@@ -234,7 +235,7 @@ bool uploadFont() {
   VkImageCreateInfo ic{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ic.imageType = VK_IMAGE_TYPE_2D;
   ic.format = VK_FORMAT_R8G8B8A8_UNORM;
-  ic.extent = {(uint32_t)w, (uint32_t)h, 1};
+  ic.extent = {(u32)w, (u32)h, 1};
   ic.mipLevels = 1;
   ic.arrayLayers = 1;
   ic.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -291,7 +292,7 @@ bool uploadFont() {
           VK_PIPELINE_STAGE_TRANSFER_BIT);
   VkBufferImageCopy cp{};
   cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  cp.imageExtent = {(uint32_t)w, (uint32_t)h, 1};
+  cp.imageExtent = {(u32)w, (u32)h, 1};
   vkCmdCopyBufferToImage(cmd, stg, v.fontImg,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
   barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -400,7 +401,7 @@ void destroyFramebuffers() {
 } // namespace
 
 bool overlayVkInit(VkPhysicalDevice phys, VkDevice device, VkQueue queue,
-                   uint32_t queueFamily, VkCommandPool pool,
+                   u32 queueFamily, VkCommandPool pool,
                    VkFormat swapFormat) {
   if (v.ready)
     return true;
@@ -451,7 +452,7 @@ void overlayVkSetSwapchain(const std::vector<VkImage> &images,
   }
 }
 
-bool overlayVkRender(VkCommandBuffer cmd, uint32_t imageIndex) {
+bool overlayVkRender(VkCommandBuffer cmd, u32 imageIndex) {
   if (!v.ready || imageIndex >= v.fbs.size() || imageIndex >= v.frames.size())
     return false;
   const ImDrawData *dd = ImGui::GetDrawData();
@@ -499,10 +500,10 @@ bool overlayVkRender(VkCommandBuffer cmd, uint32_t imageIndex) {
       const ImDrawList *cl = dd->CmdLists[i];
       for (const ImDrawCmd &c : cl->CmdBuffer) {
         VkRect2D sc{};
-        sc.offset.x = (int32_t)(c.ClipRect.x > 0 ? c.ClipRect.x : 0);
-        sc.offset.y = (int32_t)(c.ClipRect.y > 0 ? c.ClipRect.y : 0);
-        sc.extent.width = (uint32_t)(c.ClipRect.z - sc.offset.x);
-        sc.extent.height = (uint32_t)(c.ClipRect.w - sc.offset.y);
+        sc.offset.x = (i32)(c.ClipRect.x > 0 ? c.ClipRect.x : 0);
+        sc.offset.y = (i32)(c.ClipRect.y > 0 ? c.ClipRect.y : 0);
+        sc.extent.width = (u32)(c.ClipRect.z - sc.offset.x);
+        sc.extent.height = (u32)(c.ClipRect.w - sc.offset.y);
         vkCmdSetScissor(cmd, 0, 1, &sc);
         vkCmdDrawIndexed(cmd, c.ElemCount, 1, c.IdxOffset + idxOff,
                          c.VtxOffset + vtxOff, 0);

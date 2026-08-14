@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <unistd.h>
 #include <base/strings/string_ref.h>
@@ -152,14 +153,14 @@ static device *make_device(const char *deviceName) {
   return dev;
 }
 
-int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
+int PS4ABI sys_open(const char *path, u32 flags, u32 mode) {
   if (!path)
     return -SysError::eINVAL;
 
   // Kernel open flag validation:
   //   * accmode (flags & 3) > O_RDWR (2) without O_EXEC (0x40000) is EINVAL.
   //   * O_EXEC with a non-zero accmode (not O_RDONLY) is EINVAL.
-  const uint32_t accmode = flags & O_ACCMODE;
+  const u32 accmode = flags & O_ACCMODE;
   if (accmode > O_RDWR && !(flags & O_EXEC))
     return -SysError::eINVAL;
   if ((flags & O_EXEC) && accmode != 0)
@@ -197,7 +198,7 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
   // Write opens are never directories, so they skip the stat.
   bool asDir = (flags & O_DIRECTORY) != 0;
   if (!asDir && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_CREAT)) {
-    int64_t dsize = 0;
+    i64 dsize = 0;
     bool isDir = false;
     asDir = vfs::stat(path, dsize, isDir) && isDir;
   }
@@ -245,7 +246,7 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
     return -SysError::eNOENT;
   }
 
-  int64_t fsize = vf.GetSize();
+  i64 fsize = vf.GetSize();
   auto *file = new fileDevice(proc::getActive());
   if (!file->adopt(std::move(vf))) {
     file->releaseHandle();
@@ -269,7 +270,7 @@ int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode) {
 }
 
 // Resolve an fd (object-table handle) back to the device that backs it.
-static device *fdToDevice(uint32_t fd) {
+static device *fdToDevice(u32 fd) {
   auto *obj = proc::getActive()->getObjTable().get(fd);
   if (!obj || obj->type() != kObject::oType::device)
     return nullptr;
@@ -280,22 +281,22 @@ static device *fdToDevice(uint32_t fd) {
 // actually read, or only opened?" is otherwise unanswerable without the
 // per-call firehose, and an opened-but-never-read asset is a strong signal that
 // whatever consumes it is stuck.
-void fdReadStat(uint32_t fd, int64_t n) {
+void fdReadStat(u32 fd, i64 n) {
   if (!kFdStats || n <= 0)
     return;
-  static std::atomic<uint64_t> bytes[4096];
-  static std::atomic<uint64_t> calls[4096];
+  static std::atomic<u64> bytes[4096];
+  static std::atomic<u64> calls[4096];
   if (fd >= 4096)
     return;
-  bytes[fd].fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+  bytes[fd].fetch_add(static_cast<u64>(n), std::memory_order_relaxed);
   calls[fd].fetch_add(1, std::memory_order_relaxed);
   static const bool started = [] {
     std::thread([] {
       for (;;) {
         std::this_thread::sleep_for(std::chrono::seconds(20));
         BASE_LOGI("fdstats", "--- bytes read per fd ---");
-        for (uint32_t i = 0; i < 4096; i++)
-          if (uint64_t b = bytes[i].load(std::memory_order_relaxed))
+        for (u32 i = 0; i < 4096; i++)
+          if (u64 b = bytes[i].load(std::memory_order_relaxed))
             BASE_LOGI("fdstats", "fd={} calls={} bytes={}", i,
                       (unsigned long long)calls[i].load(),
                       (unsigned long long)b);
@@ -312,14 +313,14 @@ void fdReadStat(uint32_t fd, int64_t n) {
 // fixed CPU budget can be outrun by its own loader and exhaust that budget --
 // SotC fills its 1 GiB onion heap this way and dies in its own allocator, and
 // the same run survives whenever the host happens to be busy. 0 = unlimited.
-void throttleIo(int64_t bytes) {
+void throttleIo(i64 bytes) {
   const unsigned mbps = kIoMbps;
   if (!mbps || bytes <= 0)
     return;
   static std::mutex m;
   static std::chrono::steady_clock::time_point next{};
   const auto cost = std::chrono::nanoseconds(
-      (int64_t)((double)bytes * 1e9 / ((double)mbps * 1024.0 * 1024.0)));
+      (i64)((double)bytes * 1e9 / ((double)mbps * 1024.0 * 1024.0)));
   std::chrono::steady_clock::time_point until;
   {
     std::lock_guard<std::mutex> lk(m);
@@ -332,7 +333,7 @@ void throttleIo(int64_t bytes) {
   std::this_thread::sleep_until(until);
 }
 
-int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
+i64 PS4ABI sys_read(u32 fd, void *buf, size_t nbytes) {
   auto *d = fdToDevice(fd);
   if (!d) {
     // The three standard descriptors exist on a real process but have nothing to
@@ -345,7 +346,7 @@ int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
       BASE_LOGI("rd", "fd={} -> EBADF (no device)", fd);
     return -SysError::eBADF;
   }
-  int64_t r = d->read(buf, nbytes);
+  i64 r = d->read(buf, nbytes);
   throttleIo(r);
   fdReadStat(fd, r);
   // DELTA_READ_TRACE: log large reads (asset/texture loads) + their target buffer,
@@ -355,8 +356,8 @@ int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
     BASE_LOGI("read", "fd={} buf={:p} nbytes={:#x} -> {}", fd, buf, nbytes,
               (long long)r);
   if (kRdall) {
-    uint32_t f4 = 0;
-    if (buf && r >= 4) f4 = *reinterpret_cast<const uint32_t *>(buf);
+    u32 f4 = 0;
+    if (buf && r >= 4) f4 = *reinterpret_cast<const u32 *>(buf);
     BASE_LOGI("rd",
               "t={} fd={} nbytes={:#x} -> {} buf={:p} first4={:08x}",
               (long)gettid(), fd, nbytes, (long long)r, buf, f4);
@@ -364,7 +365,7 @@ int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes) {
   return r;
 }
 
-int64_t PS4ABI sys_lseek(uint32_t fd, int64_t offset, int whence) {
+i64 PS4ABI sys_lseek(u32 fd, i64 offset, int whence) {
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
@@ -377,16 +378,16 @@ int64_t PS4ABI sys_lseek(uint32_t fd, int64_t offset, int whence) {
 // Minecraft refuses to open a world with "there is not enough free space"
 // and never leaves its menu. Requires privilege 0x2AC in the kernel.
 struct BsdStatfs {
-  uint32_t f_version, f_type;
-  uint64_t f_flags, f_bsize, f_iosize;
-  uint64_t f_blocks, f_bfree;
-  int64_t f_bavail;
-  uint64_t f_files;
-  int64_t f_ffree;
-  uint64_t f_syncwrites, f_asyncwrites, f_syncreads, f_asyncreads;
-  uint64_t f_spare[10];
-  uint32_t f_namemax, f_owner;
-  int32_t f_fsid[2];
+  u32 f_version, f_type;
+  u64 f_flags, f_bsize, f_iosize;
+  u64 f_blocks, f_bfree;
+  i64 f_bavail;
+  u64 f_files;
+  i64 f_ffree;
+  u64 f_syncwrites, f_asyncwrites, f_syncreads, f_asyncreads;
+  u64 f_spare[10];
+  u32 f_namemax, f_owner;
+  i32 f_fsid[2];
   char f_charspare[80];
   char f_fstypename[16];
   char f_mntfromname[88];
@@ -396,14 +397,14 @@ struct BsdStatfs {
 static void fillStatfs(void *buf, const char *mount) {
   auto *sf = static_cast<BsdStatfs *>(buf);
   std::memset(sf, 0, sizeof(*sf));
-  constexpr uint64_t kBlockSize = 0x8000;             // 32 KiB, as the PS5 fs
-  constexpr uint64_t kBlocks = 0x1000000ull;          // 512 GiB total
+  constexpr u64 kBlockSize = 0x8000;             // 32 KiB, as the PS5 fs
+  constexpr u64 kBlocks = 0x1000000ull;          // 512 GiB total
   sf->f_version = 0x20140518;                         // STATFS_VERSION
   sf->f_bsize = kBlockSize;
   sf->f_iosize = kBlockSize;
   sf->f_blocks = kBlocks;
   sf->f_bfree = kBlocks / 2;
-  sf->f_bavail = static_cast<int64_t>(kBlocks / 2);   // 256 GiB free
+  sf->f_bavail = static_cast<i64>(kBlocks / 2);   // 256 GiB free
   sf->f_files = 0x100000;
   sf->f_ffree = 0x100000 / 2;
   sf->f_namemax = 255;
@@ -422,14 +423,14 @@ int PS4ABI sys_statfs(const char *path, void *buf) {
   return 0;
 }
 
-int PS4ABI sys_fstatfs(uint32_t fd, void *buf) {
+int PS4ABI sys_fstatfs(u32 fd, void *buf) {
   if (!buf)
     return -SysError::eFAULT;
   fillStatfs(buf, "/");
   return 0;
 }
 
-int PS4ABI sys_fstat(uint32_t fd, void *stat) {
+int PS4ABI sys_fstat(u32 fd, void *stat) {
   // Zero first: a failed/unsupported fstat must not leave the caller's stat
   // buffer uninitialized. Games read st_size from it without checking the
   // return and then allocate that many bytes (garbage -> bad_alloc).
@@ -441,7 +442,7 @@ int PS4ABI sys_fstat(uint32_t fd, void *stat) {
   if (size_t sz = shmFstatSize(fd); sz != SIZE_MAX) {
     if (stat) {
       auto *st = static_cast<SceKernelStat *>(stat);
-      st->st_size = static_cast<int64_t>(sz);
+      st->st_size = static_cast<i64>(sz);
       st->st_mode = 0x8000;  // S_IFREG
       st->st_blksize = 0x4000;
     }
@@ -464,7 +465,7 @@ int PS4ABI sys_fstat(uint32_t fd, void *stat) {
     }
     if (kFstatTrace) {
       static std::mutex m;
-      static std::unordered_map<uint32_t, uint64_t> bad;
+      static std::unordered_map<u32, u64> bad;
       std::lock_guard<std::mutex> lk(m);
       if (bad[fd]++ == 0)
         BASE_LOGI("fstat", "fd={} -> EBADF (unknown descriptor)", fd);
@@ -485,7 +486,7 @@ int PS4ABI sys_stat(const char *path, void *stat) {
   // checking the return and then size a buffer from it. A missing file must
   // leave st_size = 0, not stack garbage (DOOM read a -1 size and crashed).
   std::memset(stat, 0, sizeof(SceKernelStat));
-  int64_t size = 0;
+  i64 size = 0;
   bool isDir = false;
   if (!vfs::stat(path, size, isDir)) {
     if (kRdall)
@@ -500,7 +501,7 @@ int PS4ABI sys_stat(const char *path, void *stat) {
   return 0;
 }
 
-int64_t PS4ABI sys_getdents(uint32_t fd, void *buf, size_t nbytes) {
+i64 PS4ABI sys_getdents(u32 fd, void *buf, size_t nbytes) {
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
@@ -517,10 +518,10 @@ int64_t PS4ABI sys_getdents(uint32_t fd, void *buf, size_t nbytes) {
 // files share one host fd, so this does not consume host descriptors. Char
 // devices (/dev/gc, ...) are released immediately.
 static std::mutex g_deferM;
-static std::deque<uint32_t> g_deferred;
+static std::deque<u32> g_deferred;
 static constexpr size_t kDeferredCloseWindow = 256;
 
-int PS4ABI sys_close(uint32_t fd) {
+int PS4ABI sys_close(u32 fd) {
   auto *proc = proc::getActive();
 
   if (proc && fd != -1) {
@@ -528,7 +529,7 @@ int PS4ABI sys_close(uint32_t fd) {
       BASE_LOGI("close", "fd={}", fd);
     auto *d = fdToDevice(fd);
     if (d && d->isRegularFile()) {
-      uint32_t evict = static_cast<uint32_t>(-1);
+      u32 evict = static_cast<u32>(-1);
       {
         std::lock_guard<std::mutex> lk(g_deferM);
         // A deferred fd keeps its slot pinned, so it can't have been reopened as
@@ -544,7 +545,7 @@ int PS4ABI sys_close(uint32_t fd) {
           }
         }
       }
-      if (evict != static_cast<uint32_t>(-1))
+      if (evict != static_cast<u32>(-1))
         proc->getObjTable().release(evict);
       return 0;
     }

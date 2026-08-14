@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <chrono>
 #include <memory>
@@ -33,7 +34,7 @@
 namespace {
 DELTA_OPTION(const char *, kDumpModule, "DELTA_DUMP_MODULE", nullptr);
 DELTA_OPTION(const char *, kGuestBrk, "DELTA_GUEST_BRK", nullptr);
-DELTA_OPTION(uint64_t, kBrkAfter, "DELTA_GUEST_BRK_AFTER", 0);
+DELTA_OPTION(u64, kBrkAfter, "DELTA_GUEST_BRK_AFTER", 0);
 DELTA_OPTION(const char *, kNoExec, "DELTA_GUEST_NOEXEC", nullptr);
 DELTA_OPTION(const char *, kModCheck, "DELTA_MODCHECK", nullptr);
 DELTA_OPTION(bool, kLibkDebug, "DELTA_LIBK_DEBUG", false);
@@ -67,7 +68,7 @@ bool smodule::fromFile(const base::String &path) {
     file.Seek(0, utl::seekMode::seek_set);
 
     auto sz = file.GetSize();
-    data = base::MakeUnique<uint8_t[]>(static_cast<mem_size>(sz));
+    data = base::MakeUnique<u8[]>(static_cast<mem_size>(sz));
     file.Read(data.Get_UseOnlyIfYouKnowWhatYouareDoing(), sz);
     return fromMem(std::move(data));
   }
@@ -89,19 +90,19 @@ bool smodule::fromVfs(const base::String &guestPath) {
   if (sz < sizeof(ELFHeader))
     return false;
 
-  base::Vector<uint8_t> raw;
+  base::Vector<u8> raw;
   raw.resize(static_cast<mem_size>(sz));
   f.Read(raw.data(), sz);
 
-  const uint8_t *src = raw.data();
+  const u8 *src = raw.data();
   size_t srcSize = static_cast<size_t>(sz);
 
   // eboot.bin / prx in a pkg are fake SELFs: rebuild the plain ELF in memory.
-  base::Vector<uint8_t> elfImg;
-  uint32_t magic = static_cast<uint32_t>(src[0]) |
-                   (static_cast<uint32_t>(src[1]) << 8) |
-                   (static_cast<uint32_t>(src[2]) << 16) |
-                   (static_cast<uint32_t>(src[3]) << 24);
+  base::Vector<u8> elfImg;
+  u32 magic = static_cast<u32>(src[0]) |
+                   (static_cast<u32>(src[1]) << 8) |
+                   (static_cast<u32>(src[2]) << 16) |
+                   (static_cast<u32>(src[3]) << 24);
   if (isSelfMagic(magic)) {
     elfImg = crypto::self2elf(src, srcSize);
     if (elfImg.empty()) {
@@ -126,12 +127,12 @@ bool smodule::fromVfs(const base::String &guestPath) {
     }
   }
 
-  auto out = base::MakeUnique<uint8_t[]>(static_cast<mem_size>(srcSize));
+  auto out = base::MakeUnique<u8[]>(static_cast<mem_size>(srcSize));
   std::memcpy(out.Get_UseOnlyIfYouKnowWhatYouareDoing(), src, srcSize);
   return fromMem(std::move(out));
 }
 
-bool smodule::fromMem(base::UniquePointer<uint8_t[]> data) {
+bool smodule::fromMem(base::UniquePointer<u8[]> data) {
   /*TODO: figure out a way of getting rid of the back buffer*/
   this->data = std::move(data);
 
@@ -154,13 +155,13 @@ bool smodule::fromMem(base::UniquePointer<uint8_t[]> data) {
   if (!isDynlib()) {
     auto *seg = getSegment(ElfSegType::PT_SCE_PROCPARAM);
     if (seg) {
-      info.procParam = getAddress<uint8_t>(seg->vaddr);
+      info.procParam = getAddress<u8>(seg->vaddr);
       info.procParamSize = seg->filesz;
     }
   } else {
     auto *seg = getSegment(ElfSegType::PT_SCE_MODULEPARAM);
     if (seg) {
-      info.moduleParam = getAddress<uint8_t>(seg->vaddr);
+      info.moduleParam = getAddress<u8>(seg->vaddr);
       info.moduleParamSize = seg->filesz;
     }
   }
@@ -173,7 +174,7 @@ bool smodule::fromMem(base::UniquePointer<uint8_t[]> data) {
   if (elf->entry == 0)
     info.entry = nullptr;
   else
-    info.entry = getAddress<uint8_t>(elf->entry);
+    info.entry = getAddress<u8>(elf->entry);
 
   for (auto &it : sharedObjects) {
       process->loadModule(it);
@@ -205,29 +206,29 @@ void smodule::digestDynamic() {
     return;
   }
 
-  uint8_t *dynldPtr = getOffset<uint8_t>(dyldS->offset);
-  uint8_t *dynldAddr = getAddress<uint8_t>(dyldS->vaddr);
+  u8 *dynldPtr = getOffset<u8>(dyldS->offset);
+  u8 *dynldAddr = getAddress<u8>(dyldS->vaddr);
   // std::printf("addr = %p\n", dynldAddr);
   ELFDyn *dynamics = getOffset<ELFDyn>(dynS->offset);
-  for (int32_t i = 0; i < (dynS->filesz / sizeof(ELFDyn)); i++) {
+  for (i32 i = 0; i < (dynS->filesz / sizeof(ELFDyn)); i++) {
     auto *d = &dynamics[i];
 
     switch (d->tag) {
     case DT_SCE_HASH:
-      hashes = reinterpret_cast<uint8_t *>(dynldPtr + d->un.value);
+      hashes = reinterpret_cast<u8 *>(dynldPtr + d->un.value);
       break;
     case DT_INIT:
-      info.initAddr = reinterpret_cast<uint8_t *>(dynldAddr + d->un.ptr);
+      info.initAddr = reinterpret_cast<u8 *>(dynldAddr + d->un.ptr);
       break;
     case DT_FINI:
-      info.finiAddr = reinterpret_cast<uint8_t *>(dynldAddr + d->un.ptr);
+      info.finiAddr = reinterpret_cast<u8 *>(dynldAddr + d->un.ptr);
       break;
     case DT_SCE_JMPREL:
       jmpslots = (ElfRel *)(dynldPtr + d->un.ptr);
       break;
     case DT_PLTRELSZ:
     case DT_SCE_PLTRELSZ:
-      numJmpSlots = static_cast<uint32_t>(d->un.value / sizeof(ElfRel));
+      numJmpSlots = static_cast<u32>(d->un.value / sizeof(ElfRel));
       break;
     case DT_SCE_STRTAB:
       strtab.ptr = (char *)(dynldPtr + d->un.ptr);
@@ -240,7 +241,7 @@ void smodule::digestDynamic() {
       symbols = reinterpret_cast<ElfSym *>(dynldPtr + d->un.ptr);
       break;
     case DT_SCE_SYMTABSZ:
-      numSymbols = static_cast<uint32_t>(d->un.value / sizeof(ElfSym));
+      numSymbols = static_cast<u32>(d->un.value / sizeof(ElfSym));
       break;
     case DT_SCE_RELA:
       rela = reinterpret_cast<ElfRel *>(dynldPtr + d->un.ptr);
@@ -260,7 +261,7 @@ void smodule::digestDynamic() {
     }
     case DT_RELASZ:
     case DT_SCE_RELASZ:
-      numRela = static_cast<uint32_t>(d->un.value / sizeof(ElfRel));
+      numRela = static_cast<u32>(d->un.value / sizeof(ElfRel));
       break;
     case DT_SCE_EXPLIB:
     case DT_SCE_IMPLIB: {
@@ -273,8 +274,8 @@ void smodule::digestDynamic() {
     }
     case DT_SCE_EXPORT_LIB_ATTR:
     case DT_SCE_IMPORT_LIB_ATTR: {
-      uint16_t id = d->un.value >> 48;
-      uint16_t idx = d->un.value & 0xFFF;
+      u16 id = d->un.value >> 48;
+      u16 idx = d->un.value & 0xFFF;
 
       for (auto &mod : impLibs) {
         if (mod.id == id) {
@@ -291,8 +292,8 @@ void smodule::digestDynamic() {
       break;
     }
     case DT_SCE_MODULE_ATTR: {
-      uint16_t id = d->un.value >> 48;
-      uint16_t idx = d->un.value & 0xFFF;
+      u16 id = d->un.value >> 48;
+      u16 idx = d->un.value & 0xFFF;
 
       for (auto &mod : impModules) {
         if (mod.id == id) {
@@ -345,39 +346,39 @@ void smodule::digestDynamicPs5(const ELFPgHeader *dynS) {
       break;
     // PS5 keeps the SCE symbol-table size tag even with a standard DT_SYMTAB.
     case DT_SCE_SYMTABSZ:
-      numSymbols = static_cast<uint32_t>(d->un.value / sizeof(ElfSym));
+      numSymbols = static_cast<u32>(d->un.value / sizeof(ElfSym));
       break;
     case DT_RELA:
       rela = getAddress<ElfRel>(d->un.ptr);
       break;
     case DT_RELASZ:
-      numRela = static_cast<uint32_t>(d->un.value / sizeof(ElfRel));
+      numRela = static_cast<u32>(d->un.value / sizeof(ElfRel));
       break;
     case DT_JMPREL:
       jmpslots = getAddress<ElfRel>(d->un.ptr);
       break;
     case DT_PLTRELSZ:
-      numJmpSlots = static_cast<uint32_t>(d->un.value / sizeof(ElfRel));
+      numJmpSlots = static_cast<u32>(d->un.value / sizeof(ElfRel));
       break;
     case DT_HASH:
-      hashes = getAddress<uint8_t>(d->un.ptr);
+      hashes = getAddress<u8>(d->un.ptr);
       break;
     case DT_INIT:
-      info.initAddr = getAddress<uint8_t>(d->un.ptr);
+      info.initAddr = getAddress<u8>(d->un.ptr);
       break;
     case DT_FINI:
-      info.finiAddr = getAddress<uint8_t>(d->un.ptr);
+      info.finiAddr = getAddress<u8>(d->un.ptr);
       break;
     case DT_SCE_PS5_IMPORT_LIB: {
       auto &e = impLibs.emplace_back();
-      e.id = static_cast<int32_t>(d->un.value >> 48);
+      e.id = static_cast<i32>(d->un.value >> 48);
       e.exported = false;
       e.name = nullptr;  // strtab may not be known yet; filled in below
       break;
     }
     case DT_SCE_PS5_IMPORT_MODULE: {
       auto &e = impModules.emplace_back();
-      e.id = static_cast<int32_t>(d->un.value >> 48);
+      e.id = static_cast<i32>(d->un.value >> 48);
       e.name = nullptr;
       break;
     }
@@ -417,7 +418,7 @@ void smodule::digestDynamicPs5(const ELFPgHeader *dynS) {
   // Standard ELF has no dynamic tag for the symbol count; fall back to the SysV
   // hash chain count ([nbucket u32][nchain u32], nchain == #dynsyms).
   if (numSymbols == 0 && hashes)
-    numSymbols = reinterpret_cast<uint32_t *>(hashes)[1];
+    numSymbols = reinterpret_cast<u32 *>(hashes)[1];
 
   if (kImplibTrace)
     BASE_LOGI("ps5dyn",
@@ -446,7 +447,7 @@ static void startNoExecWatch() {
     const char *c1 = std::strchr(spec, ':');
     const size_t size = c1 ? std::strtoull(c1 + 1, nullptr, 16) : 0x1000;
     const char *c2 = c1 ? std::strchr(c1 + 1, ':') : nullptr;
-    const uint64_t delay = c2 ? std::strtoull(c2 + 1, nullptr, 10) : 60;
+    const u64 delay = c2 ? std::strtoull(c2 + 1, nullptr, 10) : 60;
     std::thread([addr, size, delay] {
       std::this_thread::sleep_for(std::chrono::seconds(delay));
       const int r = ::mprotect(reinterpret_cast<void *>(addr), size,
@@ -471,10 +472,10 @@ void smodule::plantGuestBreakpoints() {
       continue;
     if (info.name.find(tok.substr(0, colon)) == base::String::npos)
       continue;
-    const uint64_t off = std::strtoull(tok.c_str() + colon + 1, nullptr, 16);
+    const u64 off = std::strtoull(tok.c_str() + colon + 1, nullptr, 16);
     if (off >= info.codeSize)
       continue;
-    uint8_t *at = getAddress<uint8_t>(off);
+    u8 *at = getAddress<u8>(off);
     // The segment is already protected by mapImage, so open the page first.
     const uintptr_t pg = reinterpret_cast<uintptr_t>(at) & ~uintptr_t(0x3FFF);
     ::mprotect(reinterpret_cast<void *>(pg), 0x8000,
@@ -482,7 +483,7 @@ void smodule::plantGuestBreakpoints() {
     // DELTA_GUEST_BRK_AFTER=<seconds>: arm the trap later instead of at load.
     // A site on a hot path traps on its first execution, which is rarely the
     // one being investigated; delaying past the earlier ones reaches it.
-    if (const uint64_t delay = kBrkAfter) {
+    if (const u64 delay = kBrkAfter) {
       const base::String name = info.name;
       std::thread([at, off, delay, name] {
         std::this_thread::sleep_for(std::chrono::seconds(delay));
@@ -510,27 +511,27 @@ void smodule::startModuleWatch() {
   if (!want || info.name.find(want) == base::String::npos)
     return;
   struct Range {
-    const uint8_t *addr;
+    const u8 *addr;
     size_t size;
   };
   auto ranges = std::make_shared<std::vector<Range>>();
-  for (uint16_t i = 0; i < elf->phnum; ++i) {
+  for (u16 i = 0; i < elf->phnum; ++i) {
     const auto *p = &segments[i];
     if (p->type != PT_LOAD || (p->flags & PF_W) || !p->filesz)
       continue;
-    const uint8_t *a = elf->type == ET_SCE_EXEC
-                           ? reinterpret_cast<const uint8_t *>(p->vaddr)
-                           : getAddress<const uint8_t>(p->paddr);
+    const u8 *a = elf->type == ET_SCE_EXEC
+                           ? reinterpret_cast<const u8 *>(p->vaddr)
+                           : getAddress<const u8>(p->paddr);
     ranges->push_back({a, static_cast<size_t>(p->filesz)});
   }
   if (ranges->empty())
     return;
   const base::String name = info.name;
   std::thread([ranges, name] {
-    std::vector<uint64_t> last(ranges->size(), 0);
+    std::vector<u64> last(ranges->size(), 0);
     for (bool first = true;; first = false) {
       for (size_t i = 0; i < ranges->size(); i++) {
-        uint64_t h = 1469598103934665603ull;
+        u64 h = 1469598103934665603ull;
         const auto &r = (*ranges)[i];
         for (size_t k = 0; k < r.size; k += 64)
           h = (h ^ r.addr[k]) * 1099511628211ull;
@@ -554,13 +555,13 @@ bool smodule::mapImage() {
   // size is the highest segment end, not the sum: segments map at their paddr,
   // which can be sparse, so summing under-reserves and a later segment ends up
   // writing into the unmapped part of the reservation.
-  uint64_t codeSize = 0;
-  for (uint16_t i = 0; i < elf->phnum; ++i) {
+  u64 codeSize = 0;
+  for (u16 i = 0; i < elf->phnum; ++i) {
     const auto *p = &segments[i];
     if (p->type == PT_LOAD || p->type == PT_SCE_RELRO) {
-      uint64_t align = p->align ? p->align : 0x1000;
-      uint64_t base = elf->type == ET_SCE_EXEC ? p->vaddr : p->paddr;
-      uint64_t end = align_up(base + p->memsz, align);
+      u64 align = p->align ? p->align : 0x1000;
+      u64 base = elf->type == ET_SCE_EXEC ? p->vaddr : p->paddr;
+      u64 end = align_up(base + p->memsz, align);
       if (end > codeSize)
         codeSize = end;
     }
@@ -583,12 +584,12 @@ bool smodule::mapImage() {
   // absolute image end for ET_SCE_EXEC (base = vaddr) and the image size for the
   // relocatable types (base = paddr, which starts near 0).
   if (elf->type == ET_SCE_EXEC) {
-    uint64_t loVaddr = UINT64_MAX;
-    for (uint16_t i = 0; i < elf->phnum; ++i) {
+    u64 loVaddr = UINT64_MAX;
+    for (u16 i = 0; i < elf->phnum; ++i) {
       const auto *p = &segments[i];
       if (p->type == PT_LOAD || p->type == PT_SCE_RELRO) {
-        uint64_t align = p->align ? p->align : 0x1000;
-        loVaddr = std::min<uint64_t>(loVaddr, p->vaddr & ~(align - 1));
+        u64 align = p->align ? p->align : 0x1000;
+        loVaddr = std::min<u64>(loVaddr, p->vaddr & ~(align - 1));
       }
     }
     if (loVaddr == UINT64_MAX)
@@ -612,7 +613,7 @@ bool smodule::mapImage() {
 
     info.base = nullptr;  // zero load bias: image lives at its absolute vaddrs
     info.codeSize = codeSize;
-    info.ripZone = reinterpret_cast<uint8_t *>(codeSize);  // base(0) + codeSize
+    info.ripZone = reinterpret_cast<u8 *>(codeSize);  // base(0) + codeSize
 
     std::memset(info.ripZone, 0xCC, info.ripZoneSize);
     utl::protectMem(info.ripZone, info.ripZoneSize, utl::pageProtection::rwx);
@@ -621,7 +622,7 @@ bool smodule::mapImage() {
     // same address every run and is easy to reproduce while the boot is being
     // worked on. Switch back to the nullptr (kernel-chosen) reservation below
     // once the boot is stable.
-    // info.base = static_cast<uint8_t *>(utl::allocMem(
+    // info.base = static_cast<u8 *>(utl::allocMem(
     //     nullptr, eight_gb, utl::pageProtection::w,
     //     utl::allocationType::reserve));
 #ifdef __ANDROID__
@@ -637,7 +638,7 @@ bool smodule::mapImage() {
     constexpr size_t moduleSlot = eight_gb;
     static uintptr_t s_nextBase = 0x0000200000000000ull;
 #endif
-    info.base = static_cast<uint8_t *>(utl::allocMem(
+    info.base = static_cast<u8 *>(utl::allocMem(
         reinterpret_cast<void *>(s_nextBase), moduleSlot,
         utl::pageProtection::w, utl::allocationType::reserve));
     s_nextBase += moduleSlot;
@@ -665,7 +666,7 @@ bool smodule::mapImage() {
   }
 
   // step 0: map data
-  for (uint16_t i = 0; i < elf->phnum; i++) {
+  for (u16 i = 0; i < elf->phnum; i++) {
     const auto *s = &segments[i];
     if (s->type == PT_LOAD || s->type == PT_SCE_RELRO) {
       void *target = elf->type == ET_SCE_EXEC
@@ -673,7 +674,7 @@ bool smodule::mapImage() {
                          : getAddress<void>(s->paddr);
 
       auto *seg = s->flags & PF_X ? &info.textSeg : &info.dataSeg;
-      seg->addr = static_cast<uint8_t *>(target);
+      seg->addr = static_cast<u8 *>(target);
       seg->size = s->memsz;
 
       std::memcpy(target, getOffset<void>(s->offset), s->filesz);
@@ -689,17 +690,17 @@ bool smodule::mapImage() {
   // in place so raw guest x86-64 runs natively. On aarch64 the FEXCore JIT
   // handles all three, so the image is left byte-for-byte intact.
 #if defined(DELTA_BACKEND_NATIVE)
-  uint8_t *ripEnd = info.base + codeSize + info.ripZoneSize;
-  for (uint16_t i = 0; i < elf->phnum; i++) {
+  u8 *ripEnd = info.base + codeSize + info.ripZoneSize;
+  for (u16 i = 0; i < elf->phnum; i++) {
     const auto *s = &segments[i];
-    uint32_t perm = s->flags & (PF_R | PF_W | PF_X);
+    u32 perm = s->flags & (PF_R | PF_W | PF_X);
     const bool exec = ps5 ? (perm & PF_X) != 0 : perm == (PF_R | PF_X);
     if (s->type == PT_LOAD && exec) {
       runtime::codeLift lift(info.ripZone, ripEnd);
       LOG_ASSERT(lift.init());
 
       /*TODO: we should really introduce a cache here*/
-      lift.transform(getAddress<uint8_t>(s->vaddr), s->filesz);
+      lift.transform(getAddress<u8>(s->vaddr), s->filesz);
     }
   }
 #endif
@@ -708,20 +709,20 @@ bool smodule::mapImage() {
   // temp hack: raise the 5.05 libkernel debug level. offset is fw-specific and
   // handle==1 is only libkernel on a real boot; bounds-check so a smaller
   // handle-1 image can't get written out of range.
-  constexpr uint32_t kLibkernelDbgOff = 0x68264;
+  constexpr u32 kLibkernelDbgOff = 0x68264;
   if (kLibkDebug && info.handle == 1 &&
-      kLibkernelDbgOff + sizeof(uint32_t) <= info.codeSize) {
-    *getAddress<uint32_t>(kLibkernelDbgOff) = UINT32_MAX;
+      kLibkernelDbgOff + sizeof(u32) <= info.codeSize) {
+    *getAddress<u32>(kLibkernelDbgOff) = UINT32_MAX;
     LOG_WARNING("Enabling libkernel debug messages");
   }
 #endif
 
   // step 2: apply page protections
-  for (uint16_t i = 0; i < elf->phnum; i++) {
+  for (u16 i = 0; i < elf->phnum; i++) {
     const auto *s = &segments[i];
     if (s->type == PT_LOAD) {
-      uint32_t perm = s->flags & (PF_R | PF_W | PF_X);
-      auto trans_perm = [ps5](uint32_t op) {
+      u32 perm = s->flags & (PF_R | PF_W | PF_X);
+      auto trans_perm = [ps5](u32 op) {
         // PS5 code is PF_X only; map any executable segment rx (x86 has no
         // execute-without-read), writable rw, else r. PS4 handling unchanged.
         if (ps5) {
@@ -762,7 +763,7 @@ bool smodule::setupTLS() {
   // so they no longer match libkernel's own (dense) TLS-module numbering, and
   // __tls_get_addr then can't find a real module's block.
   if (p && p->memsz) {
-    info.tlsAddr = getAddress<uint8_t>(p->vaddr);
+    info.tlsAddr = getAddress<u8>(p->vaddr);
     info.tlsalign = p->align;
     info.tlsSizeFile = p->filesz;
     info.tlsSizeMem = p->memsz;
@@ -772,7 +773,7 @@ bool smodule::setupTLS() {
   return true;
 }
 
-static bool decodeNid(const char *name, uint64_t &lid, uint64_t &mid) {
+static bool decodeNid(const char *name, u64 &lid, u64 &mid) {
   // Obfuscated imports are "<11-char nid>#<libid>#<modid>" where both ids are
   // variable-length base64: one char for 0..63, two chars once an index passes
   // 63 (games importing from >64 libraries hit the long form, which shifts the
@@ -798,7 +799,7 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
   // unique hash - across all loaded modules. LLE only: PS4 HLE stubs must not
   // hijack a Prospero import.
   if (ps5Layout) {
-    uint64_t hid = 0;
+    u64 hid = 0;
     if (!runtime::decode_nid(name, 11, hid))
       return false;
     // A few system libraries must run HLE on PS5 because their LLE backend needs a
@@ -842,10 +843,10 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
     // has the title's SceLibcMallocReplace installed in its dispatch table --
     // resolving by load order alone sends Skyrim's malloc/memalign into
     // libSceLibcInternal's 16 MiB internal arena instead of the game's manager.
-    uint64_t libid = 0, modid = 0;
+    u64 libid = 0, modid = 0;
     if (decodeNid(name, libid, modid)) {
       for (auto &m : impModules) {
-        if (m.id != static_cast<int32_t>(modid) || !m.name)
+        if (m.id != static_cast<i32>(modid) || !m.name)
           continue;
         if (auto named = process->getModule(base::StringRef(m.name)))
           if (uintptr_t a = named->getExport(hid)) {
@@ -878,7 +879,7 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
     return false;
   }
 
-  uint64_t libid = 0, modid = 0;
+  u64 libid = 0, modid = 0;
   if (!decodeNid(name, libid, modid)) {
     // Not an obfuscated NID import (or a malformed one): let the caller route
     // it to the badcall stub instead of taking the whole process down.
@@ -890,7 +891,7 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
 
   // TODO: could be done nicer
   for (auto &mod : impLibs) {
-    if (mod.id == static_cast<int32_t>(libid)) {
+    if (mod.id == static_cast<i32>(libid)) {
       libname = mod.name;
       break;
     }
@@ -904,7 +905,7 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
   // never populated in our env). The 11-char NID prefix decodes to the same hid
   // the HLE table is keyed on.
   {
-    uint64_t hid = 0;
+    u64 hid = 0;
     if (runtime::decode_nid(name, 11, hid)) {
       if (uintptr_t hle = runtime::vprx_get(libname, hid)) {
         // The HLE handler is a native host function; on FEX the guest can't jump
@@ -918,7 +919,7 @@ bool smodule::resolveObfSymbol(const char *name, uintptr_t &ptrOut) {
   }
 
   for (auto &mod : impModules) {
-    if (mod.id == static_cast<int32_t>(modid)) {
+    if (mod.id == static_cast<i32>(modid)) {
       auto xmod = process->getModule(mod.name);
       if (!xmod) {
         LOG_ERROR("resolveObfSymbol: Unknown module {} ({}) requestd", mod.name,
@@ -964,11 +965,11 @@ bool smodule::resolveImports() {
   if (auto kmod = process->getModule("libkernel"))
     addrBadCall = kmod->getSymbolFullName("M0z6Dr6TNnM#libkernel#libkernel");
 
-  for (uint32_t i = 0; i < numJmpSlots; i++) {
+  for (u32 i = 0; i < numJmpSlots; i++) {
     const auto *r = &jmpslots[i];
 
-    int32_t type = ELF64_R_TYPE(r->info);
-    int32_t isym = ELF64_R_SYM(r->info);
+    i32 type = ELF64_R_TYPE(r->info);
+    i32 isym = ELF64_R_SYM(r->info);
 
     ElfSym *sym = &symbols[isym];
 
@@ -977,13 +978,13 @@ bool smodule::resolveImports() {
       continue;
     }
 
-    if ((uint32_t)isym >= numSymbols || sym->st_name >= strtab.size) {
+    if ((u32)isym >= numSymbols || sym->st_name >= strtab.size) {
       LOG_WARNING("resolveImports: bad symbol index {} for relocation {}", isym,
                   i);
       continue;
     }
 
-    int32_t binding = ELF64_ST_BIND(sym->st_info);
+    i32 binding = ELF64_ST_BIND(sym->st_info);
     if (binding == STB_LOCAL) {
       *getAddress<uintptr_t>(r->offset) =
           getAddressNPTR<uintptr_t>(sym->st_value);
@@ -1031,8 +1032,8 @@ bool smodule::applyRelocations() {
   for (size_t i = 0; i < numRela; i++) {
     auto *r = &rela[i];
 
-    uint32_t isym = ELF64_R_SYM(r->info);
-    int32_t type = ELF64_R_TYPE(r->info);
+    u32 isym = ELF64_R_SYM(r->info);
+    i32 type = ELF64_R_TYPE(r->info);
 
     // check the index before indexing symbols[] below
     if (isym >= numSymbols) {
@@ -1041,9 +1042,9 @@ bool smodule::applyRelocations() {
     }
 
     ElfSym *sym = &symbols[isym];
-    int32_t bind = ELF64_ST_BIND(sym->st_info);
+    i32 bind = ELF64_ST_BIND(sym->st_info);
 
-    uint64_t symVal = 0;
+    u64 symVal = 0;
 
     if (bind == STB_LOCAL)
       symVal = sym->st_value;
@@ -1062,27 +1063,27 @@ bool smodule::applyRelocations() {
 
     switch (type) {
     case R_X86_64_64:
-      *getAddress<uint64_t>(r->offset) = symVal + r->addend;
+      *getAddress<u64>(r->offset) = symVal + r->addend;
       break;
     case R_X86_64_RELATIVE: /* base + ofs*/
-      *getAddress<int64_t>(r->offset) = getAddressNPTR<int64_t>(r->addend);
+      *getAddress<i64>(r->offset) = getAddressNPTR<i64>(r->addend);
       break;
     case R_X86_64_GLOB_DAT:
-      *getAddress<uint64_t>(r->offset) = symVal;
+      *getAddress<u64>(r->offset) = symVal;
       break;
     case R_X86_64_PC32:
-      *getAddress<uint32_t>(r->offset) = static_cast<uint32_t>(
-          symVal + r->addend - getAddressNPTR<uint64_t>(r->offset));
+      *getAddress<u32>(r->offset) = static_cast<u32>(
+          symVal + r->addend - getAddressNPTR<u64>(r->offset));
       break;
     case R_X86_64_DTPMOD64:
-      *getAddress<uint64_t>(r->offset) += info.tlsSlot;
+      *getAddress<u64>(r->offset) += info.tlsSlot;
       break;
     case R_X86_64_DTPOFF32:
-      *getAddress<uint32_t>(r->offset) +=
-          static_cast<uint32_t>(symVal + r->addend);
+      *getAddress<u32>(r->offset) +=
+          static_cast<u32>(symVal + r->addend);
       break;
     case R_X86_64_DTPOFF64:
-      *getAddress<uint64_t>(r->offset) += symVal + r->addend;
+      *getAddress<u64>(r->offset) += symVal + r->addend;
       break;
     case R_X86_64_NONE:
       break;
@@ -1094,24 +1095,24 @@ bool smodule::applyRelocations() {
   return true;
 }
 
-uintptr_t smodule::getSymbol(uint64_t nid) {
+uintptr_t smodule::getSymbol(u64 nid) {
   // are there any overrides for me?
   auto imp = runtime::vprx_get(info.name.c_str(), nid);
   if (imp != 0)
     return imp;
 
-  for (uint32_t i = 0; i < numSymbols; i++) {
+  for (u32 i = 0; i < numSymbols; i++) {
     const auto *s = &symbols[i];
 
     if (!s->st_value)
       continue;
 
     // if the symbol is exported
-    // int32_t binding = ELF64_ST_BIND(s->st_info);
+    // i32 binding = ELF64_ST_BIND(s->st_info);
 
     const char *name = &strtab.ptr[s->st_name];
 
-    uint64_t hid = 0;
+    u64 hid = 0;
     if (!runtime::decode_nid(name, 11, hid)) {
       LOG_ERROR("resolveExport: cant handle NID");
       return 0;
@@ -1125,13 +1126,13 @@ uintptr_t smodule::getSymbol(uint64_t nid) {
   return 0;
 }
 
-uintptr_t smodule::getExport(uint64_t nid) {
-  for (uint32_t i = 0; i < numSymbols; i++) {
+uintptr_t smodule::getExport(u64 nid) {
+  for (u32 i = 0; i < numSymbols; i++) {
     const auto *s = &symbols[i];
     if (!s->st_value)
       continue;
     const char *name = &strtab.ptr[s->st_name];
-    uint64_t hid = 0;
+    u64 hid = 0;
     if (runtime::decode_nid(name, 11, hid) && nid == hid)
       return getAddressNPTR<uintptr_t>(s->st_value);
   }
@@ -1146,9 +1147,9 @@ uintptr_t smodule::getSymbolFullName(const char *name) {
     return 0;
 
   auto elfHash = [](const char *name) {
-    auto p = (const uint8_t *)name;
-    uint32_t h = 0;
-    uint32_t g;
+    auto p = (const u8 *)name;
+    u32 h = 0;
+    u32 g;
     while (*p != '\0') {
       h = (h << 4) + *p++;
       if ((g = h & 0xF0000000ull) != 0) {
@@ -1161,16 +1162,16 @@ uintptr_t smodule::getSymbolFullName(const char *name) {
 
   auto hash = elfHash(name);
 
-  auto *htab = reinterpret_cast<uint32_t *>(hashes);
-  uint32_t nbucket = htab[0];
-  uint32_t nchain = htab[1];
-  uint32_t *bucket = &htab[2];
-  uint32_t *chain = &bucket[nbucket];
+  auto *htab = reinterpret_cast<u32 *>(hashes);
+  u32 nbucket = htab[0];
+  u32 nchain = htab[1];
+  u32 *bucket = &htab[2];
+  u32 *chain = &bucket[nbucket];
 
   /*char nameOut[11]{};
-  runtime::encode_nid("module_start", reinterpret_cast<uint8_t*>(&nameOut));*/
+  runtime::encode_nid("module_start", reinterpret_cast<u8*>(&nameOut));*/
 
-  for (uint32_t i = bucket[hash % nbucket]; i; i = chain[i]) {
+  for (u32 i = bucket[hash % nbucket]; i; i = chain[i]) {
     const auto *s = &symbols[i];
 
     if (i > nchain)
@@ -1189,7 +1190,7 @@ uintptr_t smodule::getSymbolFullName(const char *name) {
 }
 
 uintptr_t smodule::getSymbol2(const char *name) {
-  for (uint32_t i = 0; i < numSymbols; i++) {
+  for (u32 i = 0; i < numSymbols; i++) {
     const auto *s = &symbols[i];
 
     if (!s->st_value)
@@ -1206,7 +1207,7 @@ uintptr_t smodule::getSymbol2(const char *name) {
 }
 
 uintptr_t smodule::getSymbolByNid(const char *nid) {
-  for (uint32_t i = 0; i < numSymbols; i++) {
+  for (u32 i = 0; i < numSymbols; i++) {
     const auto *s = &symbols[i];
 
     // exports are defined (st_value != 0); imports are undefined (== 0).
@@ -1229,16 +1230,16 @@ void smodule::installEHFrame() {
   if (p->filesz > p->memsz)
     return;
 
-  info.ehFrameAddr = getAddress<uint8_t>(p->vaddr);
+  info.ehFrameAddr = getAddress<u8>(p->vaddr);
   info.ehFrameSize = p->memsz;
 
   // custom struct for eh_frame_hdr
   struct GnuExceptionInfo {
-    uint8_t version;
-    uint8_t encoding;
-    uint8_t fdeCount;
-    uint8_t encodingTable;
-    uint8_t first;
+    u8 version;
+    u8 encoding;
+    u8 fdeCount;
+    u8 encodingTable;
+    u8 first;
   };
 
   auto *exinfo = getOffset<GnuExceptionInfo>(p->offset);
@@ -1246,26 +1247,26 @@ void smodule::installEHFrame() {
   if (exinfo->version != 1)
     return;
 
-  uint8_t *data_buffer = nullptr;
-  uint8_t *current = &exinfo->first;
+  u8 *data_buffer = nullptr;
+  u8 *current = &exinfo->first;
 
   if (exinfo->encoding == 0x03) // relative to base address
   {
-    auto offset = *reinterpret_cast<uint32_t *>(current);
+    auto offset = *reinterpret_cast<u32 *>(current);
     current += 4;
 
-    data_buffer = (uint8_t *)&info.base[offset];
+    data_buffer = (u8 *)&info.base[offset];
   } else if (exinfo->encoding == 0x1B) // pc-relative
   {
-    auto offset = *reinterpret_cast<int32_t *>(current);
+    auto offset = *reinterpret_cast<i32 *>(current);
     // pc-relative means relative to where this field is in the MAPPED image.
     // exinfo points into the on-disk file buffer, so using it as the pc gave a
     // host heap address and every module failed the in-image check below --
     // which is why no module ever got an .eh_frame.
     const size_t field_off = static_cast<size_t>(
-        current - reinterpret_cast<uint8_t *>(exinfo));
+        current - reinterpret_cast<u8 *>(exinfo));
     current += 4;
-    data_buffer = getAddress<uint8_t>(p->vaddr) + field_off + offset;
+    data_buffer = getAddress<u8>(p->vaddr) + field_off + offset;
   } else {
     return;
   }
@@ -1277,18 +1278,18 @@ void smodule::installEHFrame() {
   // the FDE table sits in the mapped image. some modules (webkit/jsc) have an
   // eh_frame_hdr whose pointer doesn't walk to a clean terminator, so keep
   // every read inside the image and give up if we miss it. eh_frame is optional.
-  uint8_t *const image_begin = info.base;
-  uint8_t *const image_end = info.base + info.codeSize;
+  u8 *const image_begin = info.base;
+  u8 *const image_end = info.base + info.codeSize;
   if (data_buffer < image_begin || data_buffer >= image_end)
     return;
 
-  uint8_t *data_buffer_end = data_buffer;
+  u8 *data_buffer_end = data_buffer;
   bool terminated = false;
-  while (data_buffer_end + sizeof(uint32_t) <= image_end) {
+  while (data_buffer_end + sizeof(u32) <= image_end) {
     // CFI length is unsigned: 0 ends the table, 0xffffffff means a 64-bit len
-    uint32_t len = *reinterpret_cast<uint32_t *>(data_buffer_end);
+    u32 len = *reinterpret_cast<u32 *>(data_buffer_end);
     if (len == 0) {
-      data_buffer_end += sizeof(uint32_t);
+      data_buffer_end += sizeof(u32);
       terminated = true;
       break;
     }
@@ -1297,13 +1298,13 @@ void smodule::installEHFrame() {
     if (len == 0xFFFFFFFFu) {
       if (data_buffer_end + 12 > image_end)
         break;
-      advance = 12u + *reinterpret_cast<uint64_t *>(data_buffer_end + 4);
+      advance = 12u + *reinterpret_cast<u64 *>(data_buffer_end + 4);
     } else {
       advance = 4u + len;
     }
 
     // garbage length could overflow or stall the walk; bail if we'd not advance
-    if (advance < sizeof(uint32_t) || data_buffer_end + advance <= data_buffer_end)
+    if (advance < sizeof(u32) || data_buffer_end + advance <= data_buffer_end)
       break;
     data_buffer_end += advance;
   }
@@ -1316,12 +1317,12 @@ void smodule::installEHFrame() {
   // Minecraft's world creation aborts inside libcohtml that way. Fall back to
   // the rest of the image when the walk doesn't terminate cleanly.
   info.ehFrameheaderAddr = data_buffer;
-  info.ehFrameheaderSize = static_cast<uint32_t>(
+  info.ehFrameheaderSize = static_cast<u32>(
       (terminated ? data_buffer_end : image_end) - data_buffer);
 }
 
 void smodule::logDbgInfo() {
-  for (uint16_t i = 0; i < elf->phnum; i++) {
+  for (u16 i = 0; i < elf->phnum; i++) {
     auto s = &segments[i];
     switch (s->type) {
     case PT_SCE_COMMENT: {
@@ -1339,13 +1340,13 @@ void smodule::logDbgInfo() {
 #if 0
 			case PT_SCE_LIBVERSION:
 			{
-				uint8_t* sec = getOffset<uint8_t>(s->offset);
+				u8* sec = getOffset<u8>(s->offset);
 
 				// count entries
-				int32_t index = 0;
+				i32 index = 0;
 				while (index <= s->filesz) {
 
-					int8_t cb = sec[index];
+					i8 cb = sec[index];
 
 					// skip control byte
 					index++;
@@ -1360,8 +1361,8 @@ void smodule::logDbgInfo() {
 							name.resize(length);
 							memcpy(name.data(), &sec[index], length);
 
-							uint32_t version = *(uint32_t*)& sec[i + 1];
-							uint8_t* vptr = (uint8_t*)& version;
+							u32 version = *(u32*)& sec[i + 1];
+							u8* vptr = (u8*)& version;
 
 							std::printf("lib <%s>, version %x.%x.%x.%x\n", name.c_str(), vptr[0], vptr[1], vptr[2], vptr[3]);
 							break;

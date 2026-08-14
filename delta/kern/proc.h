@@ -9,6 +9,7 @@
  */
 
 #include <base/containers/vector.h>
+#include "base/arch.h"
 #include <base/strings/xstring.h>
 #include <base/strings/string_ref.h>
 
@@ -20,8 +21,8 @@
 
 namespace krnl {
 struct procInfo {
-  uint32_t ripZoneSize = 5 * 1024;
-  uint8_t *userStack = nullptr;
+  u32 ripZoneSize = 5 * 1024;
+  u8 *userStack = nullptr;
   size_t userStackSize = 20 * 1024 * 1024;
   void *fsBase = nullptr;
 };
@@ -31,11 +32,11 @@ class kObject;
 
 // Set the calling host thread's guest fs base (guest TLS pointer). Called for
 // the main thread (sysarch 129) and for each guest thread we spawn.
-void setThreadFsBase(uint64_t);
+void setThreadFsBase(u64);
 // The calling host thread's guest fs base, 0 when no guest thread runs on it.
-uint64_t threadFsBase();
-int32_t hostGuestFsOffset();
-int32_t hostFsScratchOffset();
+u64 threadFsBase();
+i32 hostGuestFsOffset();
+i32 hostFsScratchOffset();
 
 /*TODO: FIX MISUSE OF modulePtr*/
 using modulePtr = utl::object_ref<smodule>;
@@ -61,7 +62,7 @@ public:
 
   modulePtr loadModule(base::StringRef);
   modulePtr getModule(base::StringRef);
-  modulePtr getModule(uint32_t);
+  modulePtr getModule(u32);
 
   inline vmManager &getVma() { return vmem; }
   inline procInfo &getEnv() { return env; }
@@ -72,23 +73,23 @@ public:
   // SDK version the title was built against, 0xMMmmpppp (PS5 titles carry it in
   // sce_sys/param.json). libkernel reads it back through sysctl kern.proc.36 and
   // branches on it; 0 makes it take pre-1.70 code paths.
-  uint32_t getSdkVersion() const { return sdkVersion; }
-  void setSdkVersion(uint32_t v) { sdkVersion = v; }
+  u32 getSdkVersion() const { return sdkVersion; }
+  void setSdkVersion(u32 v) { sdkVersion = v; }
 
 private:
   vmManager vmem;
   procInfo env;
   platform plat = platform::ps4;
-  uint32_t sdkVersion = 0;
+  u32 sdkVersion = 0;
   moduleList modules;
   objectTable objects;
-  uint32_t handleCounter = 1;
-  uint16_t tlsCounter = 1;
+  u32 handleCounter = 1;
+  u16 tlsCounter = 1;
 
   // 1-based ELF TLS module index handed to each module that ships a PT_TLS.
   // libkernel uses this as the DTV slot; it must be unique and non-negative
   // (-1 corrupts DTPMOD relocations and the DTV).
-  uint16_t nextFreeTLS() { return tlsCounter++; }
+  u16 nextFreeTLS() { return tlsCounter++; }
 };
 
 // DELTA_FIOS_TRACE hook: called from smodule::resolveImports for each PLT import.

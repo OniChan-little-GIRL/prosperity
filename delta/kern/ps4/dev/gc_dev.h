@@ -3,6 +3,7 @@
 // Copyright (C) Force67 2019
 
 #include "device.h"
+#include "base/arch.h"
 
 #include <array>
 #include <mutex>
@@ -14,31 +15,31 @@ class gcDevice : public device {
 public:
   gcDevice(proc *);
 
-  bool init(const char *, uint32_t, uint32_t) override;
-  int32_t ioctl(uint32_t command, void *args) override;
-  uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) override;
+  bool init(const char *, u32, u32) override;
+  i32 ioctl(u32 command, void *args) override;
+  u8 *map(void *, size_t, u32, u32, size_t) override;
 
   // Kernel /dev/gc maps GPU-visible memory at a fixed base+offset; mirror that
   // with a lazily-allocated pool (identity range, CP-renderable).
-  uint8_t *poolBase = nullptr;
-  uint64_t poolSize = 0;
+  u8 *poolBase = nullptr;
+  u64 poolSize = 0;
 
   // Execute the complete indirect-buffer packets sitting in every mapped
   // compute queue, up to `budget_dw` dwords per queue. Static because the
   // queues are hardware state and the per-frame drain runs outside any ioctl.
   // The CALLER must hold computeMutex (the doorbell handler already does).
-  static void drainQueues(uint32_t budget_dw);
+  static void drainQueues(u32 budget_dw);
 
   struct ComputeQueue {
-    uint32_t me = 0;
-    uint32_t pipe = 0;
-    uint32_t queue = 0;
-    uint32_t vqueue = 0;
-    uint64_t ringBase = 0;
-    uint64_t readPtr = 0;
-    uint64_t state = 0;
-    uint32_t ringSizeDw = 0;
-    uint32_t readOffsetDw = 0;
+    u32 me = 0;
+    u32 pipe = 0;
+    u32 queue = 0;
+    u32 vqueue = 0;
+    u64 ringBase = 0;
+    u64 readPtr = 0;
+    u64 state = 0;
+    u32 ringSizeDw = 0;
+    u32 readOffsetDw = 0;
     bool mapped = false;
   };
 

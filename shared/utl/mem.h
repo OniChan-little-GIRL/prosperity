@@ -9,13 +9,14 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 #include <type_traits>
 
 namespace utl {
 enum class allocationType { reserve, commit, reservecommit };
 
-enum class pageProtection : uint32_t {
+enum class pageProtection : u32 {
   priv = 0,
   r = 1,
   w = 1 << 1,
@@ -25,12 +26,12 @@ enum class pageProtection : uint32_t {
 };
 
 inline bool operator&(pageProtection lhs, pageProtection rhs) {
-  return (static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+  return (static_cast<u32>(lhs) & static_cast<u32>(rhs));
 }
 
 inline pageProtection operator|(pageProtection lhs, pageProtection rhs) {
-  return static_cast<pageProtection>(static_cast<uint32_t>(lhs) |
-                                     static_cast<uint32_t>(rhs));
+  return static_cast<pageProtection>(static_cast<u32>(lhs) |
+                                     static_cast<u32>(rhs));
 }
 
 inline pageProtection &operator|=(pageProtection &lhs, pageProtection rhs) {

@@ -8,9 +8,10 @@
  */
 
 #include "libfmod.h"
+#include "base/arch.h"
 
 extern "C" {
 
-uint64_t PS4ABI fmodStub() { return 0; /* FMOD_OK */ }
+u64 PS4ABI fmodStub() { return 0; /* FMOD_OK */ }
 
 }  // extern "C"

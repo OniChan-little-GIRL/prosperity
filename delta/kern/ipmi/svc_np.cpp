@@ -11,6 +11,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "services.h"
 
@@ -26,7 +27,7 @@ enum {
 };
 
 // The internal state that maps to SCE_NP_STATE_SIGNED_OUT.
-constexpr uint32_t kInternalSignedOut = 1;
+constexpr u32 kInternalSignedOut = 1;
 
 struct NpManager : Service {
   const char *name() const override { return "SceNpMgrIpc"; }

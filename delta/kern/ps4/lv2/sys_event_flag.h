@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -30,7 +31,7 @@ class proc;
 //   0x1000  (internal) destroyed/cancelling marker, checked by evf_wait/osem_wait
 // The kernel rejects: attr/mode with both AND and OR (bits & 3 == 3), both clear
 // modes (bits & 0x30 == 0x30), or any bit outside the 0x133 mask.
-enum evfAttr : uint32_t {
+enum evfAttr : u32 {
   kEvfAnd = 0x01,
   kEvfOr = 0x02,
   kEvfClearAll = 0x10,
@@ -58,19 +59,19 @@ public:
   // `sticky` bits are re-asserted after every clear: used for system focus/
   // ready flags the (absent) ShellCore would keep set, so a game that polls
   // them with clear-on-wait stays "focused" instead of latching off.
-  eventFlag(proc *p, const char *name, uint64_t init, uint64_t sticky = 0);
+  eventFlag(proc *p, const char *name, u64 init, u64 sticky = 0);
 
   // Wait until the bits satisfy pattern per mode (AND=all, OR=any). Blocks up to
   // *timeoutUs micros (null = forever). Writes the matched bits to *result, then
   // applies the clear mode. Returns 0 or -errno.
-  int wait(uint64_t pattern, uint32_t mode, uint64_t *result,
-           uint32_t *timeoutUs);
-  int trywait(uint64_t pattern, uint32_t mode, uint64_t *result);
-  void set(uint64_t bits);
-  void clear(uint64_t bits);
+  int wait(u64 pattern, u32 mode, u64 *result,
+           u32 *timeoutUs);
+  int trywait(u64 pattern, u32 mode, u64 *result);
+  void set(u64 bits);
+  void clear(u64 bits);
   // Wake every waiter; returns how many were released. The woken threads see
   // an error status (not a match), matching kernel evf_cancel semantics.
-  int cancel(uint64_t pattern);
+  int cancel(u64 pattern);
 
   const base::String &fname() const { return name; }
 
@@ -81,39 +82,39 @@ public:
 
 private:
   struct Waiter {
-    uint64_t pattern;
-    uint32_t mode;
-    uint64_t result = 0;
+    u64 pattern;
+    u32 mode;
+    u64 result = 0;
     bool done = false;
     bool cancelled = false;
   };
 
-  bool satisfied(uint64_t pattern, uint32_t mode) const;
-  int take(uint64_t pattern, uint32_t mode, uint64_t *result);
+  bool satisfied(u64 pattern, u32 mode) const;
+  int take(u64 pattern, u32 mode, u64 *result);
   void removeWaiter(Waiter *waiter);
 
   std::mutex m;
   std::condition_variable cv;
   std::vector<Waiter *> waiters;
-  uint64_t bits;
-  uint64_t sticky;
+  u64 bits;
+  u64 sticky;
 };
 
 // Set `bits` on the first named event flag whose name contains `substr`.
 // Returns false if no such flag exists (yet). Unlike the syscalls this takes no
 // handle and touches no object table, so a HOST thread with no guest proc (the
 // audio daemon stand-in, kern/ps4/audio_daemon.cpp) can signal a guest flag.
-bool evfSetByNameSubstr(const char *substr, uint64_t bits);
+bool evfSetByNameSubstr(const char *substr, u64 bits);
 
-int PS4ABI sys_evf_create(const char *name, uint32_t attr, uint64_t initPattern);
+int PS4ABI sys_evf_create(const char *name, u32 attr, u64 initPattern);
 int PS4ABI sys_evf_delete(int id);
 int PS4ABI sys_evf_open(const char *name);
 int PS4ABI sys_evf_close(int id);
-int PS4ABI sys_evf_wait(int id, uint64_t pattern, uint32_t mode,
-                        uint64_t *result, uint32_t *timeoutUs);
-int PS4ABI sys_evf_trywait(int id, uint64_t pattern, uint32_t mode,
-                           uint64_t *result);
-int PS4ABI sys_evf_set(int id, uint64_t bits);
-int PS4ABI sys_evf_clear(int id, uint64_t bits);
-int PS4ABI sys_evf_cancel(int id, uint64_t pattern, int *numWaiters);
+int PS4ABI sys_evf_wait(int id, u64 pattern, u32 mode,
+                        u64 *result, u32 *timeoutUs);
+int PS4ABI sys_evf_trywait(int id, u64 pattern, u32 mode,
+                           u64 *result);
+int PS4ABI sys_evf_set(int id, u64 bits);
+int PS4ABI sys_evf_clear(int id, u64 bits);
+int PS4ABI sys_evf_cancel(int id, u64 pattern, int *numWaiters);
 }  // namespace krnl

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "base/arch.h"
 #include <utl/options.h>
 
 
@@ -10,7 +11,7 @@ enum class HardwareMode { base, neo };
 
 struct HardwareModeProfile {
   HardwareMode mode;
-  uint32_t mainSocId;
+  u32 mainSocId;
 };
 
 // DELTA_PS4_NEO selects the emulated hardware. A title only enters enhanced
@@ -18,9 +19,9 @@ struct HardwareModeProfile {
 extern base::Option<bool> kNeoMode;
 const HardwareModeProfile &hardwareModeProfile();
 
-void setTitleAttributes(uint32_t attributes);
-uint32_t titleAttributes();
-uint32_t cpuMode();
+void setTitleAttributes(u32 attributes);
+u32 titleAttributes();
+u32 cpuMode();
 bool isNeoMode();
 const char *gnmDriverModule();
 

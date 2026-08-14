@@ -13,6 +13,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "gpu/ps4/liverpool.h"
 #include "gpu/rhi/command.h"
@@ -23,14 +24,14 @@ namespace gpu::ps4 {
 // The parts of a draw that are not in the register file: the packet itself plus
 // the index/instance state the IT_* packets before it set up.
 struct DrawPacket {
-  uint32_t op = 0;
-  const uint32_t* body = nullptr;
-  uint32_t count = 0;
-  uint32_t index_type = 0;     // IT_INDEX_TYPE: 0 = 16-bit, 1 = 32-bit
-  uint64_t index_base = 0;     // IT_INDEX_BASE (DRAW_INDEX_2 carries its own)
-  uint64_t indirect_base = 0;  // IT_SET_BASE(1): where indirect args live
-  uint32_t num_instances = 1;  // IT_NUM_INSTANCES
-  uint32_t frame = 0;          // presented frames + 1, for the frame gates
+  u32 op = 0;
+  const u32* body = nullptr;
+  u32 count = 0;
+  u32 index_type = 0;     // IT_INDEX_TYPE: 0 = 16-bit, 1 = 32-bit
+  u64 index_base = 0;     // IT_INDEX_BASE (DRAW_INDEX_2 carries its own)
+  u64 indirect_base = 0;  // IT_SET_BASE(1): where indirect args live
+  u32 num_instances = 1;  // IT_NUM_INSTANCES
+  u32 frame = 0;          // presented frames + 1, for the frame gates
 };
 
 // Fill `d` from the packet and the live registers. False when nothing resolved

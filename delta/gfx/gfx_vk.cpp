@@ -18,6 +18,7 @@
 #ifndef __ANDROID__
 
 #include <algorithm>
+#include "base/arch.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -71,9 +72,9 @@ namespace {
 // videoout HLE race to bring the window up and each passes its own generic
 // title, so whoever wins uses this instead when it is set.
 std::string g_title;
-std::vector<uint8_t> g_iconPng;
+std::vector<u8> g_iconPng;
 
-constexpr uint32_t kFrameSlotCount = 2;
+constexpr u32 kFrameSlotCount = 2;
 
 struct FrameSlot {
   VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -94,7 +95,7 @@ struct State {
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkPhysicalDevice phys = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
-  uint32_t queueFamily = 0;
+  u32 queueFamily = 0;
   VkQueue queue = VK_NULL_HANDLE;
 
   VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -110,10 +111,10 @@ struct State {
   // VK_EXT_swapchain_maintenance1), so a retired swapchain's semaphores rest
   // here for one whole swapchain generation before being destroyed.
   std::vector<VkSemaphore> retiredRenderSems;
-  uint32_t nextSlot = 0;
+  u32 nextSlot = 0;
 
   // Framebuffer dimensions shared by the per-slot upload resources.
-  uint32_t fbW = 0, fbH = 0;
+  u32 fbW = 0, fbH = 0;
   VkFormat fbFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
   SDL_Gamepad *gamepad =
@@ -125,12 +126,12 @@ struct State {
 
 State g;
 std::atomic_bool g_canPresent{true};
-constexpr uint64_t kPresentWaitSliceNs = 50'000'000;
+constexpr u64 kPresentWaitSliceNs = 50'000'000;
 constexpr size_t kMaxIconSize = 16u << 20;
 constexpr int kMaxIconDimension = 4096;
 
 #if defined(__linux__)
-void drawBadge(uint8_t *pixels, int width, int height, const uint8_t *logo,
+void drawBadge(u8 *pixels, int width, int height, const u8 *logo,
                int logoWidth, int logoHeight) {
   const int size = std::max(1, std::min(width, height) * 3 / 4);
   const int left = width - size;
@@ -144,29 +145,29 @@ void drawBadge(uint8_t *pixels, int width, int height, const uint8_t *logo,
       continue;
     for (int x = 0; x < size; ++x) {
       const int px = left + x;
-      uint8_t *rgba = pixels + (static_cast<size_t>(py) * width + px) * 4;
-      const uint8_t *badge =
+      u8 *rgba = pixels + (static_cast<size_t>(py) * width + px) * 4;
+      const u8 *badge =
           logo + (static_cast<size_t>(y * logoHeight / size) * logoWidth +
                   x * logoWidth / size) *
                      4;
-      const uint32_t alpha = badge[3];
-      const uint32_t dstAlpha = rgba[3];
-      const uint32_t outAlpha = alpha * 255 + dstAlpha * (255 - alpha);
+      const u32 alpha = badge[3];
+      const u32 dstAlpha = rgba[3];
+      const u32 outAlpha = alpha * 255 + dstAlpha * (255 - alpha);
       if (outAlpha) {
         for (int channel = 0; channel < 3; ++channel)
-          rgba[channel] = static_cast<uint8_t>(
+          rgba[channel] = static_cast<u8>(
               (badge[channel] * alpha * 255 +
                rgba[channel] * dstAlpha * (255 - alpha) + outAlpha / 2) /
               outAlpha);
       }
-      rgba[3] = static_cast<uint8_t>((outAlpha + 127) / 255);
+      rgba[3] = static_cast<u8>((outAlpha + 127) / 255);
     }
   }
 }
 
 // Blue frame around the artwork, so the icon reads as ours at taskbar size.
-void drawBorder(uint8_t *pixels, int width, int height) {
-  constexpr uint8_t kFrame[4] = {0x18, 0x60, 0xCC, 0xFF};
+void drawBorder(u8 *pixels, int width, int height) {
+  constexpr u8 kFrame[4] = {0x18, 0x60, 0xCC, 0xFF};
   const int thickness = std::max(2, std::min(width, height) / 24);
   for (int y = 0; y < height; ++y) {
     const bool edgeRow = y < thickness || y >= height - thickness;
@@ -237,10 +238,10 @@ bool waitForPresentFence(VkFence fence, const char *operation) {
   return false;
 }
 
-uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) {
+u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
   VkPhysicalDeviceMemoryProperties mp;
   vkGetPhysicalDeviceMemoryProperties(g.phys, &mp);
-  for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+  for (u32 i = 0; i < mp.memoryTypeCount; i++)
     if ((typeBits & (1u << i)) &&
         (mp.memoryTypes[i].propertyFlags & props) == props)
       return i;
@@ -282,7 +283,7 @@ void retireRenderSemaphores() {
   g.renderSems.clear();
 }
 
-bool createRenderSemaphores(uint32_t count,
+bool createRenderSemaphores(u32 count,
                             std::vector<VkSemaphore> &semaphores) {
   VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   semaphores.resize(count);
@@ -304,7 +305,7 @@ bool createSwapchain() {
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.phys, g.surface, &caps);
 
   // Choose a format (prefer BGRA8 unorm).
-  uint32_t nfmt = 0;
+  u32 nfmt = 0;
   vkGetPhysicalDeviceSurfaceFormatsKHR(g.phys, g.surface, &nfmt, nullptr);
   std::vector<VkSurfaceFormatKHR> fmts(nfmt);
   vkGetPhysicalDeviceSurfaceFormatsKHR(g.phys, g.surface, &nfmt, fmts.data());
@@ -317,13 +318,13 @@ bool createSwapchain() {
   if (ext.width == 0xFFFFFFFF) {
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(g.window, &w, &h);
-    ext.width = (uint32_t)w;
-    ext.height = (uint32_t)h;
+    ext.width = (u32)w;
+    ext.height = (u32)h;
   }
   if (ext.width == 0 || ext.height == 0)
     return false; // minimised; try again later
 
-  uint32_t imgCount = caps.minImageCount + 1;
+  u32 imgCount = caps.minImageCount + 1;
   if (caps.maxImageCount && imgCount > caps.maxImageCount)
     imgCount = caps.maxImageCount;
 
@@ -350,7 +351,7 @@ bool createSwapchain() {
   // DELTA_GPU_VSYNC=0 forces IMMEDIATE (uncapped, for benchmarking); =1 forces
   // FIFO.
   {
-    uint32_t npm = 0;
+    u32 npm = 0;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g.phys, g.surface, &npm, nullptr);
     std::vector<VkPresentModeKHR> pms(npm);
     vkGetPhysicalDeviceSurfacePresentModesKHR(g.phys, g.surface, &npm,
@@ -403,7 +404,7 @@ bool createSwapchain() {
     return false;
   }
 
-  uint32_t n = 0;
+  u32 n = 0;
   vkGetSwapchainImagesKHR(g.device, newSwap, &n, nullptr);
   std::vector<VkImage> newImages(n);
   vkGetSwapchainImagesKHR(g.device, newSwap, &n, newImages.data());
@@ -449,7 +450,7 @@ void destroyFrameResources(FrameSlot &slot) {
   slot.frameMem = VK_NULL_HANDLE;
 }
 
-bool createFrameResources(FrameSlot &slot, uint32_t w, uint32_t h,
+bool createFrameResources(FrameSlot &slot, u32 w, u32 h,
                           VkFormat fmt) {
   VkDeviceSize size = (VkDeviceSize)w * h * 4;
   VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -491,7 +492,7 @@ bool createFrameResources(FrameSlot &slot, uint32_t w, uint32_t h,
   return true;
 }
 
-bool ensureFrameResources(uint32_t w, uint32_t h, VkFormat fmt) {
+bool ensureFrameResources(u32 w, u32 h, VkFormat fmt) {
   bool ready = true;
   for (const FrameSlot &slot : g.slots)
     ready &= slot.staging != VK_NULL_HANDLE && slot.frameImg != VK_NULL_HANDLE;
@@ -511,7 +512,7 @@ bool ensureFrameResources(uint32_t w, uint32_t h, VkFormat fmt) {
 
 } // namespace
 
-bool init(const char *title, uint32_t width, uint32_t height) {
+bool init(const char *title, u32 width, u32 height) {
   if (available())
     return true; // already up; init is idempotent
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -545,7 +546,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
 #endif
 
   // Instance: SDL-required extensions + optional validation.
-  uint32_t nExt = 0;
+  u32 nExt = 0;
   const char *const *sdlExt = SDL_Vulkan_GetInstanceExtensions(&nExt);
   std::vector<const char *> exts(sdlExt, sdlExt + nExt);
 
@@ -555,7 +556,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
 
   std::vector<const char *> layers;
   if (kVkValidate) {
-    uint32_t nl = 0;
+    u32 nl = 0;
     vkEnumerateInstanceLayerProperties(&nl, nullptr);
     std::vector<VkLayerProperties> lp(nl);
     vkEnumerateInstanceLayerProperties(&nl, lp.data());
@@ -566,9 +567,9 @@ bool init(const char *title, uint32_t width, uint32_t height) {
 
   VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
   ici.pApplicationInfo = &app;
-  ici.enabledExtensionCount = (uint32_t)exts.size();
+  ici.enabledExtensionCount = (u32)exts.size();
   ici.ppEnabledExtensionNames = exts.data();
-  ici.enabledLayerCount = (uint32_t)layers.size();
+  ici.enabledLayerCount = (u32)layers.size();
   ici.ppEnabledLayerNames = layers.data();
   VK_CHECK(vkCreateInstance(&ici, nullptr, &g.instance));
 
@@ -578,7 +579,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   }
 
   // Physical device + a queue family that does graphics AND present.
-  uint32_t nphys = 0;
+  u32 nphys = 0;
   vkEnumeratePhysicalDevices(g.instance, &nphys, nullptr);
   if (!nphys) {
     BASE_LOGI("gfx", "no Vulkan physical devices");
@@ -593,12 +594,12 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   bool found = false;
   int best = -1;
   for (auto pd : phs) {
-    uint32_t nq = 0;
+    u32 nq = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, nullptr);
     std::vector<VkQueueFamilyProperties> qf(nq);
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, qf.data());
-    uint32_t fam = UINT32_MAX;
-    for (uint32_t i = 0; i < nq; i++) {
+    u32 fam = UINT32_MAX;
+    for (u32 i = 0; i < nq; i++) {
       VkBool32 present = VK_FALSE;
       vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, g.surface, &present);
       if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
@@ -654,7 +655,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   qci.pQueuePriorities = &prio;
   std::vector<const char *> devExts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
   { // VK_EXT_memory_budget (optional): powers the overlay VRAM gauge.
-    uint32_t ne = 0;
+    u32 ne = 0;
     vkEnumerateDeviceExtensionProperties(g.phys, nullptr, &ne, nullptr);
     std::vector<VkExtensionProperties> ext(ne);
     vkEnumerateDeviceExtensionProperties(g.phys, nullptr, &ne, ext.data());
@@ -667,7 +668,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   dci.queueCreateInfoCount = 1;
   dci.pQueueCreateInfos = &qci;
-  dci.enabledExtensionCount = (uint32_t)devExts.size();
+  dci.enabledExtensionCount = (u32)devExts.size();
   dci.ppEnabledExtensionNames = devExts.data();
   VK_CHECK(vkCreateDevice(g.phys, &dci, nullptr, &g.device));
   vkGetDeviceQueue(g.device, g.queueFamily, 0, &g.queue);
@@ -688,7 +689,7 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
   VkFenceCreateInfo acquireFi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  for (uint32_t i = 0; i < kFrameSlotCount; i++) {
+  for (u32 i = 0; i < kFrameSlotCount; i++) {
     g.slots[i].cmd = commands[i];
     VK_CHECK(vkCreateSemaphore(g.device, &si, nullptr, &g.slots[i].acquireSem));
     VK_CHECK(
@@ -699,14 +700,14 @@ bool init(const char *title, uint32_t width, uint32_t height) {
   if (!createSwapchain())
     return false;
   BASE_LOGI("gfx", "swapchain {}x{}, {} images", g.swapExtent.width,
-            g.swapExtent.height, (uint32_t)g.swapImages.size());
+            g.swapExtent.height, (u32)g.swapImages.size());
   overlayVkInit(g.phys, g.device, g.queue, g.queueFamily, g.cmdPool,
                 g.swapFormat);
   overlayVkSetSwapchain(g.swapImages, g.swapExtent, g.swapFormat);
   return true;
 }
 
-void queryVram(uint64_t &used, uint64_t &total) {
+void queryVram(u64 &used, u64 &total) {
   used = total = 0;
   // Callers outside the present path (the GPU perf overlay) can ask before the
   // window exists, or in a headless run where it never will.
@@ -720,7 +721,7 @@ void queryVram(uint64_t &used, uint64_t &total) {
     mp2.pNext = &budget;
   vkGetPhysicalDeviceMemoryProperties2(g.phys, &mp2);
   const VkPhysicalDeviceMemoryProperties &mp = mp2.memoryProperties;
-  for (uint32_t i = 0; i < mp.memoryHeapCount; i++)
+  for (u32 i = 0; i < mp.memoryHeapCount; i++)
     if (mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
       total += g.hasMemBudget ? budget.heapBudget[i] : mp.memoryHeaps[i].size;
       if (g.hasMemBudget)
@@ -728,7 +729,7 @@ void queryVram(uint64_t &used, uint64_t &total) {
     }
 }
 
-void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
+void present(const void *pixels, u32 w, u32 h, u32 srcPitch,
              PixelFormat fmt) {
   if (!g_canPresent.load(std::memory_order_acquire) || !g.device || !pixels ||
       !w || !h)
@@ -749,12 +750,12 @@ void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
     return;
 
   // Upload rows into the staging buffer (tightly packed w*4).
-  auto *dst = static_cast<uint8_t *>(slot.stagingMap);
-  auto *src = static_cast<const uint8_t *>(pixels);
-  for (uint32_t y = 0; y < h; y++)
+  auto *dst = static_cast<u8 *>(slot.stagingMap);
+  auto *src = static_cast<const u8 *>(pixels);
+  for (u32 y = 0; y < h; y++)
     std::memcpy(dst + (size_t)y * w * 4, src + (size_t)y * srcPitch, w * 4);
 
-  uint32_t idx = 0;
+  u32 idx = 0;
   VkResult result = vkResetFences(g.device, 1, &slot.acquireFence);
   if (result != VK_SUCCESS) {
     stopPresenting("vkResetFences(acquire)", result);
@@ -780,7 +781,7 @@ void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
   if (!waitForPresentFence(slot.acquireFence, "vkWaitForFences(acquire)"))
     return;
 
-  uint64_t vramUsed = 0, vramTotal = 0;
+  u64 vramUsed = 0, vramTotal = 0;
   queryVram(vramUsed, vramTotal);
   overlayBuildFrame(g.swapExtent.width, g.swapExtent.height, vramUsed,
                     vramTotal);
@@ -821,10 +822,10 @@ void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
 
   VkImageBlit blit{};
   blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+  blit.srcOffsets[1] = {(i32)w, (i32)h, 1};
   blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.dstOffsets[1] = {(int32_t)g.swapExtent.width,
-                        (int32_t)g.swapExtent.height, 1};
+  blit.dstOffsets[1] = {(i32)g.swapExtent.width,
+                        (i32)g.swapExtent.height, 1};
   vkCmdBlitImage(slot.cmd, slot.frameImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                  g.swapImages[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                  &blit, VK_FILTER_LINEAR);
@@ -882,7 +883,7 @@ void setTitle(const char *title) {
     SDL_SetWindowTitle(g.window, g_title.c_str());
 }
 
-void setIcon(const uint8_t *png, size_t size) {
+void setIcon(const u8 *png, size_t size) {
 #if defined(__linux__)
   if (size > kMaxIconSize)
     return;
@@ -907,7 +908,7 @@ void requestPresentStop() {
 // Idempotent bring-up: create the window/swapchain on the first call, then just
 // report availability. Safe to call every frame from the presenting thread;
 // after a failed attempt it stops retrying so a no-display run doesn't spam.
-bool ensure(const char *title, uint32_t width, uint32_t height) {
+bool ensure(const char *title, u32 width, u32 height) {
   if (available())
     return true;
   if (!g_canPresent.load(std::memory_order_acquire))
@@ -1011,13 +1012,13 @@ bool pollKeyboardPad(PadKeys &out) {
     int lx = axis(SDL_GAMEPAD_AXIS_LEFTX), ly = axis(SDL_GAMEPAD_AXIS_LEFTY);
     int rx = axis(SDL_GAMEPAD_AXIS_RIGHTX), ry = axis(SDL_GAMEPAD_AXIS_RIGHTY);
     if (std::abs(lx - 128) > 12)
-      out.lx = (uint8_t)lx;
+      out.lx = (u8)lx;
     if (std::abs(ly - 128) > 12)
-      out.ly = (uint8_t)ly;
+      out.ly = (u8)ly;
     if (std::abs(rx - 128) > 12)
-      out.rx = (uint8_t)rx;
+      out.rx = (u8)rx;
     if (std::abs(ry - 128) > 12)
-      out.ry = (uint8_t)ry;
+      out.ry = (u8)ry;
     // Triggers -> L2/R2 (and the analog buttons via the bit, see fillPadState).
     if (SDL_GetGamepadAxis(g.gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 8000)
       out.l2 = true;
@@ -1027,14 +1028,14 @@ bool pollKeyboardPad(PadKeys &out) {
   return true;
 }
 
-void setRumble(uint8_t largeMotor, uint8_t smallMotor) {
+void setRumble(u8 largeMotor, u8 smallMotor) {
   if (!g.gamepad)
     return;
   // DS4 motors are 0..255; SDL rumble is 0..65535. Large = low-freq, small =
   // high-freq. Duration 0 means "until the next call"; the game re-issues
   // continuously.
-  SDL_RumbleGamepad(g.gamepad, (uint16_t)(largeMotor * 257),
-                    (uint16_t)(smallMotor * 257), 0);
+  SDL_RumbleGamepad(g.gamepad, (u16)(largeMotor * 257),
+                    (u16)(smallMotor * 257), 0);
 }
 
 void shutdown() {

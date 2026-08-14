@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 
 #include "wait_probe.h"
@@ -32,7 +33,7 @@ semaphore::semaphore(proc *p, const char *nm, int init, int max)
   }
 }
 
-int semaphore::wait(int need, uint32_t *timeoutUs) {
+int semaphore::wait(int need, u32 *timeoutUs) {
   if (need <= 0)
     return -SysError::eINVAL;
   std::unique_lock<std::mutex> lk(m);
@@ -107,7 +108,7 @@ static semaphore *fromId(int id) {
   return static_cast<semaphore *>(obj);
 }
 
-int PS4ABI sys_osem_create(const char *name, uint32_t attr, int init, int max) {
+int PS4ABI sys_osem_create(const char *name, u32 attr, int init, int max) {
   auto *s = new semaphore(proc::getActive(), name, init, max);
   BASE_LOGI("osem", "create '{}' attr={:#x} init={} max={} -> id={}",
             name ? name : "", attr, init, max, s->handle());
@@ -144,7 +145,7 @@ int PS4ABI sys_osem_delete(int id) {
 
 int PS4ABI sys_osem_close(int id) { return sys_osem_delete(id); }
 
-int PS4ABI sys_osem_wait(int id, int need, uint32_t *timeoutUs) {
+int PS4ABI sys_osem_wait(int id, int need, u32 *timeoutUs) {
   WaitProbe _wp("osem_wait", (long)id, (long)need);
   auto *s = fromId(id);
   if (!s)

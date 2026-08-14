@@ -8,6 +8,7 @@
  */
 
 #include <algorithm>
+#include "base/arch.h"
 #include <cstdlib>
 #include <cstring>
 
@@ -28,7 +29,7 @@ vmManager::~vmManager() {
 
 bool vmManager::init() {
   /*reserve address space for the user stack*/
-  pinfo.userStack = static_cast<uint8_t *>(
+  pinfo.userStack = static_cast<u8 *>(
       utl::allocMem(nullptr, pinfo.userStackSize, utl::pageProtection::priv,
                     utl::allocationType::reserve));
 
@@ -40,11 +41,11 @@ bool vmManager::init() {
 // guest keys real bookkeeping (SotC's streaming-heap trackers) off the exact
 // [start, end) sceKernelVirtualQuery reports, so the newest mapping of a range
 // must win and stale overlaps must not shadow it.
-void vmManager::punchHoleLocked(uint8_t *p, size_t s) {
-  uint8_t *end = p + s;
+void vmManager::punchHoleLocked(u8 *p, size_t s) {
+  u8 *end = p + s;
   for (size_t i = 0; i < rtPages.size();) {
     pageInfo &e = rtPages[i];
-    uint8_t *eEnd = e.ptr + e.size;
+    u8 *eEnd = e.ptr + e.size;
     if (eEnd <= p || e.ptr >= end) {  // disjoint
       ++i;
       continue;
@@ -75,15 +76,15 @@ void vmManager::punchHoleLocked(uint8_t *p, size_t s) {
   }
 }
 
-void vmManager::add(uint8_t *ptr, size_t size, mprot prot, uint32_t sceProt,
+void vmManager::add(u8 *ptr, size_t size, mprot prot, u32 sceProt,
                     bool reserved) {
   std::lock_guard lock(vmlock);
   punchHoleLocked(ptr, size);
   rtPages.emplace_back(ptr, size, prot, sceProt, reserved);
 }
 
-void vmManager::addDirect(uint8_t *ptr, size_t size, mprot prot,
-                          uint32_t sceProt, uint64_t physOffset) {
+void vmManager::addDirect(u8 *ptr, size_t size, mprot prot,
+                          u32 sceProt, u64 physOffset) {
   std::lock_guard lock(vmlock);
   punchHoleLocked(ptr, size);
   rtPages.emplace_back(ptr, size, prot, sceProt, false);
@@ -91,12 +92,12 @@ void vmManager::addDirect(uint8_t *ptr, size_t size, mprot prot,
   rtPages.back().hasPhys = true;
 }
 
-void vmManager::remove(uint8_t *ptr, size_t size) {
+void vmManager::remove(u8 *ptr, size_t size) {
   std::lock_guard lock(vmlock);
   punchHoleLocked(ptr, size);
 }
 
-pageInfo *vmManager::get(uint8_t *ptr) {
+pageInfo *vmManager::get(u8 *ptr) {
   std::lock_guard lock(vmlock);
   // The kernel resolves the region *containing* an address, not just one that
   // starts there: sceKernelVirtualQuery / QueryMemoryProtection / mname all pass
@@ -111,9 +112,9 @@ pageInfo *vmManager::get(uint8_t *ptr) {
   return nullptr;
 }
 
-bool vmManager::overlaps(uint8_t *ptr, size_t size) const {
+bool vmManager::overlaps(u8 *ptr, size_t size) const {
   std::lock_guard lock(vmlock);
-  uint8_t *end = ptr + size;
+  u8 *end = ptr + size;
   for (const auto &page : rtPages) {
     if (ptr < page.ptr + page.size && page.ptr < end)
       return true;
@@ -121,10 +122,10 @@ bool vmManager::overlaps(uint8_t *ptr, size_t size) const {
   return false;
 }
 
-void vmManager::protectRange(uint8_t *ptr, size_t size, mprot prot,
-                             uint32_t sceProt) {
+void vmManager::protectRange(u8 *ptr, size_t size, mprot prot,
+                             u32 sceProt) {
   std::lock_guard lock(vmlock);
-  uint8_t *end = ptr + size;
+  u8 *end = ptr + size;
   for (auto &page : rtPages)
     if (ptr < page.ptr + page.size && page.ptr < end) {
       page.prot = prot;
@@ -132,9 +133,9 @@ void vmManager::protectRange(uint8_t *ptr, size_t size, mprot prot,
     }
 }
 
-void vmManager::setRangeName(uint8_t *ptr, size_t size, const char *name) {
+void vmManager::setRangeName(u8 *ptr, size_t size, const char *name) {
   std::lock_guard lock(vmlock);
-  uint8_t *end = ptr + size;
+  u8 *end = ptr + size;
   // The kernel (vm_map_set_name) allocates the name storage per entry; mirror
   // that with a strdup'd copy so the field outlives the caller's buffer. The
   // VMA never frees entry names, so repeated naming leaks a small string each
@@ -151,11 +152,11 @@ void vmManager::setRangeName(uint8_t *ptr, size_t size, const char *name) {
       page.name = copy;
 }
 
-void vmManager::forEachGpuAperturePage(void (*fn)(void *, uint8_t *, size_t),
+void vmManager::forEachGpuAperturePage(void (*fn)(void *, u8 *, size_t),
                                        void *ctx) const {
   std::lock_guard lock(vmlock);
   for (const auto &page : rtPages) {
-    auto a = reinterpret_cast<uint64_t>(page.ptr);
+    auto a = reinterpret_cast<u64>(page.ptr);
     // Same range as gpu/ps5's GpuAddr(): everything allocLowGuest() can hand
     // out, from the lowest fixed-mapped pool slot to the 2^40 user ceiling.
     if (a >= 0x1000000000ull && a < 0x10000000000ull)
@@ -163,20 +164,20 @@ void vmManager::forEachGpuAperturePage(void (*fn)(void *, uint8_t *, size_t),
   }
 }
 
-uint8_t *vmManager::mapMemory(uint8_t *preference, size_t size,
+u8 *vmManager::mapMemory(u8 *preference, size_t size,
                               utl::pageProtection prot) {
   const auto allocType = utl::allocationType::reservecommit;
 
   void *ptr =
       utl::allocMem(static_cast<void *>(preference), size, prot, allocType);
   if (ptr) {
-    return static_cast<uint8_t *>(ptr);
+    return static_cast<u8 *>(ptr);
   }
 
   return nullptr;
 }
 
-void vmManager::unmapRtMemory(uint8_t *ptr) {
+void vmManager::unmapRtMemory(u8 *ptr) {
   std::lock_guard lock(vmlock);
   auto iter =
       std::find_if(rtPages.begin(), rtPages.end(),

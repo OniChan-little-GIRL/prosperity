@@ -1,4 +1,5 @@
 #pragma once
+#include "base/arch.h"
 
 /*
  * PS4Delta : PS4 emulation and research project
@@ -36,7 +37,7 @@ void guestStackTraceFrom(uintptr_t base, const char *tag, int maxFrames,
 // Enable the DELTA_ALLOC_TRACE allocator-entry tracer: addr's first byte must be
 // `push rbp` (0x55); the caller plants an int3 there and this records addr so the
 // fatal handler logs each allocation (size in rsi) >= minSize and resumes.
-void setAllocTrace(uintptr_t addr, uint64_t minSize);
+void setAllocTrace(uintptr_t addr, u64 minSize);
 
 // DELTA_HEAP_PROF: int3 at a guest allocator entry (push rbp) whose size arg is
 // in rdi (operator new / malloc). Each hit aggregates bytes+count keyed by the
@@ -52,7 +53,7 @@ void setHeapProf(uintptr_t addr, bool countOnly = false);
 // route through a thread-local stack of scopes and fall back to the process
 // heap when it is empty; only the scoped memory comes back on a scope reset,
 // so "this thread had no scope" is a leak a caller-keyed profile cannot show.
-void setHeapProfScope(uintptr_t tlsSlotGlobal, uint64_t depthOffset);
+void setHeapProfScope(uintptr_t tlsSlotGlobal, u64 depthOffset);
 
 // DELTA_CNT_TRACE: like setAllocTrace but logs the archive entry-count [rdi+0x30]
 // and the inline name [rdi+0x5c] at the hooked entry (push rbp -> int3).
@@ -67,7 +68,7 @@ void setHdrTrace(uintptr_t addr);
 // offset to 0; markManifestFd flags which fds are .manifest.bin (set in sys_open).
 void setRdoffFix(uintptr_t addr);
 void setSkipFn(uintptr_t addr);
-void markManifestFd(uint32_t fd, bool v);
+void markManifestFd(u32 fd, bool v);
 
 // DELTA_PS5_GLYPHGUARD: recover a null-object deref in the first-frame UI/text
 // renderer (fonts unbound). On a SIGSEGV at `addr`, zero the destination register
@@ -147,7 +148,7 @@ void startMemDump(uintptr_t addr, size_t bytes, unsigned afterMs,
 // intermediate pointer and the qword the last one lands on. Answers "which
 // address does this function poll/store", which a backtrace cannot: by the time
 // a wedged thread is inside the emulator its callee-saved registers are gone.
-void setFnArgs(uintptr_t addr, const char *label, const uint64_t *offsets,
+void setFnArgs(uintptr_t addr, const char *label, const u64 *offsets,
                int noffsets);
 
 // Give the calling thread a dedicated signal-handler stack (SA_ONSTACK). The

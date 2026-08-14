@@ -9,6 +9,7 @@
 // address to every live image whose footprint overlaps it.
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 #include <unordered_map>
@@ -36,13 +37,13 @@ struct RTarget {
   ImageAllocation feedback_allocation;
   VkImageView feedback_view = VK_NULL_HANDLE;
   VkDescriptorSet feedback_set = VK_NULL_HANDLE;
-  std::unordered_map<uint32_t, VkImageView> sampled_views;
+  std::unordered_map<u32, VkImageView> sampled_views;
   // Views of the same image in a different (size-compatible) format, keyed by
   // swizzle | format<<16. See SampledViewAs.
-  std::unordered_map<uint32_t, VkImageView> alias_views;
-  std::unordered_map<uint32_t, VkImageView> feedback_sampled_views;
+  std::unordered_map<u32, VkImageView> alias_views;
+  std::unordered_map<u32, VkImageView> feedback_sampled_views;
   VkImageLayout feedback_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  uint32_t w = 0, h = 0;
+  u32 w = 0, h = 0;
   VkFormat fmt =
       VK_FORMAT_B8G8R8A8_UNORM;  // identity: addr alone doesn't pin format
   bool is_depth = false;         // depth/stencil attachment (MRT/depth task)
@@ -60,7 +61,7 @@ struct RTarget {
   // submitted state, never `layout`.
   VkImageLayout submitted_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   bool used_this_frame = false;
-  uint32_t draws = 0;      // draws into this RT this frame
+  u32 draws = 0;      // draws into this RT this frame
   int last_frame = -1000;  // frame number this RT was last rendered into
   bool clear_pending =
       false;  // a fullscreen black clear was requested; applied lazily
@@ -77,23 +78,23 @@ struct RTarget {
   // target. Render-target guest bases move between runs, so a poisoned target
   // can only be traced back to its producer within the run that observed it;
   // the reporting path (DELTA_GPU_RTSTAT) prints these.
-  uint64_t last_vs = 0, last_ps = 0;
+  u64 last_vs = 0, last_ps = 0;
   // Bit i: cbuffer binding i of that draw resolved to readable guest memory.
   // Bindings that do not resolve are bound to a zero window, which is what
   // turns a tonemap's constants into 0 and its output into NaN.
-  uint32_t last_cbuf_mask = 0;
+  u32 last_cbuf_mask = 0;
   // Bit i: set-2 raw-buffer binding i of that draw resolved to readable guest
   // memory and was staged. A shader that indexes a buffer by hand reads zeros
   // for every bit that is clear, which is indistinguishable in the output from
   // a buffer that is genuinely zero -- so it has to be reported.
-  uint32_t last_rawbuf_mask = 0;
+  u32 last_rawbuf_mask = 0;
 };
 
 // The live target at each guest address. An address the guest renders to at
 // several geometries owns one image per geometry, of which this holds the one
 // the last draw rendered into; the others are parked in vk_render_target.cc, so
 // resolving a target by address alone keeps working.
-extern std::unordered_map<uint64_t, RTarget>& g_rts;
+extern std::unordered_map<u64, RTarget>& g_rts;
 
 // Depth/stencil attachment, keyed by its guest DB_Z_WRITE_BASE. A combined host
 // image preserves the separate PS4 Z and stencil planes for raster and compute.
@@ -109,15 +110,15 @@ struct DepthTarget {
   VkImageView stencil_view = VK_NULL_HANDLE;
   VkImageView attachment_view = VK_NULL_HANDLE;
   VkDescriptorSet set = VK_NULL_HANDLE;
-  std::unordered_map<uint32_t, VkImageView> sampled_views;
-  uint32_t w = 0, h = 0;
+  std::unordered_map<u32, VkImageView> sampled_views;
+  u32 w = 0, h = 0;
   // DB_DEPTH_SIZE's padded geometry: how much guest memory this Z surface
   // actually owns, which is not the image size when the guest binds a
   // half-resolution depth buffer to a full-resolution pass.
-  uint32_t guest_w = 0, guest_h = 0;
+  u32 guest_w = 0, guest_h = 0;
   VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkImageLayout stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-  uint64_t stencil_base = 0;
+  u64 stencil_base = 0;
   // Rendered into since the last barrier that made it readable. A later draw
   // sampling this target needs an execution/memory dependency even when the
   // layout already matches, or it reads what was there BEFORE those writes --
@@ -133,13 +134,13 @@ struct DepthTarget {
   float clear_value = 1.0f;
 };
 
-extern std::unordered_map<uint64_t, DepthTarget>& g_depths;
+extern std::unordered_map<u64, DepthTarget>& g_depths;
 // Depth images of a base rendered at more than one geometry; only the one in
 // g_depths answers to the address (see ActivateDepthVariant).
-extern std::unordered_map<uint64_t, std::vector<DepthTarget>> g_depth_variants;
+extern std::unordered_map<u64, std::vector<DepthTarget>> g_depth_variants;
 // Colour images of a base rendered at more than one geometry (see
 // ActivateRtVariant); only the one in g_rts answers to the address.
-extern std::unordered_map<uint64_t, std::vector<RTarget>> g_rt_variants;
+extern std::unordered_map<u64, std::vector<RTarget>> g_rt_variants;
 
 // Address -> image page table (the resource model's core). Maps a 64 KiB guest
 // page to the RT bases whose memory footprint covers it, so a sampled address
@@ -147,59 +148,59 @@ extern std::unordered_map<uint64_t, std::vector<RTarget>> g_rt_variants;
 // whole cache. A page can be touched by several overlapping/aliased RTs
 // (double-buffer pairs, a pool of cycled scene buffers), so each page holds a
 // list.
-constexpr uint32_t kRtPageShift = 16;  // 64 KiB
-extern std::unordered_map<uint64_t, std::vector<uint64_t>>& g_rt_pages;
+constexpr u32 kRtPageShift = 16;  // 64 KiB
+extern std::unordered_map<u64, std::vector<u64>>& g_rt_pages;
 
-uint64_t RtByteSizeWH(uint32_t w, uint32_t h, VkFormat fmt);
-uint64_t RtByteSize(const RTarget& rt);
+u64 RtByteSizeWH(u32 w, u32 h, VkFormat fmt);
+u64 RtByteSize(const RTarget& rt);
 
-RTarget* GetRT(uint64_t base, uint32_t w, uint32_t h, VkFormat fmt);
-DepthTarget* GetDepthRT(uint64_t base,
-                        uint32_t w,
-                        uint32_t h,
-                        uint64_t stencil_base = 0);
+RTarget* GetRT(u64 base, u32 w, u32 h, VkFormat fmt);
+DepthTarget* GetDepthRT(u64 base,
+                        u32 w,
+                        u32 h,
+                        u64 stencil_base = 0);
 
 // Sampling an image while it is also a colour attachment needs Vulkan's
 // attachment-feedback-loop extension; copy it instead and sample the copy.
 VkDescriptorSet SnapshotRT(RTarget& rt);
 
-VkImageView SampledView(RTarget& rt, uint32_t swizzle, bool feedback = false);
+VkImageView SampledView(RTarget& rt, u32 swizzle, bool feedback = false);
 // Sampled view reinterpreted into `want` (same texel size) so the view's
 // numeric type matches the shader's OpTypeImage sampled type.
-VkImageView SampledViewAs(RTarget& rt, uint32_t swizzle, VkFormat want);
-VkImageView SampledView(DepthTarget& depth, uint32_t swizzle);
+VkImageView SampledViewAs(RTarget& rt, u32 swizzle, VkFormat want);
+VkImageView SampledView(DepthTarget& depth, u32 swizzle);
 
 // Resolve a sampled guest address to the live image backing it (0 = none).
 // A sample names a render target by address alone, but one base can hold
 // several geometries (see ActivateRtVariant). Make the variant matching the
 // sampled geometry the live one when the live target cannot serve the sample.
 // Returns true if a usable target is live at `base` afterwards.
-bool ActivateSampledRtVariant(uint64_t base, uint32_t w, uint32_t h);
-bool ActivateSampledDepthVariant(uint64_t base, uint32_t w, uint32_t h);
+bool ActivateSampledRtVariant(u64 base, u32 w, u32 h);
+bool ActivateSampledDepthVariant(u64 base, u32 w, u32 h);
 
-uint64_t ResolveSampledRT(uint64_t addr, uint32_t w, uint32_t h);
-uint64_t ResolveSampledDepth(uint64_t addr, uint32_t w, uint32_t h);
+u64 ResolveSampledRT(u64 addr, u32 w, u32 h);
+u64 ResolveSampledDepth(u64 addr, u32 w, u32 h);
 // The depth target whose STENCIL plane lives at `addr` (DB_STENCIL_WRITE_BASE),
 // or 0. Keyed exactly, because the stencil plane is a separate guest surface.
-uint64_t ResolveSampledStencil(uint64_t addr);
+u64 ResolveSampledStencil(u64 addr);
 // Sampled view of a depth target's stencil plane (S8_UINT), created on demand.
 VkImageView StencilSampledView(DepthTarget& depth);
 
 // Preserve an already-rendered depth target for a later compute read before a
 // same-frame clear destroys it. No-op when no compute range aliases the target.
-bool PreserveCsDepthBeforeClear(uint64_t base);
+bool PreserveCsDepthBeforeClear(u64 base);
 
 // The open dynamic-rendering region, and which targets the frame has touched.
 struct RenderRegion {
-  uint64_t cur_rt = 0;        // primary RT (MRT0) of the open region (0 = none)
-  uint64_t cur_mrt[8] = {0};  // all colour targets bound in the open region
-  uint32_t cur_mrt_count = 0;
-  uint64_t cur_depth = 0;  // depth target bound in the open region (0 = none)
-  uint64_t cur_stencil = 0;
-  uint64_t last_rt = 0;    // last RT rendered to (present fallback)
-  uint64_t first_rt = 0;   // first colour RT created (diagnostic selector)
-  uint64_t busiest_rt = 0;
-  uint32_t busiest_rt_draws = 0;
+  u64 cur_rt = 0;        // primary RT (MRT0) of the open region (0 = none)
+  u64 cur_mrt[8] = {0};  // all colour targets bound in the open region
+  u32 cur_mrt_count = 0;
+  u64 cur_depth = 0;  // depth target bound in the open region (0 = none)
+  u64 cur_stencil = 0;
+  u64 last_rt = 0;    // last RT rendered to (present fallback)
+  u64 first_rt = 0;   // first colour RT created (diagnostic selector)
+  u64 busiest_rt = 0;
+  u32 busiest_rt_draws = 0;
   bool open = false;
   // The open region binds depth read-only because a draw in it samples the same
   // image. Tracked so a later draw that needs to write depth restarts.
@@ -208,26 +209,26 @@ struct RenderRegion {
 
 extern RenderRegion& g_region;
 
-bool BeginRegion(const uint64_t* mrt_base,
-                 const uint32_t* mrt_info,
-                 uint32_t mrt_count,
-                 uint32_t w,
-                  uint32_t h,
-                  uint64_t depth_base = 0,
+bool BeginRegion(const u64* mrt_base,
+                 const u32* mrt_info,
+                 u32 mrt_count,
+                 u32 w,
+                  u32 h,
+                  u64 depth_base = 0,
                   float depth_clear = 1.0f,
-                  uint64_t stencil_base = 0,
-                  uint8_t stencil_clear = 0,
+                  u64 stencil_base = 0,
+                  u8 stencil_clear = 0,
                   bool depth_read_only = false,
-                  uint32_t depth_w = 0,
-                  uint32_t depth_h = 0);
+                  u32 depth_w = 0,
+                  u32 depth_h = 0);
 
 // The Z surface's own geometry when DB_DEPTH_SIZE gave one, else the colour
 // target's. Sizing a depth image from the colour pass is wrong whenever the
 // two differ, and the error shows up as a footprint that swallows neighbours.
-inline uint32_t DepthW(const rhi::DrawInfo& d) {
+inline u32 DepthW(const rhi::DrawInfo& d) {
   return d.depth_w ? d.depth_w : d.rt_w;
 }
-inline uint32_t DepthH(const rhi::DrawInfo& d) {
+inline u32 DepthH(const rhi::DrawInfo& d) {
   return d.depth_h ? d.depth_h : d.rt_h;
 }
 void EndRegion();

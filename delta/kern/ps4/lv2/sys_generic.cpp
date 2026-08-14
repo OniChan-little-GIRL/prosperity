@@ -3,6 +3,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstring>
 #include <cstdlib>
@@ -15,7 +16,7 @@ DELTA_OPTION(bool, kIoctlTrace, "DELTA_IOCTL_TRACE", false);
 }  // namespace
 
 namespace krnl {
-int PS4ABI sys_ioctl(uint32_t fd, uint32_t cmd, void *data) {
+int PS4ABI sys_ioctl(u32 fd, u32 cmd, void *data) {
   auto *proc = proc::getActive();
   if (!proc)
     return -1;
@@ -32,7 +33,7 @@ int PS4ABI sys_ioctl(uint32_t fd, uint32_t cmd, void *data) {
   if (kIoctlTrace)
     BASE_LOGI("ioctl", "soft-ok: fd={} cmd={:#x}", fd, cmd);
   if (data) {
-    uint32_t sz = (cmd >> 16) & 0x1fff;
+    u32 sz = (cmd >> 16) & 0x1fff;
     if (cmd & 0x40000000u) // IOC_OUT
       std::memset(data, 0, sz);
   }

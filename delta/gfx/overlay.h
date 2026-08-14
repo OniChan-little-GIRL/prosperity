@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gfx {
 
@@ -21,8 +22,8 @@ void overlaySetPerf(float fps, float gpuMs, float frameMs);
 
 // Build the overlay ImDrawData at display size (w by h). vram in bytes (0 =
 // unknown). Call once per frame before overlayVkRender.
-void overlayBuildFrame(uint32_t w, uint32_t h, uint64_t vramUsed,
-                       uint64_t vramTotal);
+void overlayBuildFrame(u32 w, u32 h, u64 vramUsed,
+                       u64 vramTotal);
 
 // Show/hide the overlay (bound to F1 by the window event pump).
 void overlayToggle();

@@ -2,6 +2,7 @@
 // layer can be brought up on its own. Usage: modexec <main-module.sprx> [run]
 #define _GNU_SOURCE
 #include <cstdio>
+#include "base/arch.h"
 #include <cstring>
 
 #include <csignal>
@@ -68,10 +69,10 @@ static void crashHandler(int sig, siginfo_t* si, void* ucv) {
   // TCB = fs base; DTV = *(TCB+8); DTV[0]=generation, per-module block pointers
   // at DTV+0x10 + id*8 (see libkernel __tls_get_addr at 0x289c0).
   if (auto* proc = krnl::proc::getActive()) {
-    auto* tcb = reinterpret_cast<uint64_t*>(proc->getEnv().fsBase);
+    auto* tcb = reinterpret_cast<u64*>(proc->getEnv().fsBase);
     std::fprintf(stderr, "  --- TLS ---\n  tcb(fs)=%p\n", (void*)tcb);
     if (tcb) {
-      auto* dtv = reinterpret_cast<uint64_t*>(tcb[1]);
+      auto* dtv = reinterpret_cast<u64*>(tcb[1]);
       std::fprintf(stderr, "  dtv=%p", (void*)dtv);
       if (dtv) {
         std::fprintf(stderr, " gen=%llu count=%llu\n", (unsigned long long)dtv[0],
@@ -104,11 +105,11 @@ static void installCrashHandler() {
 // SCOUT: patch a guest function to `xor eax,eax; ret` (return 0). Used to step
 // over libkernel-internal validation that rejects our externally-loaded module
 // set, so we can see how much further the boot gets.
-static void forceReturn0(krnl::proc& proc, const char* mod, uint32_t off) {
+static void forceReturn0(krnl::proc& proc, const char* mod, u32 off) {
   auto m = proc.getModule(base::StringRef(mod));
   if (!m)
     return;
-  uint8_t* p = m->getInfo().base + off;
+  u8* p = m->getInfo().base + off;
   // mprotect needs a page-aligned base.
   auto page = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(p) & ~0xFFFull);
   utl::protectMem(page, 0x1000, utl::pageProtection::rwx);
@@ -132,13 +133,13 @@ static void patchTlsGetAddr(krnl::proc& proc) {
     std::printf("[modexec] __tls_get_addr export not found\n");
     return;
   }
-  auto* p = reinterpret_cast<uint8_t*>(addr);
+  auto* p = reinterpret_cast<u8*>(addr);
   auto page = reinterpret_cast<void*>(addr & ~0xFFFull);
   utl::protectMem(page, 0x2000, utl::pageProtection::rwx);
   p[0] = 0x48;  // movabs rax, imm64
   p[1] = 0xB8;
-  *reinterpret_cast<uint64_t*>(p + 2) =
-      reinterpret_cast<uint64_t>(&krnl::guest_tls_get_addr);
+  *reinterpret_cast<u64*>(p + 2) =
+      reinterpret_cast<u64>(&krnl::guest_tls_get_addr);
   p[10] = 0xFF;  // jmp rax
   p[11] = 0xE0;
   std::printf("[modexec] patched libkernel __tls_get_addr @%p -> host HLE\n", p);
@@ -196,11 +197,11 @@ int main(int argc, char** argv) {
   // libkernel's _start clears its size + "ORBI" magic check.
   auto& m0 = mods[0]->getInfo();
   if (!m0.procParam) {
-    static uint8_t procParam[0x50] = {};
-    *reinterpret_cast<uint64_t*>(procParam + 0x00) = sizeof(procParam);
-    *reinterpret_cast<uint32_t*>(procParam + 0x08) = 0x4942524F;  // "ORBI"
-    *reinterpret_cast<uint32_t*>(procParam + 0x0C) = 1;           // entry count (!= 0)
-    *reinterpret_cast<uint32_t*>(procParam + 0x10) = 0x11000000;  // sdk version
+    static u8 procParam[0x50] = {};
+    *reinterpret_cast<u64*>(procParam + 0x00) = sizeof(procParam);
+    *reinterpret_cast<u32*>(procParam + 0x08) = 0x4942524F;  // "ORBI"
+    *reinterpret_cast<u32*>(procParam + 0x0C) = 1;           // entry count (!= 0)
+    *reinterpret_cast<u32*>(procParam + 0x10) = 0x11000000;  // sdk version
     m0.procParam = procParam;
     m0.procParamSize = sizeof(procParam);
     std::printf("[modexec] (using synthetic proc param)\n");

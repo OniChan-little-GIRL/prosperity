@@ -7,37 +7,38 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 
-int PS4ABI sceGnmSubmitCommandBuffers(uint32_t count, void **dcbGpuAddrs,
-                                     uint32_t *dcbSizes, void **ccbGpuAddrs,
-                                     uint32_t *ccbSizes);
-int PS4ABI sceGnmSubmitCommandBuffersForWorkload(uint32_t workload, uint32_t count,
+int PS4ABI sceGnmSubmitCommandBuffers(u32 count, void **dcbGpuAddrs,
+                                     u32 *dcbSizes, void **ccbGpuAddrs,
+                                     u32 *ccbSizes);
+int PS4ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
                                                 void **dcbGpuAddrs,
-                                                uint32_t *dcbSizes,
+                                                u32 *dcbSizes,
                                                 void **ccbGpuAddrs,
-                                                uint32_t *ccbSizes);
-int PS4ABI sceGnmSubmitAndFlipCommandBuffers(uint32_t count, void **dcbGpuAddrs,
-                                            uint32_t *dcbSizes,
+                                                u32 *ccbSizes);
+int PS4ABI sceGnmSubmitAndFlipCommandBuffers(u32 count, void **dcbGpuAddrs,
+                                            u32 *dcbSizes,
                                             void **ccbGpuAddrs,
-                                            uint32_t *ccbSizes,
-                                            uint32_t videoOutHandle,
-                                            uint32_t displayBufferIndex,
-                                            uint32_t flipMode, int64_t flipArg);
+                                            u32 *ccbSizes,
+                                            u32 videoOutHandle,
+                                            u32 displayBufferIndex,
+                                            u32 flipMode, i64 flipArg);
 int PS4ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
-    uint32_t workload, uint32_t count, void **dcbGpuAddrs, uint32_t *dcbSizes,
-    void **ccbGpuAddrs, uint32_t *ccbSizes, uint32_t videoOutHandle,
-    uint32_t displayBufferIndex, uint32_t flipMode, int64_t flipArg);
+    u32 workload, u32 count, void **dcbGpuAddrs, u32 *dcbSizes,
+    void **ccbGpuAddrs, u32 *ccbSizes, u32 videoOutHandle,
+    u32 displayBufferIndex, u32 flipMode, i64 flipArg);
 int PS4ABI sceGnmSubmitDone();
 int PS4ABI sceGnmAreSubmitsAllowed();
-int PS4ABI sceGnmDingDong(uint32_t ringId, uint32_t offset);
-int PS4ABI sceGnmDingDongForWorkload(uint32_t workload, uint32_t ringId,
-                                    uint32_t offset);
+int PS4ABI sceGnmDingDong(u32 ringId, u32 offset);
+int PS4ABI sceGnmDingDongForWorkload(u32 workload, u32 ringId,
+                                    u32 offset);
 int PS4ABI sceGnmFlushGarlic();
-int PS4ABI sceGnmInsertWaitFlipDone(void *cmdBuffer, uint32_t size,
-                                   uint32_t videoOutHandle, uint32_t bufferIndex);
+int PS4ABI sceGnmInsertWaitFlipDone(void *cmdBuffer, u32 size,
+                                   u32 videoOutHandle, u32 bufferIndex);
 
 }  // extern "C"

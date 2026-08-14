@@ -19,6 +19,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "gpu/ps4/liverpool.h"
 #include "gpu/rhi/renderer.h"
@@ -29,7 +30,7 @@ namespace gpu::ps4 {
 // in x, y, z followed by the dispatch initiator.
 void DispatchCompute(rhi::Renderer& renderer,
                      const Regs& regs,
-                     const uint32_t* body,
-                     uint32_t count);
+                     const u32* body,
+                     u32 count);
 
 }  // namespace gpu::ps4

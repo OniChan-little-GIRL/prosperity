@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_memory.h"
+#include "base/arch.h"
 
 #include "gpu/gpu_check.h"
 #include "gpu/vulkan/vk_device.h"
@@ -15,7 +16,7 @@ bool ImageMemoryPool::AllocateFromBlock(Block& block,
                                         VkDeviceSize size,
                                         VkDeviceSize alignment,
                                         ImageAllocation& allocation) {
-  uint64_t offset = 0;
+  u64 offset = 0;
   if (!block.spans.Allocate(size, alignment, offset))
     return false;
   allocation = {block.memory, offset, size, block.memory_type, false};
@@ -41,9 +42,9 @@ bool ImageMemoryPool::Allocate(const DeviceState& device,
   vkGetPhysicalDeviceMemoryProperties(device.phys, &properties);
   GPU_BUGCHECK(memory.memoryTypeBits != 0,
                "image reports no allowed memory types");
-  uint32_t memory_type = 0;
+  u32 memory_type = 0;
   bool found_type = false;
-  for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
+  for (u32 i = 0; i < properties.memoryTypeCount; ++i)
     if ((memory.memoryTypeBits & (1u << i)) &&
         (properties.memoryTypes[i].propertyFlags &
          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
@@ -55,7 +56,7 @@ bool ImageMemoryPool::Allocate(const DeviceState& device,
   // allowed type beats the old silent default of index 0, which may not even
   // be in memoryTypeBits.
   if (!found_type)
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
+    for (u32 i = 0; i < properties.memoryTypeCount; ++i)
       if (memory.memoryTypeBits & (1u << i)) {
         memory_type = i;
         break;

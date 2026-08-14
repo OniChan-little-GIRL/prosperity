@@ -1,4 +1,5 @@
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -9,22 +10,22 @@
 namespace krnl {
 namespace {
 // md_ioctl commands (FreeBSD MDIOC*).
-constexpr uint32_t kMdAttach = 0xc1c06d00;
-constexpr uint32_t kMdDetach = 0xc1c06d01;
-constexpr uint32_t kMdQuery  = 0xc1c06d02;
-constexpr uint32_t kMdList   = 0xc1c06d03;
+constexpr u32 kMdAttach = 0xc1c06d00;
+constexpr u32 kMdDetach = 0xc1c06d01;
+constexpr u32 kMdQuery  = 0xc1c06d02;
+constexpr u32 kMdList   = 0xc1c06d03;
 } // namespace
 
 mdctlDevice::mdctlDevice(proc *p) : device(p) {}
 
-int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
-  auto *args = static_cast<uint8_t *>(data);
+i32 mdctlDevice::ioctl(u32 cmd, void *data) {
+  auto *args = static_cast<u8 *>(data);
   if (!args)
     return -SysError::eFAULT;
 
   // md_ioctl layout: version u32@0 (must be 0), unit u32@4, type u32@8,
   // file u64@16, mediasize u64@24, sectorsize u32@32, flags u32@36.
-  if (*reinterpret_cast<uint32_t *>(args) != 0)
+  if (*reinterpret_cast<u32 *>(args) != 0)
     return -SysError::eINVAL;
 
   switch (cmd) {
@@ -35,9 +36,9 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
     return -SysError::eOPNOTSUPP;
   }
   case kMdDetach: {
-    if (reinterpret_cast<uint64_t *>(args)[3] != 0)
+    if (reinterpret_cast<u64 *>(args)[3] != 0)
       return -SysError::eINVAL;
-    const uint32_t flags = reinterpret_cast<uint32_t *>(args)[9];
+    const u32 flags = reinterpret_cast<u32 *>(args)[9];
     if ((flags & 0xffffffdfu) != 0)
       return -SysError::eINVAL;
     // No disks attached: unit not found.
@@ -49,7 +50,7 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
   }
   case kMdList: {
     // No disks: write the empty-unit count and succeed.
-    *reinterpret_cast<uint32_t *>(args + 56) = 0;
+    *reinterpret_cast<u32 *>(args + 56) = 0;
     return 0;
   }
   default:
@@ -57,7 +58,7 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
     // caller reads a benign result instead of stale stack bytes.
     BASE_LOGI("mdctl", "UNHANDLED ioctl({:#x})", cmd);
     if (cmd & 0x40000000u) {
-      const uint32_t len = (cmd >> 16) & 0x1fff;
+      const u32 len = (cmd >> 16) & 0x1fff;
       if (len)
         std::memset(args, 0, len);
     }
@@ -65,7 +66,7 @@ int32_t mdctlDevice::ioctl(uint32_t cmd, void *data) {
   }
 }
 
-int64_t mdctlDevice::lseek(int64_t, int) { return 0; }
+i64 mdctlDevice::lseek(i64, int) { return 0; }
 
 int mdctlDevice::fstat(void *stat) {
   if (!stat)

@@ -18,6 +18,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gfx {
 
@@ -25,7 +26,7 @@ namespace gfx {
 void overlayLogAttach();
 
 // Draw the panel over a display of `w` by `h`. No-op while hidden or empty.
-void overlayLogBuild(uint32_t w, uint32_t h);
+void overlayLogBuild(u32 w, u32 h);
 
 // Bound to F2 by the window event pump. Visible by default.
 void overlayLogToggle();

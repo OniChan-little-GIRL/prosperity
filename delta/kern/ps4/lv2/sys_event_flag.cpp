@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/xstring.h>
@@ -40,7 +41,7 @@ namespace krnl {
 static std::mutex g_efRegM;
 static std::unordered_map<std::string, eventFlag *> g_efByName;
 
-eventFlag::eventFlag(proc *p, const char *nm, uint64_t init, uint64_t sticky_)
+eventFlag::eventFlag(proc *p, const char *nm, u64 init, u64 sticky_)
     : kObject(p, oType::eventflag), bits(init), sticky(sticky_) {
   if (nm && *nm) {
     name = nm;
@@ -49,11 +50,11 @@ eventFlag::eventFlag(proc *p, const char *nm, uint64_t init, uint64_t sticky_)
   }
 }
 
-bool eventFlag::satisfied(uint64_t pattern, uint32_t mode) const {
+bool eventFlag::satisfied(u64 pattern, u32 mode) const {
   return (mode & kEvfOr) ? (bits & pattern) != 0 : (bits & pattern) == pattern;
 }
 
-int eventFlag::take(uint64_t pattern, uint32_t mode, uint64_t *result) {
+int eventFlag::take(u64 pattern, u32 mode, u64 *result) {
   if (result)
     *result = bits;
   if (mode & kEvfClearAll)
@@ -73,8 +74,8 @@ void eventFlag::removeWaiter(Waiter *waiter) {
   }
 }
 
-int eventFlag::wait(uint64_t pattern, uint32_t mode, uint64_t *result,
-                    uint32_t *timeoutUs) {
+int eventFlag::wait(u64 pattern, u32 mode, u64 *result,
+                    u32 *timeoutUs) {
   std::unique_lock<std::mutex> lk(m);
   if (satisfied(pattern, mode))
     return take(pattern, mode, result);
@@ -94,7 +95,7 @@ int eventFlag::wait(uint64_t pattern, uint32_t mode, uint64_t *result,
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start);
     *timeoutUs = elapsed.count() < *timeoutUs
-                     ? static_cast<uint32_t>(*timeoutUs - elapsed.count())
+                     ? static_cast<u32>(*timeoutUs - elapsed.count())
                      : 0;
   } else {
     cv.wait(lk, [&] { return waiter.done; });
@@ -111,14 +112,14 @@ int eventFlag::wait(uint64_t pattern, uint32_t mode, uint64_t *result,
   return 0;
 }
 
-int eventFlag::trywait(uint64_t pattern, uint32_t mode, uint64_t *result) {
+int eventFlag::trywait(u64 pattern, u32 mode, u64 *result) {
   std::unique_lock<std::mutex> lk(m);
   if (!satisfied(pattern, mode))
     return -SysError::eBUSY;
   return take(pattern, mode, result);
 }
 
-void eventFlag::set(uint64_t b) {
+void eventFlag::set(u64 b) {
   std::lock_guard<std::mutex> lk(m);
   bits |= b;
   lastSetTid.store((long)gettid(), std::memory_order_relaxed);
@@ -134,12 +135,12 @@ void eventFlag::set(uint64_t b) {
   cv.notify_all();
 }
 
-void eventFlag::clear(uint64_t b) {
+void eventFlag::clear(u64 b) {
   std::lock_guard<std::mutex> lk(m);
   bits &= b;  // SCE clear keeps the bits set in b
 }
 
-int eventFlag::cancel(uint64_t pattern) {
+int eventFlag::cancel(u64 pattern) {
   std::lock_guard<std::mutex> lk(m);
   // Mark all waiters as cancelled. They wake from the cv with done==true but a
   // zero result, which the wait() loop turns into an error return (the kernel
@@ -162,7 +163,7 @@ int eventFlag::cancel(uint64_t pattern) {
 // purpose: dropping it first would leave a window in which sys_evf_delete frees
 // the flag under us. Nothing takes g_efRegM while holding a flag's own mutex, so
 // this nesting cannot deadlock.
-bool evfSetByNameSubstr(const char *substr, uint64_t bits) {
+bool evfSetByNameSubstr(const char *substr, u64 bits) {
   if (!substr)
     return false;
   std::lock_guard<std::mutex> lk(g_efRegM);
@@ -210,7 +211,7 @@ static bool evfTraceOn(const eventFlag *ef, int id) {
 }
 
 static void evfTrace(const char *op, int id, const eventFlag *ef,
-                     uint64_t pattern, uint32_t mode, int ret, uint64_t res) {
+                     u64 pattern, u32 mode, int ret, u64 res) {
   if (!evfTraceOn(ef, id))
     return;
   // us timestamp from the same steady_clock the shm-audio dumper stamps its
@@ -230,8 +231,8 @@ static void evfTrace(const char *op, int id, const eventFlag *ef,
     guestStackTrace("evfstk", 6);
 }
 
-int PS4ABI sys_evf_create(const char *name, uint32_t attr,
-                           uint64_t initPattern) {
+int PS4ABI sys_evf_create(const char *name, u32 attr,
+                           u64 initPattern) {
   // Kernel validation:
   //   * name must be non-null (a zero name is EINVAL/22).
   //   * attr may only carry bits in 0x133 (mask 0xFFFFFECC rejects the rest).
@@ -255,7 +256,7 @@ int PS4ABI sys_evf_create(const char *name, uint32_t attr,
 // publish (app focus granted, power normal, system running). With no ShellCore
 // the flag stays 0 and the game's "wait for focus/ready" (EVF OR-wait for any
 // bit) blocks forever. Seed those flags as "focused/ready" so the game proceeds.
-static uint64_t systemFlagInit(const char *name) {
+static u64 systemFlagInit(const char *name) {
   if (!name)
     return 0;
   base::StringRef n(name);
@@ -291,7 +292,7 @@ int PS4ABI sys_evf_open(const char *name) {
   // Auto-create unknown named flags: on real hw a system service creates them;
   // here both producer and consumer just open by name, so creating on first
   // open gives them a shared flag and the sync actually works.
-  uint64_t seed = systemFlagInit(name);
+  u64 seed = systemFlagInit(name);
   auto *ef = new eventFlag(proc::getActive(), name, seed, seed);
   BASE_LOGI("evf", "open '{}' (auto-created) -> id={}", name ? name : "",
             ef->handle());
@@ -327,8 +328,8 @@ static long audioMixAckUs() {
   return kAudioMixAck;
 }
 
-int PS4ABI sys_evf_wait(int id, uint64_t pattern, uint32_t mode,
-                         uint64_t *result, uint32_t *timeoutUs) {
+int PS4ABI sys_evf_wait(int id, u64 pattern, u32 mode,
+                         u64 *result, u32 *timeoutUs) {
   // Kernel mode check: mode must name exactly one of {AND, OR} and at most one
   // clear mode, and the wait pattern must be non-zero. Violations return EINVAL
   // (22) without touching the object.
@@ -344,8 +345,8 @@ int PS4ABI sys_evf_wait(int id, uint64_t pattern, uint32_t mode,
   evfTrace("waitE", id, ef, pattern, mode, 0, 0);
   if (audioMixAckUs() >= 0 &&
       ef->fname().find("sceAudioOutMix") != std::string::npos) {
-    uint32_t to = static_cast<uint32_t>(audioMixAckUs());
-    uint64_t ares = 0;
+    u32 to = static_cast<u32>(audioMixAckUs());
+    u64 ares = 0;
     int ar = ef->wait(pattern, mode, &ares, &to);
     if (ar == -SysError::eTIMEDOUT) {  // nobody signalled: fake the daemon's ack
       ar = 0;
@@ -356,7 +357,7 @@ int PS4ABI sys_evf_wait(int id, uint64_t pattern, uint32_t mode,
     evfTrace("ackwait", id, ef, pattern, mode, ar, ares);
     return ar;
   }
-  uint64_t res = 0;
+  u64 res = 0;
   int r = ef->wait(pattern, mode, &res, timeoutUs);
   if (result)
     *result = res;
@@ -364,15 +365,15 @@ int PS4ABI sys_evf_wait(int id, uint64_t pattern, uint32_t mode,
   return r;
 }
 
-int PS4ABI sys_evf_trywait(int id, uint64_t pattern, uint32_t mode,
-                            uint64_t *result) {
+int PS4ABI sys_evf_trywait(int id, u64 pattern, u32 mode,
+                            u64 *result) {
   if (pattern == 0 || (mode & 3) == 0 || (mode & 3) == 3 ||
       (mode & 0x30) == 0x30)
     return -SysError::eINVAL;
   auto *ef = fromId(id);
   if (!ef)
     return -SysError::eSRCH;
-  uint64_t res = 0;
+  u64 res = 0;
   int r = ef->trywait(pattern, mode, &res);
   // Handshake grace: when the polling thread itself posted the last set() on
   // this flag, it is the requester of a request/response channel (it set the
@@ -386,7 +387,7 @@ int PS4ABI sys_evf_trywait(int id, uint64_t pattern, uint32_t mode,
   // DELTA_NO_EVF_GRACE disables for A/B testing.
   if (r == -SysError::eBUSY && !kNoEvfGrace &&
       ef->lastSetTid.load(std::memory_order_relaxed) == (long)gettid()) {
-    uint32_t toUs = 250000;
+    u32 toUs = 250000;
     r = ef->wait(pattern, mode, &res, &toUs);
     if (r == -SysError::eTIMEDOUT)
       r = -SysError::eBUSY;
@@ -403,7 +404,7 @@ static void evfSetTally(int id) {
   if (!kWaitProbe)
     return;
   static std::mutex m;
-  static std::unordered_map<int, uint64_t> hist;
+  static std::unordered_map<int, u64> hist;
   static auto last = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lk(m);
   hist[id]++;
@@ -418,7 +419,7 @@ static void evfSetTally(int id) {
   BASE_LOGI("evfset", "{}", ids.c_str());
 }
 
-int PS4ABI sys_evf_set(int id, uint64_t bits) {
+int PS4ABI sys_evf_set(int id, u64 bits) {
   evfSetTally(id);
   auto *ef = fromId(id);
   if (!ef)
@@ -428,7 +429,7 @@ int PS4ABI sys_evf_set(int id, uint64_t bits) {
   return 0;
 }
 
-int PS4ABI sys_evf_clear(int id, uint64_t bits) {
+int PS4ABI sys_evf_clear(int id, u64 bits) {
   auto *ef = fromId(id);
   if (!ef)
     return -SysError::eSRCH;
@@ -437,7 +438,7 @@ int PS4ABI sys_evf_clear(int id, uint64_t bits) {
   return 0;
 }
 
-int PS4ABI sys_evf_cancel(int id, uint64_t pattern, int *numWaiters) {
+int PS4ABI sys_evf_cancel(int id, u64 pattern, int *numWaiters) {
   // Kernel evf_cancel: wakes every thread parked in evf_wait on this flag and
   // reports how many were released via numWaiters. The woken waiters see
   // ETIMEDOUT (60) / EINTR (85) rather than a successful match, so a cancel is

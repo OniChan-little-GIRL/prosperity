@@ -7,6 +7,7 @@
  */
 
 #include <cstring>
+#include "base/arch.h"
 
 #include "dir_dev.h"
 #include "file_dev.h"
@@ -15,10 +16,10 @@ namespace krnl {
 // FreeBSD dirent (PS4 is FreeBSD 9, pre-ino64): 8-byte header + name, each
 // record padded to an 8-byte boundary.
 struct fbsd_dirent {
-  uint32_t d_fileno;
-  uint16_t d_reclen;
-  uint8_t d_type;
-  uint8_t d_namlen;
+  u32 d_fileno;
+  u16 d_reclen;
+  u8 d_type;
+  u8 d_namlen;
   char d_name[256];
 };
 enum { kDtDir = 4, kDtReg = 8 };
@@ -26,19 +27,19 @@ enum { kDtDir = 4, kDtReg = 8 };
 dirDevice::dirDevice(proc *p, std::vector<vfs::DirEntry> &&entries)
     : device(p), entries_(std::move(entries)) {}
 
-int64_t dirDevice::getdents(void *buf, size_t len) {
-  auto *p = static_cast<uint8_t *>(buf);
+i64 dirDevice::getdents(void *buf, size_t len) {
+  auto *p = static_cast<u8 *>(buf);
   size_t used = 0;
   while (cursor_ < entries_.size()) {
     const auto &e = entries_[cursor_];
-    uint8_t namlen =
-        static_cast<uint8_t>(e.name.size() > 255 ? 255 : e.name.size());
-    uint16_t reclen = static_cast<uint16_t>((8 + namlen + 1 + 7) & ~7);
+    u8 namlen =
+        static_cast<u8>(e.name.size() > 255 ? 255 : e.name.size());
+    u16 reclen = static_cast<u16>((8 + namlen + 1 + 7) & ~7);
     if (used + reclen > len)
       break;
     auto *d = reinterpret_cast<fbsd_dirent *>(p + used);
     std::memset(d, 0, reclen);
-    d->d_fileno = static_cast<uint32_t>(cursor_ + 1);  // must be nonzero
+    d->d_fileno = static_cast<u32>(cursor_ + 1);  // must be nonzero
     d->d_reclen = reclen;
     d->d_type = e.isDir ? kDtDir : kDtReg;
     d->d_namlen = namlen;
@@ -46,7 +47,7 @@ int64_t dirDevice::getdents(void *buf, size_t len) {
     used += reclen;
     cursor_++;
   }
-  return static_cast<int64_t>(used);  // 0 once exhausted
+  return static_cast<i64>(used);  // 0 once exhausted
 }
 
 int dirDevice::fstat(void *stat) {
@@ -54,5 +55,5 @@ int dirDevice::fstat(void *stat) {
   return 0;
 }
 
-int64_t dirDevice::read(void *, size_t) { return -SysError::eISDIR; }
+i64 dirDevice::read(void *, size_t) { return -SysError::eISDIR; }
 }  // namespace krnl

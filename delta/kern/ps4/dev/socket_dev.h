@@ -12,6 +12,7 @@
  */
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 
@@ -23,15 +24,15 @@ public:
   // The host fd, for the event queue's readability poll.
   int hostFd() const { return fd_; }
 
-  int bind(const void *guestAddr, uint32_t len);
-  int getsockname(void *guestAddr, uint32_t *len);
-  int64_t sendto(const void *buf, size_t len, int flags, const void *guestAddr,
-                 uint32_t addrLen);
-  int64_t recvfrom(void *buf, size_t len, int flags, void *guestAddr,
-                   uint32_t *addrLen);
+  int bind(const void *guestAddr, u32 len);
+  int getsockname(void *guestAddr, u32 *len);
+  i64 sendto(const void *buf, size_t len, int flags, const void *guestAddr,
+                 u32 addrLen);
+  i64 recvfrom(void *buf, size_t len, int flags, void *guestAddr,
+                   u32 *addrLen);
 
-  int64_t read(void *buf, size_t len) override { return recvfrom(buf, len, 0, nullptr, nullptr); }
-  int64_t write(const void *buf, size_t len) override { return sendto(buf, len, 0, nullptr, 0); }
+  i64 read(void *buf, size_t len) override { return recvfrom(buf, len, 0, nullptr, nullptr); }
+  i64 write(const void *buf, size_t len) override { return sendto(buf, len, 0, nullptr, 0); }
 
 private:
   int fd_ = -1;
@@ -39,6 +40,6 @@ private:
 };
 
 // The socket behind an fd, or null when it isn't one.
-socketDevice *fdToSocket(uint32_t fd);
+socketDevice *fdToSocket(u32 fd);
 
 }  // namespace krnl

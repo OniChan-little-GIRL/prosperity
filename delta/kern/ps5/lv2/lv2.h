@@ -9,7 +9,8 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
-uintptr_t lv2_get_ps5(uint32_t sid);
+uintptr_t lv2_get_ps5(u32 sid);
 }

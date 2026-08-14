@@ -2,6 +2,7 @@
 // cross-checked against tools/pkg_extract.py: lists every file and rebuilds
 // eboot.bin into an ELF. Usage: pkg_check <game.pkg> [out.elf]
 #include <algorithm>
+#include "base/arch.h"
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -36,8 +37,8 @@ int main(int argc, char **argv) {
 
   const auto *node = fs.find("/eboot.bin");
   if (node) {
-    std::vector<uint8_t> buf(node->size);
-    fs.read(*node, buf.data(), 0, static_cast<int64_t>(node->size));
+    std::vector<u8> buf(node->size);
+    fs.read(*node, buf.data(), 0, static_cast<i64>(node->size));
     auto elf = crypto::self2elf(buf.data(), buf.size());
     if (!elf.empty()) {
       const char *out = argc > 2 ? argv[2] : "eboot_native.elf";

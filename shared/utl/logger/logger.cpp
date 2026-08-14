@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "base/arch.h"
 #include <atomic>
 #include <iterator>
 #include <mutex>
@@ -70,7 +71,7 @@ public:
     backend_thread.join();
   }
 
-  void AddEntry(logLevel lvl, uint32_t line, const char *func,
+  void AddEntry(logLevel lvl, u32 line, const char *func,
                 base::String msg) {
     if (g_logSilenced.load(std::memory_order_relaxed))
       return;  // crash handler is dumping; don't race it on stderr
@@ -136,9 +137,9 @@ const char *GetLevelName(logLevel log_level) {
 }
 
 base::String formatLogEntry(const logEntry &entry) {
-  uint32_t time_seconds =
+  u32 time_seconds =
       static_cast<unsigned int>(entry.timestamp.count() / 1000000);
-  uint32_t time_fractional =
+  u32 time_fractional =
       static_cast<unsigned int>(entry.timestamp.count() % 1000000);
 
   const char *level_name = GetLevelName(entry.log_level);
@@ -155,7 +156,7 @@ logBase *addLogSink(base::UniquePointer<logBase> sink) {
   return LogRegistry::Instance().AddSink(std::move(sink));
 }
 
-void formatLogMsg(logLevel lvl, uint32_t line, const char *func,
+void formatLogMsg(logLevel lvl, u32 line, const char *func,
                   const char *fmt, const fmt::format_args &args) {
   std::string s = fmt::vformat(fmt, args);
   auto &reg = LogRegistry::Instance();

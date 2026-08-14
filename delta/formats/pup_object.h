@@ -9,6 +9,7 @@
  */
 
 #include <utl/file.h>
+#include "base/arch.h"
 #include <base/containers/vector.h>
 #include <base/strings/xstring.h>
 
@@ -18,26 +19,26 @@ class File;
 
 namespace vfs {
 struct pup_header {
-  uint32_t magic;
-  uint32_t unk;
-  uint8_t contentType;
-  uint8_t productType;
-  uint16_t pad;
-  uint16_t headerSize;
-  uint16_t sigSize;
-  uint32_t sizeSELF;
-  uint32_t pad2;
-  uint16_t numSegments;
-  uint16_t unk2;
-  uint32_t pad3;
+  u32 magic;
+  u32 unk;
+  u8 contentType;
+  u8 productType;
+  u16 pad;
+  u16 headerSize;
+  u16 sigSize;
+  u32 sizeSELF;
+  u32 pad2;
+  u16 numSegments;
+  u16 unk2;
+  u32 pad3;
 };
 
 struct pup_entry {
-  uint32_t flags;
-  uint32_t unk;
-  uint64_t offset;
-  uint64_t sizeCompressed;
-  uint64_t sizeUncompressed;
+  u32 flags;
+  u32 unk;
+  u64 offset;
+  u64 sizeCompressed;
+  u64 sizeUncompressed;
 };
 
 static_assert(sizeof(pup_header) == 32);
@@ -45,8 +46,8 @@ static_assert(sizeof(pup_entry) == 32);
 
 // Outer container magics. Both use the same 32-byte header + 32-byte entry
 // table; only the magic (and the PS5 block-compression layout) differ.
-constexpr uint32_t kPupMagicPS4 = 0x1D3D154Fu;
-constexpr uint32_t kPupMagicPS5 = 0xEEF51454u;
+constexpr u32 kPupMagicPS4 = 0x1D3D154Fu;
+constexpr u32 kPupMagicPS5 = 0xEEF51454u;
 
 // Reader for a PS4/PS5 firmware update (.PUP). The outer container is parsed
 // here; segments are written out by extractAll(). Retail PUPs are encrypted, so
@@ -71,8 +72,8 @@ public:
   bool ps5() const { return isPS5; }
 
 private:
-  bool inflateEntry(const pup_entry &, base::Vector<uint8_t> &in,
-                    base::Vector<uint8_t> &out);
+  bool inflateEntry(const pup_entry &, base::Vector<u8> &in,
+                    base::Vector<u8> &out);
 
   // PS5 firmware uses a block-compressed layout: large segments are split into
   // fixed-size blocks, each stored either raw or zlib-compressed, with a paired

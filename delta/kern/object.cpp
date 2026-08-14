@@ -8,6 +8,7 @@
  */
 
 #include "object.h"
+#include "base/arch.h"
 #include "kern/proc.h"
 #include "util/object_table.h"
 
@@ -22,7 +23,7 @@ DELTA_OPTION(bool, kObjTrace, "DELTA_OBJ_TRACE", false);
 
 namespace krnl {
 kObject::kObject(proc *process, oType type) : otype(type), process(process) {
-  uint32_t temp = 0;
+  u32 temp = 0;
   process->getObjTable().add(this, temp);
 
   // DELTA_OBJ_TRACE: titles that poll a device re-create its object thousands

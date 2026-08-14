@@ -7,6 +7,7 @@
  */
 
 #include <atomic>
+#include "base/arch.h"
 #include <base.h>
 #include <base/logging.h>
 #include <chrono>
@@ -33,21 +34,21 @@ dceDevice::dceDevice(proc *p) : device(p) {}
 // VblankStatus until the count advances, to pace the frame loop, so the count
 // MUST tick in real time even though there is no display hardware. Without this
 // the count stays 0 and the title spins forever on its first frame.
-static uint64_t nowNs() {
+static u64 nowNs() {
   using namespace std::chrono;
-  return static_cast<uint64_t>(
+  return static_cast<u64>(
       duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
 }
-static uint64_t vblankCount() {
+static u64 vblankCount() {
   using namespace std::chrono;
   static const auto start = steady_clock::now();
   auto ns = duration_cast<nanoseconds>(steady_clock::now() - start).count();
-  return static_cast<uint64_t>(ns / 16666667);  // ~59.94 Hz
+  return static_cast<u64>(ns / 16666667);  // ~59.94 Hz
 }
 // A TSC value in the same domain/rate as the guest's rdtsc, so flip/vblank-status
 // tsc fields stay comparable with rdtsc the title reads itself. On native that's
 // the raw host TSC; on FEX use the 1.6 GHz wall clock the emulated rdtsc matches.
-static uint64_t guestTsc() {
+static u64 guestTsc() {
 #if defined(DELTA_BACKEND_NATIVE)
   return __builtin_ia32_rdtsc();
 #else
@@ -60,16 +61,16 @@ static uint64_t guestTsc() {
 // flip became the scanout). We used to report currentBuffer = 0 always, so flips
 // to buffers 1/2 never matched and the title spun on each until a ~1s timeout
 // (Doom64 ran at ~1fps). Record the flip here and report it in the status.
-static std::atomic<uint32_t> g_dceCurrentBuffer{0};
-static std::atomic<int64_t> g_dceFlipArg{0};
-static std::atomic<uint64_t> g_dceFlipCount{0};
-static std::atomic<uint64_t> g_dceScanoutBuffers[16]{};
+static std::atomic<u32> g_dceCurrentBuffer{0};
+static std::atomic<i64> g_dceFlipArg{0};
+static std::atomic<u64> g_dceFlipCount{0};
+static std::atomic<u64> g_dceScanoutBuffers[16]{};
 
-uint32_t dceCurrentBuffer() { return g_dceCurrentBuffer.load(); }
+u32 dceCurrentBuffer() { return g_dceCurrentBuffer.load(); }
 
-int64_t dceCurrentFlipArg() { return g_dceFlipArg.load(); }
+i64 dceCurrentFlipArg() { return g_dceFlipArg.load(); }
 
-uint64_t dceScanoutBuffer(uint32_t index) {
+u64 dceScanoutBuffer(u32 index) {
   return index < 16 ? g_dceScanoutBuffers[index].load() : 0;
 }
 
@@ -115,7 +116,7 @@ static void printVideoOutCaller() {
   }
 }
 
-bool dceDevice::init(const char *, uint32_t, uint32_t) { return true; }
+bool dceDevice::init(const char *, u32, u32) { return true; }
 
 // A guest pointer is directly host-addressable here (in-process LLE). Guard
 // dereferences to a sane userspace range so a stray field doesn't fault.
@@ -124,40 +125,40 @@ bool dceDevice::init(const char *, uint32_t, uint32_t) { return true; }
 // the old 0x8000_0000_0000 ceiling -- accept the full 48-bit user range, else
 // the dce silently drops every write to a stack out-slot (the open-op then
 // mmaps an uninitialised offset/size and fails).
-static bool plausiblePtr(uint64_t v) {
+static bool plausiblePtr(u64 v) {
   return v >= 0x10000 && v < 0x0001000000000000ull;
 }
 
 // Dump an ioctl arg struct as u64s. Just the values: do NOT chase "pointers"
 // (many fields are two packed u32s like {pitch, height} that look like a high
 // address but aren't, and dereferencing them faults). DELTA_DCE_TRACE.
-static void dumpStruct(const void *data, uint32_t len) {
-  const uint64_t *q = static_cast<const uint64_t *>(data);
-  uint32_t n = len / 8;
-  for (uint32_t i = 0; i < n; i++)
+static void dumpStruct(const void *data, u32 len) {
+  const u64 *q = static_cast<const u64 *>(data);
+  u32 n = len / 8;
+  for (u32 i = 0; i < n; i++)
     BASE_LOGI("dce", "    [{}] {:#018x}", i, (unsigned long long)q[i]);
 }
 
-uint64_t dceDevice::poolAlloc(uint64_t bytes) {
+u64 dceDevice::poolAlloc(u64 bytes) {
   // The scanout/control pool. One big guest-addressable region, bump-allocated;
   // every sub-op 9 carve is mmap'd back via map(offset). 512 MiB covers several
   // 1080p buffer sets + control blocks.
-  constexpr uint64_t kPool = 512ull * 1024 * 1024;
+  constexpr u64 kPool = 512ull * 1024 * 1024;
   if (!poolBase) {
     poolBase = allocLowGuest(kPool);
     if (!poolBase)
       return UINT64_MAX;
     poolSize = kPool;
   }
-  bytes = (bytes + 0x3FFF) & ~uint64_t(0x3FFF);
+  bytes = (bytes + 0x3FFF) & ~u64(0x3FFF);
   if (poolUsed + bytes > poolSize)
     return UINT64_MAX;
-  uint64_t off = poolUsed;
+  u64 off = poolUsed;
   poolUsed += bytes;
   return off;
 }
 
-uint8_t *dceDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) {
+u8 *dceDevice::map(void *, size_t size, u32, u32, size_t offset) {
   // The kernel only maps /dev/dce at offsets < 0x8000: it returns the PHYSICAL
   // address of the flip-target status page (offset/0x4000 picks the target,
   // and offset 0x4000 is the data region the scanout-pool query sizes). Our
@@ -169,7 +170,7 @@ uint8_t *dceDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) 
   // fd@offset -> real backing) while giving titles CP-usable memory.
   if (poolBase && offset + size <= poolSize)
     return poolBase + offset;
-  return reinterpret_cast<uint8_t *>(-1);
+  return reinterpret_cast<u8 *>(-1);
 }
 
 // Kernel (11.00) dce ioctl dispatch. The scanin ioctls are gated behind a
@@ -179,16 +180,16 @@ uint8_t *dceDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) 
 // attribute, 0xC0488204 -> submit flip. 0xc0588212 is not in the dispatch at
 // all (EINVAL). Sub-op arg layouts below were verified against the 11.00
 // libSceVideoOut.sprx callers and the flip-control sub-op jump table.
-int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
+i32 dceDevice::ioctl(u32 cmd, void *data) {
   if (g_dceTrace()) {
-    uint32_t len = (cmd >> 16) & 0x1FFF;
+    u32 len = (cmd >> 16) & 0x1FFF;
     BASE_LOGI("dce", "ioctl cmd={:#x} len={} data={:p}", cmd, len, data);
     printVideoOutCaller();
     if (data && len && len <= 0x200)
       dumpStruct(data, len);
   }
 
-  auto *s = static_cast<uint64_t *>(data);
+  auto *s = static_cast<u64 *>(data);
 
   // System-only capture ("scanin") ioctls + the non-existent 0xc0588212: the
   // 11.00 kernel returns EINVAL for all of these from a game context (the
@@ -212,7 +213,7 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // slot; the kernel writes the opaque display handle there. Every later
       // ioctl passes that handle as its first u64, so hand back a non-zero id.
       if (plausiblePtr(s[4]))
-        *reinterpret_cast<uint64_t *>(s[4]) = nextHandle++;
+        *reinterpret_cast<u64 *>(s[4]) = nextHandle++;
       return 0;
     case 9: {
       // Allocate scanout pool. Kernel sub-op 9 (scanout-pool offset query): it
@@ -226,16 +227,16 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // sane size (not stack garbage / a pointer), else use the default. Without
       // this the open-op reads a bogus huge size, poolAlloc fails ENOMEM, the
       // slots stay uninitialised, and the title mmaps garbage offset/len.
-      uint64_t reqd = plausiblePtr(s[3]) ? *reinterpret_cast<uint64_t *>(s[3]) : 0;
-      uint64_t want = (reqd > 0 && reqd <= 0x10000000) ? reqd  // <= 256 MiB
+      u64 reqd = plausiblePtr(s[3]) ? *reinterpret_cast<u64 *>(s[3]) : 0;
+      u64 want = (reqd > 0 && reqd <= 0x10000000) ? reqd  // <= 256 MiB
                                                        : 0x4000000;  // 64 MiB
-      uint64_t off = poolAlloc(want);
+      u64 off = poolAlloc(want);
       if (off == UINT64_MAX)
         return 12;  // ENOMEM
       if (plausiblePtr(s[2]))
-        *reinterpret_cast<uint64_t *>(s[2]) = off;
+        *reinterpret_cast<u64 *>(s[2]) = off;
       if (plausiblePtr(s[3]))
-        *reinterpret_cast<uint64_t *>(s[3]) = want;
+        *reinterpret_cast<u64 *>(s[3]) = want;
       return 0;
     }
     case 0x19: {
@@ -243,13 +244,13 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // size (0x30). The module copies width/height/pane (u32 @0/4/8/0xc),
       // a flag byte @0x10, refresh @0x18, aspect @0x20. Report 1920x1080.
       if (plausiblePtr(s[2])) {
-        auto *o = reinterpret_cast<uint8_t *>(s[2]);
+        auto *o = reinterpret_cast<u8 *>(s[2]);
         std::memset(o, 0, 0x30);
-        *reinterpret_cast<uint32_t *>(o + 0x00) = 1920;  // width
-        *reinterpret_cast<uint32_t *>(o + 0x04) = 1080;  // height
-        *reinterpret_cast<uint32_t *>(o + 0x08) = 1920;  // paneWidth
-        *reinterpret_cast<uint32_t *>(o + 0x0c) = 1080;  // paneHeight
-        *reinterpret_cast<uint64_t *>(o + 0x18) = 60;    // refresh
+        *reinterpret_cast<u32 *>(o + 0x00) = 1920;  // width
+        *reinterpret_cast<u32 *>(o + 0x04) = 1080;  // height
+        *reinterpret_cast<u32 *>(o + 0x08) = 1920;  // paneWidth
+        *reinterpret_cast<u32 *>(o + 0x0c) = 1080;  // paneHeight
+        *reinterpret_cast<u64 *>(o + 0x18) = 60;    // refresh
       }
       return 0;
     }
@@ -264,19 +265,19 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // count == an advancing flip count and pending == 0 so the runner's
       // "is a flip still queued?" checks let it submit the next frame.
       if (plausiblePtr(s[2])) {
-        auto *o = reinterpret_cast<uint8_t *>(s[2]);
+        auto *o = reinterpret_cast<u8 *>(s[2]);
         std::memset(o, 0, 0x48);
-        uint64_t now = nowNs();
-        *reinterpret_cast<int64_t *>(o + 0x00) = g_dceFlipArg.load();  // flipArg
-        *reinterpret_cast<uint64_t *>(o + 0x10) =
+        u64 now = nowNs();
+        *reinterpret_cast<i64 *>(o + 0x00) = g_dceFlipArg.load();  // flipArg
+        *reinterpret_cast<u64 *>(o + 0x10) =
             g_dceFlipCount.load() ? g_dceFlipCount.load() : flipCount();  // count
-        *reinterpret_cast<uint64_t *>(o + 0x18) = now;            // processTime
-        *reinterpret_cast<uint64_t *>(o + 0x20) = guestTsc();     // tsc
+        *reinterpret_cast<u64 *>(o + 0x18) = now;            // processTime
+        *reinterpret_cast<u64 *>(o + 0x20) = guestTsc();     // tsc
         // currentBuffer = the buffer the last submitted flip displays. A title
         // waits for this to equal the index it just flipped before reusing a
         // buffer; reporting it (vs a stuck 0) is what unblocks the per-frame wait.
-        *reinterpret_cast<int32_t *>(o + 0x28) = (int32_t)g_dceCurrentBuffer.load();
-        *reinterpret_cast<uint64_t *>(o + 0x38) = guestTsc();     // submitTsc
+        *reinterpret_cast<i32 *>(o + 0x28) = (i32)g_dceCurrentBuffer.load();
+        *reinterpret_cast<u64 *>(o + 0x38) = guestTsc();     // submitTsc
         // flipPendingNum / gcQueueNum left 0 (our flip is synchronous: none pending).
       }
       return 0;
@@ -287,12 +288,12 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
       // [0x18] flags. count MUST advance in real time (see vblankCount) or the
       // runner's vsync busy-poll never returns -> the title hangs on frame 1.
       if (plausiblePtr(s[2])) {
-        auto *o = reinterpret_cast<uint8_t *>(s[2]);
+        auto *o = reinterpret_cast<u8 *>(s[2]);
         std::memset(o, 0, 0x28);
-        uint64_t now = nowNs();
-        *reinterpret_cast<uint64_t *>(o + 0x00) = vblankCount();  // count
-        *reinterpret_cast<uint64_t *>(o + 0x08) = now;            // processTime
-        *reinterpret_cast<uint64_t *>(o + 0x10) = guestTsc();     // tsc
+        u64 now = nowNs();
+        *reinterpret_cast<u64 *>(o + 0x00) = vblankCount();  // count
+        *reinterpret_cast<u64 *>(o + 0x08) = now;            // processTime
+        *reinterpret_cast<u64 *>(o + 0x10) = guestTsc();     // tsc
         o[0x18] = 0;                                              // flags
       }
       return 0;
@@ -345,8 +346,8 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
     // reports currentBuffer == the index the title just flipped. This is exactly
     // Undertale's documented blocker (the flip path dropped bufferIndex/flipArg);
     // it did NOT fix Doom64's separate ~1fps busy-wait, but it is correct.
-    g_dceCurrentBuffer.store(static_cast<uint32_t>(s[1]));
-    g_dceFlipArg.store(static_cast<int64_t>(s[3]));
+    g_dceCurrentBuffer.store(static_cast<u32>(s[1]));
+    g_dceFlipArg.store(static_cast<i64>(s[3]));
     g_dceFlipCount.fetch_add(1);  // a per-flip count reported back in GetFlipStatus
     if (g_dceTrace())
       BASE_LOGI("dce", "submitFlip buf={} flipArg={:#x}", (int)s[1],
@@ -355,7 +356,7 @@ int32_t dceDevice::ioctl(uint32_t cmd, void *data) {
     // the kernel copyouts 8 bytes to (0 on clean success, 88 when a flip is
     // already pending). The caller checks it for 0x58 = ok.
     if (plausiblePtr(s[8]))
-      *reinterpret_cast<uint64_t *>(s[8]) = 0x58;
+      *reinterpret_cast<u64 *>(s[8]) = 0x58;
     return 0;
   }
 

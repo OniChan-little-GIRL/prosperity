@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <condition_variable>
 #include <mutex>
 
@@ -41,7 +42,7 @@ public:
   // *timeoutUs micros (null = forever). Returns 0, -eTIMEDOUT, or -errno.
   // If `need` exceeds maxCount the request can never be satisfied: the kernel
   // returns -eINVAL without blocking.
-  int wait(int need, uint32_t *timeoutUs);
+  int wait(int need, u32 *timeoutUs);
   // Non-blocking: takes `need` units if available. Returns -eBUSY if the count
   // is too low but the request is otherwise valid, or -eINVAL if need > max
   // (impossible request).
@@ -65,11 +66,11 @@ private:
   int waiters = 0;
 };
 
-int PS4ABI sys_osem_create(const char *name, uint32_t attr, int init, int max);
+int PS4ABI sys_osem_create(const char *name, u32 attr, int init, int max);
 int PS4ABI sys_osem_delete(int id);
 int PS4ABI sys_osem_open(const char *name);
 int PS4ABI sys_osem_close(int id);
-int PS4ABI sys_osem_wait(int id, int need, uint32_t *timeoutUs);
+int PS4ABI sys_osem_wait(int id, int need, u32 *timeoutUs);
 int PS4ABI sys_osem_trywait(int id, int need);
 int PS4ABI sys_osem_post(int id, int count);
 int PS4ABI sys_osem_cancel(int id, int setCount, int *numWaiters);

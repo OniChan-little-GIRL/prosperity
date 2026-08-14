@@ -8,6 +8,7 @@
  */
 
 #include "UnSELF.h"
+#include "base/arch.h"
 
 #include <cstring>
 
@@ -15,8 +16,8 @@
 #include <sce_types.h>
 
 namespace crypto {
-base::Vector<uint8_t> self2elf(const uint8_t *data, size_t size) {
-  base::Vector<uint8_t> out;
+base::Vector<u8> self2elf(const u8 *data, size_t size) {
+  base::Vector<u8> out;
 
   if (size < sizeof(SELFHeader))
     return out;
@@ -35,13 +36,13 @@ base::Vector<uint8_t> self2elf(const uint8_t *data, size_t size) {
     return out;
 
   const size_t phoff = eh->phoff;
-  const uint16_t phentsize = eh->phentsize;
-  const uint16_t phnum = eh->phnum;
+  const u16 phentsize = eh->phentsize;
+  const u16 phnum = eh->phnum;
   const size_t hdrEnd = phoff + static_cast<size_t>(phnum) * phentsize;
   if (elfOff + hdrEnd > size)
     return out;
 
-  auto phdr = [&](uint32_t i) {
+  auto phdr = [&](u32 i) {
     return reinterpret_cast<const ELFPgHeader *>(
         data + elfOff + phoff + static_cast<size_t>(i) * phentsize);
   };
@@ -49,7 +50,7 @@ base::Vector<uint8_t> self2elf(const uint8_t *data, size_t size) {
   // The output layout is the union of the program-header extents and the
   // destination of every block segment.
   size_t total = hdrEnd;
-  for (uint16_t i = 0; i < phnum; ++i) {
+  for (u16 i = 0; i < phnum; ++i) {
     const size_t end = phdr(i)->offset + phdr(i)->filesz;
     if (end > total)
       total = end;
@@ -57,11 +58,11 @@ base::Vector<uint8_t> self2elf(const uint8_t *data, size_t size) {
 
   const auto *segs =
       reinterpret_cast<const SELFSegmentTable *>(data + segTableOff);
-  for (uint16_t i = 0; i < sh->numSegments; ++i) {
+  for (u16 i = 0; i < sh->numSegments; ++i) {
     const auto &s = segs[i];
     if (!(s.flags & SF_BFLG))
       continue;
-    const uint32_t idx = static_cast<uint32_t>(s.flags >> 20) & 0xFFF;
+    const u32 idx = static_cast<u32>(s.flags >> 20) & 0xFFF;
     if (idx >= phnum)
       continue;
     if (s.offset + s.fileSize > size) // source out of range
@@ -74,11 +75,11 @@ base::Vector<uint8_t> self2elf(const uint8_t *data, size_t size) {
   out.resize(total); // value-initialized => zero filled
   std::memcpy(out.data(), data + elfOff, hdrEnd);
 
-  for (uint16_t i = 0; i < sh->numSegments; ++i) {
+  for (u16 i = 0; i < sh->numSegments; ++i) {
     const auto &s = segs[i];
     if (!(s.flags & SF_BFLG))
       continue;
-    const uint32_t idx = static_cast<uint32_t>(s.flags >> 20) & 0xFFF;
+    const u32 idx = static_cast<u32>(s.flags >> 20) & 0xFFF;
     if (idx >= phnum)
       continue;
     if (s.offset + s.fileSize > size)

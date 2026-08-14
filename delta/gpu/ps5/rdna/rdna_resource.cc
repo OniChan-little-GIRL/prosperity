@@ -6,6 +6,7 @@
  */
 
 #include "gpu/ps5/rdna/rdna_resource.h"
+#include "base/arch.h"
 
 #include "gpu/guest_memory.h"
 
@@ -36,11 +37,11 @@ using gpu::gcn::MimgBindingPlan;
 using gpu::gcn::Program;
 using gpu::gcn::TImage;
 
-bool InGuest(uint64_t a) {
+bool InGuest(u64 a) {
   return a >= 0x10000ull && a < 0x1000000000000ull;
 }
 
-bool GuestRange(uint64_t address, uint64_t bytes) {
+bool GuestRange(u64 address, u64 bytes) {
   return bytes && InGuest(address) && bytes <= 0x1000000000000ull - address &&
          gpu::IsReadableRange(address, bytes);
 }
@@ -48,7 +49,7 @@ bool GuestRange(uint64_t address, uint64_t bytes) {
 // A cube sample reaches the hardware with the face already selected (the
 // shader ran v_cubeid/v_cubesc/v_cubetc), so its address is (s, t, faceId) --
 // exactly a 2D-array lookup with layer = faceId.
-bool MimgArrayed(uint32_t dim) {
+bool MimgArrayed(u32 dim) {
   return dim == 3 || dim == 5;
 }
 
@@ -58,7 +59,7 @@ bool MimgArrayed(uint32_t dim) {
 // sampled subset onto the GCN (dfmt,nfmt) pairs the shared renderer's
 // GuestTextureFormat() understands; unmapped formats yield (0,0) so the upload
 // declines (white fallback) instead of misreading texels.
-void Gfx10ImgFormat(uint32_t gfmt, uint32_t& dfmt, uint32_t& nfmt) {
+void Gfx10ImgFormat(u32 gfmt, u32& dfmt, u32& nfmt) {
   switch (gfmt) {
     case 1:
       dfmt = 1;
@@ -224,17 +225,17 @@ void Gfx10ImgFormat(uint32_t gfmt, uint32_t& dfmt, uint32_t& nfmt) {
 }
 
 struct ScalarEval {
-  static constexpr uint32_t kRegs = 136;
-  uint32_t sgpr[kRegs] = {};
+  static constexpr u32 kRegs = 136;
+  u32 sgpr[kRegs] = {};
   bool known[kRegs] = {};
   bool scc = false;
   bool scc_known = false;
 
-  ScalarEval(const uint32_t* user_data,
-             uint32_t user_sgprs,
-             uint32_t user_sgpr_base) {
-    const uint32_t count = std::min(user_sgprs, 32u);
-    for (uint32_t i = 0; i < count && user_sgpr_base + i < kRegs; i++) {
+  ScalarEval(const u32* user_data,
+             u32 user_sgprs,
+             u32 user_sgpr_base) {
+    const u32 count = std::min(user_sgprs, 32u);
+    for (u32 i = 0; i < count && user_sgpr_base + i < kRegs; i++) {
       sgpr[user_sgpr_base + i] = user_data[i];
       known[user_sgpr_base + i] = true;
     }
@@ -252,41 +253,41 @@ struct ScalarEval {
     known[126] = known[127] = true;
   }
 
-  bool AllKnown(uint32_t s, uint32_t n) const {
+  bool AllKnown(u32 s, u32 n) const {
     if (s + n > kRegs)
       return false;
-    for (uint32_t i = 0; i < n; i++)
+    for (u32 i = 0; i < n; i++)
       if (!known[s + i])
         return false;
     return true;
   }
-  uint64_t Ptr(uint32_t s) const {
-    return sgpr[s] | (static_cast<uint64_t>(sgpr[s + 1] & 0xFFFF) << 32);
+  u64 Ptr(u32 s) const {
+    return sgpr[s] | (static_cast<u64>(sgpr[s + 1] & 0xFFFF) << 32);
   }
-  void Set(uint32_t s, uint32_t value) {
+  void Set(u32 s, u32 value) {
     if (s < kRegs) {
       sgpr[s] = value;
       known[s] = true;
     }
   }
-  uint32_t cur_pc = 0;
-  uint32_t clear_pc[kRegs] = {};
-  void Clear(uint32_t s) {
+  u32 cur_pc = 0;
+  u32 clear_pc[kRegs] = {};
+  void Clear(u32 s) {
     if (s < kRegs) {
       known[s] = false;
       clear_pc[s] = cur_pc;
     }
   }
-  void SetDest(uint32_t base, uint32_t offset, uint32_t value) {
+  void SetDest(u32 base, u32 offset, u32 value) {
     if (base != 125)
       Set(base + offset, value);
   }
-  void ClearDest(uint32_t base, uint32_t offset) {
+  void ClearDest(u32 base, u32 offset) {
     if (base != 125)
       Clear(base + offset);
   }
 
-  bool Source(uint32_t field, uint32_t literal, uint32_t& value) const {
+  bool Source(u32 field, u32 literal, u32& value) const {
     if (field == 125) {
       value = 0;
       return true;
@@ -302,7 +303,7 @@ struct ScalarEval {
     else if (field >= 129 && field <= 192)
       value = field - 128;
     else if (field >= 193 && field <= 208)
-      value = static_cast<uint32_t>(-static_cast<int32_t>(field - 192));
+      value = static_cast<u32>(-static_cast<i32>(field - 192));
     else if (field == 240)
       value = 0x3f000000u;
     else if (field == 241)
@@ -325,7 +326,7 @@ struct ScalarEval {
       return false;
     return true;
   }
-  bool SourceHi(uint32_t field, uint32_t& value) const {
+  bool SourceHi(u32 field, u32& value) const {
     if (field == 125) {
       value = 0;
       return true;
@@ -339,16 +340,16 @@ struct ScalarEval {
   void Step(const Inst& inst) {
     cur_pc = inst.pc;
     if (inst.enc == Enc::kSop1) {
-      const uint32_t sdst = (inst.raw[0] >> 16) & 0x7F,
+      const u32 sdst = (inst.raw[0] >> 16) & 0x7F,
                      ssrc = inst.raw[0] & 0xFF;
       if (inst.opcode == 0x03) {
-        uint32_t value;
+        u32 value;
         if (Source(ssrc, inst.literal, value))
           SetDest(sdst, 0, value);
         else
           ClearDest(sdst, 0);
       } else if (inst.opcode == 0x04) {
-        uint32_t lo, hi;
+        u32 lo, hi;
         if (Source(ssrc, inst.literal, lo) && SourceHi(ssrc, hi)) {
           SetDest(sdst, 0, lo);
           SetDest(sdst, 1, hi);
@@ -365,7 +366,7 @@ struct ScalarEval {
       return;
     }
     if (inst.enc == Enc::kSop2) {
-      const uint32_t sdst = (inst.raw[0] >> 16) & 0x7F;
+      const u32 sdst = (inst.raw[0] >> 16) & 0x7F;
       if (inst.opcode == 0x0A || inst.opcode == 0x0B) {
         if (!scc_known) {
           if (kDbg) {
@@ -380,9 +381,9 @@ struct ScalarEval {
             ClearDest(sdst, 1);
           return;
         }
-        const uint32_t source =
+        const u32 source =
             scc ? inst.raw[0] & 0xFF : (inst.raw[0] >> 8) & 0xFF;
-        uint32_t value;
+        u32 value;
         if (Source(source, inst.literal, value)) {
           SetDest(sdst, 0, value);
         } else {
@@ -404,7 +405,7 @@ struct ScalarEval {
         }
         return;
       }
-      uint32_t a, b;
+      u32 a, b;
       if (!Source(inst.raw[0] & 0xFF, inst.literal, a) ||
           !Source((inst.raw[0] >> 8) & 0xFF, inst.literal, b)) {
         ClearDest(sdst, 0);
@@ -424,52 +425,52 @@ struct ScalarEval {
       // clears VCC, then the cselect clears the descriptor dword and the whole
       // attribute is dropped.
       if (inst.opcode == 0x29 || inst.opcode == 0x2A) {
-        uint32_t a_hi;
+        u32 a_hi;
         if (!SourceHi(inst.raw[0] & 0xFF, a_hi)) {
           ClearDest(sdst, 0);
           ClearDest(sdst, 1);
           scc_known = false;
           return;
         }
-        const uint64_t wide = a | (static_cast<uint64_t>(a_hi) << 32);
-        const uint32_t off = b & 0x3F, width = (b >> 16) & 0x7F;
-        uint64_t r = 0;
+        const u64 wide = a | (static_cast<u64>(a_hi) << 32);
+        const u32 off = b & 0x3F, width = (b >> 16) & 0x7F;
+        u64 r = 0;
         if (width) {
           r = wide >> off;
           if (width < 64)
-            r &= (uint64_t{1} << width) - 1;
+            r &= (u64{1} << width) - 1;
           if (inst.opcode == 0x2A && width < 64 &&
-              (r & (uint64_t{1} << (width - 1))))
-            r |= ~((uint64_t{1} << width) - 1);  // sign-extend
+              (r & (u64{1} << (width - 1))))
+            r |= ~((u64{1} << width) - 1);  // sign-extend
         }
-        SetDest(sdst, 0, static_cast<uint32_t>(r));
-        SetDest(sdst, 1, static_cast<uint32_t>(r >> 32));
+        SetDest(sdst, 0, static_cast<u32>(r));
+        SetDest(sdst, 1, static_cast<u32>(r >> 32));
         scc = r != 0;
         scc_known = true;
         return;
       }
       if (inst.opcode == 0x1F || inst.opcode == 0x21 || inst.opcode == 0x23) {
-        uint32_t a_hi;
+        u32 a_hi;
         if (!SourceHi(inst.raw[0] & 0xFF, a_hi)) {
           ClearDest(sdst, 0);
           ClearDest(sdst, 1);
           scc_known = false;
           return;
         }
-        const uint64_t wide = a | (static_cast<uint64_t>(a_hi) << 32);
-        const uint32_t n = b & 63;
-        const uint64_t r =
+        const u64 wide = a | (static_cast<u64>(a_hi) << 32);
+        const u32 n = b & 63;
+        const u64 r =
             inst.opcode == 0x1F  ? wide << n
             : inst.opcode == 0x21
                 ? wide >> n
-                : static_cast<uint64_t>(static_cast<int64_t>(wide) >> n);
-        SetDest(sdst, 0, static_cast<uint32_t>(r));
-        SetDest(sdst, 1, static_cast<uint32_t>(r >> 32));
+                : static_cast<u64>(static_cast<i64>(wide) >> n);
+        SetDest(sdst, 0, static_cast<u32>(r));
+        SetDest(sdst, 1, static_cast<u32>(r >> 32));
         scc = r != 0;
         scc_known = true;
         return;
       }
-      uint32_t value;
+      u32 value;
       switch (inst.opcode) {
         case 0x00:
         case 0x02:
@@ -510,17 +511,17 @@ struct ScalarEval {
           value = a >> (b & 31);
           break;
         case 0x22:
-          value = static_cast<uint32_t>(static_cast<int32_t>(a) >> (b & 31));
+          value = static_cast<u32>(static_cast<i32>(a) >> (b & 31));
           break;
         case 0x26:
           value = a * b;
           break;
         case 0x27: {
-          const uint32_t offset = b & 31;
-          const uint32_t width = (b >> 16) & 0x7F;
+          const u32 offset = b & 31;
+          const u32 width = (b >> 16) & 0x7F;
           value = width >= 32 - offset
                       ? a >> offset
-                      : (a >> offset) & ((uint32_t{1} << width) - 1);
+                      : (a >> offset) & ((u32{1} << width) - 1);
           break;
         }
         case 0x2f:
@@ -560,10 +561,10 @@ struct ScalarEval {
       return;
     }
     if (inst.enc == Enc::kSopk) {
-      const uint32_t sdst = (inst.raw[0] >> 16) & 0x7F;
-      const uint32_t imm = inst.raw[0] & 0xFFFF;
-      const uint32_t simm = static_cast<uint32_t>(
-          static_cast<int32_t>(static_cast<int16_t>(imm)));
+      const u32 sdst = (inst.raw[0] >> 16) & 0x7F;
+      const u32 imm = inst.raw[0] & 0xFFFF;
+      const u32 simm = static_cast<u32>(
+          static_cast<i32>(static_cast<i16>(imm)));
       if (inst.opcode == 0x00) {
         SetDest(sdst, 0, simm);
       } else if (inst.opcode == 0x02) {
@@ -572,13 +573,13 @@ struct ScalarEval {
         else if (scc)
           SetDest(sdst, 0, simm);
       } else if (inst.opcode >= 0x03 && inst.opcode <= 0x0E) {
-        uint32_t value;
+        u32 value;
         if (!Source(sdst, 0, value)) {
           scc_known = false;
           return;
         }
-        const int32_t a = static_cast<int32_t>(value);
-        const int32_t b = static_cast<int32_t>(simm);
+        const i32 a = static_cast<i32>(value);
+        const i32 b = static_cast<i32>(simm);
         switch (inst.opcode) {
           case 0x03:
             scc = a == b;
@@ -619,7 +620,7 @@ struct ScalarEval {
         }
         scc_known = true;
       } else if (inst.opcode == 0x0F || inst.opcode == 0x10) {
-        uint32_t value;
+        u32 value;
         if (Source(sdst, 0, value))
           SetDest(sdst, 0, inst.opcode == 0x0F ? value + simm : value * simm);
         if (inst.opcode == 0x0F)
@@ -630,7 +631,7 @@ struct ScalarEval {
       return;
     }
     if (inst.enc == Enc::kSopc) {
-      uint32_t a, b;
+      u32 a, b;
       if (!Source(inst.raw[0] & 0xFF, inst.literal, a) ||
           !Source((inst.raw[0] >> 8) & 0xFF, inst.literal, b)) {
         scc_known = false;
@@ -646,16 +647,16 @@ struct ScalarEval {
           scc = a != b;
           break;
         case 0x02:
-          scc = static_cast<int32_t>(a) > static_cast<int32_t>(b);
+          scc = static_cast<i32>(a) > static_cast<i32>(b);
           break;
         case 0x03:
-          scc = static_cast<int32_t>(a) >= static_cast<int32_t>(b);
+          scc = static_cast<i32>(a) >= static_cast<i32>(b);
           break;
         case 0x04:
-          scc = static_cast<int32_t>(a) < static_cast<int32_t>(b);
+          scc = static_cast<i32>(a) < static_cast<i32>(b);
           break;
         case 0x05:
-          scc = static_cast<int32_t>(a) <= static_cast<int32_t>(b);
+          scc = static_cast<i32>(a) <= static_cast<i32>(b);
           break;
         case 0x08:
           scc = a > b;
@@ -685,29 +686,29 @@ struct ScalarEval {
     if (inst.enc != Enc::kSmrd)
       return;
     const Smem smem = DecodeSmem(inst);
-    const uint32_t dwords = SmemLoadCount(smem.op);
+    const u32 dwords = SmemLoadCount(smem.op);
     if (!dwords)
       return;
     const bool buffer = smem.op >= 0x08;
     const bool base_known = AllKnown(smem.sbase, buffer ? 4 : 2);
-    const uint64_t base = base_known ? Ptr(smem.sbase) : 0;
-    uint32_t soffset = 0;
+    const u64 base = base_known ? Ptr(smem.sbase) : 0;
+    u32 soffset = 0;
     const bool offset_known = Source(smem.soffset, 0, soffset);
-    const int64_t immediate = buffer
-                                  ? static_cast<int64_t>(inst.raw[1] & 0xFFFFF)
-                                  : static_cast<int64_t>(smem.offset);
-    const int64_t byte_offset =
-        static_cast<int64_t>(soffset & ~3u) + (immediate & ~int64_t{3});
-    for (uint32_t i = 0; i < dwords; i++)
+    const i64 immediate = buffer
+                                  ? static_cast<i64>(inst.raw[1] & 0xFFFFF)
+                                  : static_cast<i64>(smem.offset);
+    const i64 byte_offset =
+        static_cast<i64>(soffset & ~3u) + (immediate & ~i64{3});
+    for (u32 i = 0; i < dwords; i++)
       ClearDest(smem.sdst, i);
     if (!base_known || !offset_known || byte_offset < 0 ||
-        static_cast<uint64_t>(byte_offset) > UINT64_MAX - base)
+        static_cast<u64>(byte_offset) > UINT64_MAX - base)
       return;
-    const uint64_t address = base + static_cast<uint64_t>(byte_offset);
-    if (!GuestRange(address, static_cast<uint64_t>(dwords) * 4))
+    const u64 address = base + static_cast<u64>(byte_offset);
+    if (!GuestRange(address, static_cast<u64>(dwords) * 4))
       return;
-    const auto* src = reinterpret_cast<const uint32_t*>(address);
-    for (uint32_t i = 0; i < dwords; i++)
+    const auto* src = reinterpret_cast<const u32*>(address);
+    for (u32 i = 0; i < dwords; i++)
       SetDest(smem.sdst, i, src[i]);
   }
 };
@@ -717,40 +718,40 @@ struct ScalarEval {
 MimgBindingPlan RdnaPlanMimg(const Program& program) {
   MimgBindingPlan plan;
   struct BindingKey {
-    uint32_t srsrc;
-    uint32_t ssamp;
-    uint32_t flags;
-    uint32_t versions[12];
+    u32 srsrc;
+    u32 ssamp;
+    u32 flags;
+    u32 versions[12];
   };
   std::vector<BindingKey> keys;
-  uint32_t versions[136] = {};
-  uint32_t generation = 1;
+  u32 versions[136] = {};
+  u32 generation = 1;
   for (const Inst& inst : program) {
     if (inst.enc == Enc::kMimg) {
-      const uint32_t w0 = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
-      const uint32_t dim = (w0 >> 3) & 0x7;
+      const u32 w0 = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
+      const u32 dim = (w0 >> 3) & 0x7;
       const bool r128 = (w0 >> 15) & 1;
-      const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
+      const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
       const bool sampling = op >= 0x20;
       const bool storage = op == 0x08 || op == 0x09;
-      const uint32_t ssamp = sampling ? ((w1 >> 21) & 0x1F) * 4 : 0xFFu;
+      const u32 ssamp = sampling ? ((w1 >> 21) & 0x1F) * 4 : 0xFFu;
       BindingKey key{
           .srsrc = srsrc,
           .ssamp = ssamp,
-          .flags = static_cast<uint32_t>(MimgArrayed(dim)) |
+          .flags = static_cast<u32>(MimgArrayed(dim)) |
                    ((op == 0x28 || op == 0x2f ? 1u : 0u) << 1) |
                    ((op == 0x47 ? 1u : 0u) << 2) |
-                   (static_cast<uint32_t>(storage) << 3) |
-                   (static_cast<uint32_t>(r128) << 4),
+                   (static_cast<u32>(storage) << 3) |
+                   (static_cast<u32>(r128) << 4),
       };
-      for (uint32_t i = 0; i < (r128 ? 4u : 8u); i++)
+      for (u32 i = 0; i < (r128 ? 4u : 8u); i++)
         key.versions[i] = versions[srsrc + i];
       if (sampling)
-        for (uint32_t i = 0; i < 4; i++)
+        for (u32 i = 0; i < 4; i++)
           key.versions[8 + i] = versions[ssamp + i];
 
-      uint32_t binding = static_cast<uint32_t>(keys.size());
-      for (uint32_t i = 0; i < keys.size(); i++)
+      u32 binding = static_cast<u32>(keys.size());
+      for (u32 i = 0; i < keys.size(); i++)
         if (std::memcmp(&keys[i], &key, sizeof(key)) == 0) {
           binding = i;
           break;
@@ -764,32 +765,32 @@ MimgBindingPlan RdnaPlanMimg(const Program& program) {
     }
 
     const ScalarWrite write = DecodeScalarWrite(inst);
-    for (uint32_t i = 0; i < write.count && write.first + i < 136; i++)
+    for (u32 i = 0; i < write.count && write.first + i < 136; i++)
       versions[write.first + i] = generation;
     generation++;
   }
   return plan;
 }
 
-TImage DecodeTImage(const uint32_t* d, bool r128) {
+TImage DecodeTImage(const u32* d, bool r128) {
   TImage t;
-  const uint32_t descriptor_dwords = r128 ? 4 : 8;
+  const u32 descriptor_dwords = r128 ? 4 : 8;
   t.null_descriptor = std::all_of(
-      d, d + descriptor_dwords, [](uint32_t word) { return word == 0; });
-  const uint64_t base_units = d[0] | (static_cast<uint64_t>(d[1] & 0xFF) << 32);
+      d, d + descriptor_dwords, [](u32 word) { return word == 0; });
+  const u64 base_units = d[0] | (static_cast<u64>(d[1] & 0xFF) << 32);
   t.base = base_units << 8;
   t.min_lod = (d[1] >> 8) & 0xFFF;
   t.width = (((d[1] >> 30) & 0x3) | ((d[2] & 0xFFF) << 2)) + 1;
   t.height = ((d[2] >> 14) & 0x3FFF) + 1;
   t.base_mip = (d[3] >> 12) & 0xF;
-  const uint32_t last_level = (d[3] >> 16) & 0xF;
-  const uint32_t sw_mode = (d[3] >> 20) & 0x1F;
+  const u32 last_level = (d[3] >> 16) & 0xF;
+  const u32 sw_mode = (d[3] >> 20) & 0x1F;
   t.type = (d[3] >> 28) & 0xF;
   for (int i = 0; i < 4; i++)
     t.dst_sel[i] = (d[3] >> (i * 3)) & 0x7;
-  const uint32_t depth = r128 ? 0 : d[4] & 0x1fff;
+  const u32 depth = r128 ? 0 : d[4] & 0x1fff;
   t.base_array = r128 ? 0 : (d[4] >> 16) & 0x1fff;
-  const uint32_t max_mip = r128 ? last_level : (d[5] >> 4) & 0xf;
+  const u32 max_mip = r128 ? last_level : (d[5] >> 4) & 0xf;
 
   t.pitch = t.width;
   // Cube (type 11) is sampled as a 6-layer 2D array; see MimgArrayed.
@@ -797,15 +798,15 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   const bool volumetric = t.type == 10;  // 3D
   t.layers = (t.arrayed || volumetric) ? depth + 1 : 1;
   if (t.type == 11)
-    t.layers = std::max<uint32_t>(t.layers, 6);
+    t.layers = std::max<u32>(t.layers, 6);
   t.view_layers =
       t.arrayed
-          ? std::max<uint32_t>(t.layers - std::min(t.base_array, t.layers), 1)
+          ? std::max<u32>(t.layers - std::min(t.base_array, t.layers), 1)
           : 1;
   t.mip_levels = max_mip + 1;
-  t.view_mips = std::max<uint32_t>(last_level + 1 - t.base_mip, 1);
+  t.view_mips = std::max<u32>(last_level + 1 - t.base_mip, 1);
   const bool valid_array = !t.arrayed || t.base_array <= depth;
-  const uint32_t gfmt = (d[1] >> 20) & 0x1FF;
+  const u32 gfmt = (d[1] >> 20) & 0x1FF;
   Gfx10ImgFormat(gfmt, t.dfmt, t.nfmt);
   // gfx10 swizzle mode 0 = SW_LINEAR -> the renderer's linear index. The
   // "standard" modes (256 B / 4 KiB / 64 KiB, ids 1/5/9) map onto the gfx10
@@ -817,12 +818,12 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   // the detiler only covers linear and the three "standard" modes, and anything
   // else is rejected into the white fallback (flat-coloured quads).
   if (kGpuSwcensus) {
-    static uint32_t seen[64] = {};
+    static u32 seen[64] = {};
     if (sw_mode < 64 && seen[sw_mode]++ == 0)
       BASE_LOGI("swcensus", "sw_mode={} first seen ({}x{} gfmt={})",
                 sw_mode, t.width, t.height, gfmt);
-    static uint32_t seen_sel[4096] = {};
-    const uint32_t packed = (t.dst_sel[0]) | (t.dst_sel[1] << 3) |
+    static u32 seen_sel[4096] = {};
+    const u32 packed = (t.dst_sel[0]) | (t.dst_sel[1] << 3) |
                             (t.dst_sel[2] << 6) | (t.dst_sel[3] << 9);
     if (packed < 4096 && seen_sel[packed]++ == 0)
       BASE_LOGI(
@@ -850,21 +851,21 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   }
   if (sw_mode == 0 && t.dfmt && t.dfmt < 35) {
     // gfx10 linear surfaces align each row to 256 bytes.
-    static constexpr uint8_t kElementBytes[] = {
+    static constexpr u8 kElementBytes[] = {
         0, 1, 2, 2, 4, 4, 4, 4, 4, 4, 4, 8, 8, 12, 16,
     };
-    const uint32_t eb =
+    const u32 eb =
         t.dfmt < sizeof(kElementBytes) ? kElementBytes[t.dfmt] : 0;
     if (!eb)
       return t;
-    const uint32_t pa = 256 / std::gcd(256u, eb);
+    const u32 pa = 256 / std::gcd(256u, eb);
     t.pitch = ((t.width + pa - 1) / pa) * pa;
   }
   if (kAgcTrace) {
-    static uint32_t seen[32], n_seen = 0;
-    const uint32_t key = (gfmt << 8) | sw_mode;
+    static u32 seen[32], n_seen = 0;
+    const u32 key = (gfmt << 8) | sw_mode;
     bool is_new = true;
-    for (uint32_t i = 0; i < n_seen; i++)
+    for (u32 i = 0; i < n_seen; i++)
       if (seen[i] == key) {
         is_new = false;
         break;
@@ -881,8 +882,8 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   // gfx10 mip chains pack their small levels into a shared "mip tail" block
   // whose layout the detiler does not model; only level 0 is addressed
   // correctly, so sample that one rather than reading a wrong offset.
-  uint32_t max_levels = 1;
-  for (uint32_t extent = std::max(t.width, t.height); extent > 1; extent >>= 1)
+  u32 max_levels = 1;
+  for (u32 extent = std::max(t.width, t.height); extent > 1; extent >>= 1)
     max_levels++;
   const bool valid_mips = t.base_mip <= last_level && last_level < max_levels &&
                           t.base_mip + t.view_mips <= t.mip_levels;
@@ -904,11 +905,11 @@ TImage DecodeTImage(const uint32_t* d, bool r128) {
   return t;
 }
 
-std::vector<TImage> TrackTextures(const uint32_t* ps_code,
-                                  const uint32_t* pud,
-                                  uint32_t user_sgprs) {
+std::vector<TImage> TrackTextures(const u32* ps_code,
+                                  const u32* pud,
+                                  u32 user_sgprs) {
   std::vector<TImage> out;
-  if (!ps_code || !pud || !InGuest(reinterpret_cast<uint64_t>(ps_code)))
+  if (!ps_code || !pud || !InGuest(reinterpret_cast<u64>(ps_code)))
     return out;
   const Program prog = ReachableProgram(DecodeShader(ps_code, 4096));
   const MimgBindingPlan plan = RdnaPlanMimg(prog);
@@ -923,14 +924,14 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
     auto it = plan.binding_by_pc.find(in.pc);
     if (it == plan.binding_by_pc.end() || filled[it->second])
       continue;
-    const uint32_t b = it->second;
-    const uint32_t w0 = in.raw[0], w1 = in.raw[1], op = in.opcode;
+    const u32 b = it->second;
+    const u32 w0 = in.raw[0], w1 = in.raw[1], op = in.opcode;
     // DELTA_GPU_TEXRESOLVE: which SGPR quad each sampler's T# comes from, and
     // whether it resolved. A binding that reads back base 0 is either a null
     // descriptor or a chain we failed to walk.
-    const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
+    const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
     const bool r128 = (w0 >> 15) & 1;
-    const uint32_t resource_dwords = r128 ? 4 : 8;
+    const u32 resource_dwords = r128 ? 4 : 8;
     if (kGpuTexresolve && !eval.AllKnown(srsrc, resource_dwords)) {
       BASE_LOGI("texres",
                 "  mimg pc={:04x} w0={:08x} w1={:08x} op={:#x} nsa={} "
@@ -940,7 +941,7 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
       // An "inline" descriptor that user data never programmed has to come from
       // somewhere else in the shader: list every scalar write to its registers.
       for (const Inst& w : prog) {
-        uint32_t d0 = 0xFFFF, cnt = 1;
+        u32 d0 = 0xFFFF, cnt = 1;
         if (w.enc == Enc::kSop1) {
           d0 = (w.raw[0] >> 16) & 0x7F;
           cnt = w.opcode == 0x04 ? 2 : 1;
@@ -969,7 +970,7 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
       out[b].depth_compare = op == 0x28 || op == 0x2f;
       out[b].force_lod_zero = op == 0x47;
       out[b].storage = op == 0x08 || op == 0x09;
-      const uint32_t ssamp = ((w1 >> 21) & 0x1F) * 4;
+      const u32 ssamp = ((w1 >> 21) & 0x1F) * 4;
       if (op >= 0x20 && eval.AllKnown(ssamp, 4)) {
         std::memcpy(out[b].sampler, &eval.sgpr[ssamp], sizeof(out[b].sampler));
         out[b].sampler_valid = true;
@@ -980,13 +981,13 @@ std::vector<TImage> TrackTextures(const uint32_t* ps_code,
   return out;
 }
 
-std::unordered_map<uint32_t, BufferResource> ResolveBuffers(
-    const uint32_t* code,
-    const uint32_t* user_data,
-    uint32_t user_sgprs,
-    uint32_t user_sgpr_base) {
-  std::unordered_map<uint32_t, BufferResource> out;
-  if (!code || !user_data || !InGuest(reinterpret_cast<uint64_t>(code)))
+std::unordered_map<u32, BufferResource> ResolveBuffers(
+    const u32* code,
+    const u32* user_data,
+    u32 user_sgprs,
+    u32 user_sgpr_base) {
+  std::unordered_map<u32, BufferResource> out;
+  if (!code || !user_data || !InGuest(reinterpret_cast<u64>(code)))
     return out;
   ScalarEval eval(user_data, user_sgprs, user_sgpr_base);
   for (const Inst& inst : ReachableProgram(DecodeShader(code, 4096))) {
@@ -1001,20 +1002,20 @@ std::unordered_map<uint32_t, BufferResource> ResolveBuffers(
     } else if (inst.enc == Enc::kMimg) {
       // An image T# an SRT chain produced: the dispatch path needs its extents
       // and format to stage the surface, and cannot read them out of user data.
-      const uint32_t srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
-      const uint32_t dwords = ((inst.raw[0] >> 15) & 1) ? 4u : 8u;
+      const u32 srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
+      const u32 dwords = ((inst.raw[0] >> 15) & 1) ? 4u : 8u;
       if (eval.AllKnown(srsrc, dwords)) {
         BufferResource resource;
         resource.base = eval.Ptr(srsrc);
         resource.descriptor_dwords = dwords;
         std::memcpy(resource.descriptor, &eval.sgpr[srsrc],
-                    dwords * sizeof(uint32_t));
+                    dwords * sizeof(u32));
         resource.descriptor_valid = true;
         out.emplace(inst.pc, resource);
       }
     } else if ((inst.enc == Enc::kMubuf || inst.enc == Enc::kMtbuf) &&
                inst.opcode <= 0x03) {
-      const uint32_t srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
+      const u32 srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
       if (kDbg) {
         static int n = 0;
         if (n++ < 40)
@@ -1031,9 +1032,9 @@ std::unordered_map<uint32_t, BufferResource> ResolveBuffers(
         BufferResource resource;
         resource.base = eval.Ptr(srsrc);
         resource.descriptor_dwords = 4;
-        std::memcpy(resource.descriptor, &eval.sgpr[srsrc], 4 * sizeof(uint32_t));
+        std::memcpy(resource.descriptor, &eval.sgpr[srsrc], 4 * sizeof(u32));
         resource.descriptor_valid = true;
-        const uint32_t soff = (inst.raw[1] >> 24) & 0xFF;
+        const u32 soff = (inst.raw[1] >> 24) & 0xFF;
         if (soff == 128) {
           resource.soffset_valid = true;
         } else if (soff > 128 && soff <= 192) {

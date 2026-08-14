@@ -11,38 +11,39 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 
-int PS4ABI sceNpTrophyCreateContext(int32_t *context, int32_t userId,
-                                    uint32_t serviceLabel, uint64_t options);
-int PS4ABI sceNpTrophyCreateHandle(int32_t *handle);
-int PS4ABI sceNpTrophyDestroyContext(int32_t context);
-int PS4ABI sceNpTrophyDestroyHandle(int32_t handle);
-int PS4ABI sceNpTrophyAbortHandle(int32_t handle);
-int PS4ABI sceNpTrophyRegisterContext(int32_t context, int32_t handle,
-                                      uint64_t options);
-int PS4ABI sceNpTrophyUnlockTrophy(int32_t context, int32_t handle,
-                                   int32_t trophyId, int32_t *platinumId);
-int PS4ABI sceNpTrophyGetTrophyUnlockState(int32_t context, int32_t handle,
-                                           void *flags, uint32_t *count);
-int PS4ABI sceNpTrophyGetGameInfo(int32_t context, int32_t handle,
+int PS4ABI sceNpTrophyCreateContext(i32 *context, i32 userId,
+                                    u32 serviceLabel, u64 options);
+int PS4ABI sceNpTrophyCreateHandle(i32 *handle);
+int PS4ABI sceNpTrophyDestroyContext(i32 context);
+int PS4ABI sceNpTrophyDestroyHandle(i32 handle);
+int PS4ABI sceNpTrophyAbortHandle(i32 handle);
+int PS4ABI sceNpTrophyRegisterContext(i32 context, i32 handle,
+                                      u64 options);
+int PS4ABI sceNpTrophyUnlockTrophy(i32 context, i32 handle,
+                                   i32 trophyId, i32 *platinumId);
+int PS4ABI sceNpTrophyGetTrophyUnlockState(i32 context, i32 handle,
+                                           void *flags, u32 *count);
+int PS4ABI sceNpTrophyGetGameInfo(i32 context, i32 handle,
                                   void *details, void *data);
-int PS4ABI sceNpTrophyGetTrophyInfo(int32_t context, int32_t handle,
-                                    int32_t trophyId, void *details,
+int PS4ABI sceNpTrophyGetTrophyInfo(i32 context, i32 handle,
+                                    i32 trophyId, void *details,
                                     void *data);
-int PS4ABI sceNpTrophyGetGroupInfo(int32_t context, int32_t handle,
-                                   int32_t groupId, void *details, void *data);
-int PS4ABI sceNpTrophyGetGameIcon(int32_t context, int32_t handle, void *buffer,
-                                  uint64_t *size);
-int PS4ABI sceNpTrophyGetGroupIcon(int32_t context, int32_t handle,
-                                   int32_t groupId, void *buffer,
-                                   uint64_t *size);
-int PS4ABI sceNpTrophyGetTrophyIcon(int32_t context, int32_t handle,
-                                    int32_t trophyId, void *buffer,
-                                    uint64_t *size);
-int PS4ABI sceNpTrophyCaptureScreenshot(int32_t a, void *b, void *c);
-int PS4ABI sceNpTrophyShowTrophyList(int32_t context, int32_t handle);
+int PS4ABI sceNpTrophyGetGroupInfo(i32 context, i32 handle,
+                                   i32 groupId, void *details, void *data);
+int PS4ABI sceNpTrophyGetGameIcon(i32 context, i32 handle, void *buffer,
+                                  u64 *size);
+int PS4ABI sceNpTrophyGetGroupIcon(i32 context, i32 handle,
+                                   i32 groupId, void *buffer,
+                                   u64 *size);
+int PS4ABI sceNpTrophyGetTrophyIcon(i32 context, i32 handle,
+                                    i32 trophyId, void *buffer,
+                                    u64 *size);
+int PS4ABI sceNpTrophyCaptureScreenshot(i32 a, void *b, void *c);
+int PS4ABI sceNpTrophyShowTrophyList(i32 context, i32 handle);
 }  // extern "C"

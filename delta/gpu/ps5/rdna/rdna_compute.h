@@ -14,6 +14,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"
 
@@ -28,12 +29,12 @@ namespace gpu::rdna {
 // Returns ok=false when the shader uses something the compute backend cannot
 // model, so the caller skips the dispatch loudly instead of running a wrong one
 // (a compute dispatch writes guest memory; a wrong one corrupts it silently).
-gpu::gcn::RecompiledCs RecompileCompute(const uint32_t* cs_code,
-                                        uint32_t num_thread_x,
-                                        uint32_t num_thread_y,
-                                        uint32_t num_thread_z,
-                                        uint32_t user_sgpr,
-                                        uint32_t tgid_enable,
-                                        uint32_t lds_dwords);
+gpu::gcn::RecompiledCs RecompileCompute(const u32* cs_code,
+                                        u32 num_thread_x,
+                                        u32 num_thread_y,
+                                        u32 num_thread_z,
+                                        u32 user_sgpr,
+                                        u32 tgid_enable,
+                                        u32 lds_dwords);
 
 }  // namespace gpu::rdna

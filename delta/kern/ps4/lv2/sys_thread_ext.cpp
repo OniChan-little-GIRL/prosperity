@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <chrono>
 #include <cstdio>
@@ -33,12 +34,12 @@ DELTA_OPTION(bool, kThrExitTrace, "DELTA_THREXIT_TRACE", false);
 namespace krnl {
 
 struct ts64 {
-  int64_t tv_sec;
-  int64_t tv_nsec;
+  i64 tv_sec;
+  i64 tv_nsec;
 };
 
 struct sched_param64 {
-  int32_t sched_priority;
+  i32 sched_priority;
 };
 
 // FreeBSD stores a nonzero value at *state and wakes the umtx waiter the joiner
@@ -46,7 +47,7 @@ struct sched_param64 {
 // the whole emulated process. Publishing the state word, waking the joiner, and
 // returning lets the guest thread function return so cpu::runGuestThread unwinds
 // the host thread.
-int PS4ABI sys_thr_exit(int64_t *state) {
+int PS4ABI sys_thr_exit(i64 *state) {
   if (state)
     *state = 1;
   // The kernel calls kern_umtx_wake(*a2, 0x7FFFFFFF) here so a pthread_join
@@ -69,12 +70,12 @@ int PS4ABI sys_thr_exit(int64_t *state) {
 }
 
 // No guest signal machinery, so inter-thread kills are accepted and logged.
-int PS4ABI sys_thr_kill(uint32_t tid, int sig) {
+int PS4ABI sys_thr_kill(u32 tid, int sig) {
   BASE_LOGI("thr_kill", "tid={} sig={} (ignored)", tid, sig);
   return 0;
 }
 
-int PS4ABI sys_thr_kill2(uint32_t pid, uint32_t tid, int sig) {
+int PS4ABI sys_thr_kill2(u32 pid, u32 tid, int sig) {
   BASE_LOGI("thr_kill2", "pid={} tid={} sig={} (ignored)", pid, tid, sig);
   return 0;
 }
@@ -94,9 +95,9 @@ int PS4ABI sys_thr_suspend(const void *timeout) {
   return 0;
 }
 
-int PS4ABI sys_thr_wake(uint32_t tid) { return 0; }
+int PS4ABI sys_thr_wake(u32 tid) { return 0; }
 
-int PS4ABI sys_thr_set_name(uint32_t tid, const char *name) {
+int PS4ABI sys_thr_set_name(u32 tid, const char *name) {
   BASE_LOGI("thr_set_name", "tid={} name={}", tid, name ? name : "(null)");
   // Mirror the name onto the host thread so ps/gdb and the SIGUSR1 probe can tell
   // a title's threads apart. This names the CALLER, not `tid`: we have no guest
@@ -112,7 +113,7 @@ int PS4ABI sys_thr_set_name(uint32_t tid, const char *name) {
   return 0;
 }
 
-int PS4ABI sys_thr_get_name(uint32_t tid, char *buf) {
+int PS4ABI sys_thr_get_name(u32 tid, char *buf) {
   if (buf)
     std::strcpy(buf, "thr");
   return 0;
@@ -192,27 +193,27 @@ int PS4ABI sys_cpuset_setid(int which, int level, void *id, int setid) {
   return 0;
 }
 
-int PS4ABI sys_cpuset_getid(int level, int which, int64_t id, int *setid) {
+int PS4ABI sys_cpuset_getid(int level, int which, i64 id, int *setid) {
   if (setid)
     *setid = 0;
   return 0;
 }
 
-int PS4ABI sys_cpuset_setaffinity(int level, int which, int64_t id,
+int PS4ABI sys_cpuset_setaffinity(int level, int which, i64 id,
                                   size_t cpusetsize, const void *mask) {
   return 0;
 }
 
 // We can't safely snapshot a JITed guest thread's registers, so suspend/resume
 // no-op and the get/set context calls report "not supported".
-int PS4ABI sys_thr_suspend_ucontext(uint32_t tid) { return 0; }
-int PS4ABI sys_thr_resume_ucontext(uint32_t tid) { return 0; }
+int PS4ABI sys_thr_suspend_ucontext(u32 tid) { return 0; }
+int PS4ABI sys_thr_resume_ucontext(u32 tid) { return 0; }
 
-int PS4ABI sys_thr_get_ucontext(uint32_t tid, void *ucontext) {
+int PS4ABI sys_thr_get_ucontext(u32 tid, void *ucontext) {
   BASE_LOGI("thr_get_ucontext", "tid={} (unsupported)", tid);
   return -SysError::eOPNOTSUPP;
 }
-int PS4ABI sys_thr_set_ucontext(uint32_t tid, void *ucontext) {
+int PS4ABI sys_thr_set_ucontext(u32 tid, void *ucontext) {
   BASE_LOGI("thr_set_ucontext", "tid={} (unsupported)", tid);
   return -SysError::eOPNOTSUPP;
 }

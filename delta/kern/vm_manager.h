@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <mutex>
 
 #include <base/containers/vector.h>
@@ -22,14 +23,14 @@ using mprot = utl::pageProtection;
 using alloct = utl::allocationType;
 
 struct pageInfo {
-  uint8_t *ptr;
+  u8 *ptr;
   size_t size;
   mprot prot;
   // Full SCE protection as the guest requested it, including the GPU bits
   // (0x10 GPU_READ / 0x20 GPU_WRITE) that the host r/w/x `prot` drops. Reported
   // by sceKernelVirtualQuery; libSceVideoOut rejects a scanout buffer whose query
   // lacks the GPU-read bit / direct-memory type.
-  uint32_t sceProt = 0;
+  u32 sceProt = 0;
   const char *name = nullptr;
   // MAP_VOID address-space reservation (no committed backing yet): virtual
   // query must report it as NOT committed / NOT flexible, and a later
@@ -39,10 +40,10 @@ struct pageInfo {
   // sceKernelMapDirectMemory. hasPhys says the field is real: sceKernelVirtual-
   // Query reports it, and titles convert it into a block index in their own
   // heap map, so a VA substituted here lands nowhere near the right block.
-  uint64_t physOffset = 0;
+  u64 physOffset = 0;
   bool hasPhys = false;
 
-  pageInfo(uint8_t *p, size_t s, mprot mp, uint32_t sp = 0, bool rsv = false)
+  pageInfo(u8 *p, size_t s, mprot mp, u32 sp = 0, bool rsv = false)
       : ptr(p), size(s), prot(mp), sceProt(sp), reserved(rsv) {}
 };
 
@@ -52,42 +53,42 @@ public:
   ~vmManager();
 
   bool init();
-  void add(uint8_t *ptr, size_t size, mprot, uint32_t sceProt = 0,
+  void add(u8 *ptr, size_t size, mprot, u32 sceProt = 0,
            bool reserved = false);
   // Same, for a range backed by direct memory at `physOffset`.
-  void addDirect(uint8_t *ptr, size_t size, mprot, uint32_t sceProt,
-                 uint64_t physOffset);
+  void addDirect(u8 *ptr, size_t size, mprot, u32 sceProt,
+                 u64 physOffset);
   // Drop bookkeeping for [ptr, ptr+size): entries fully inside vanish,
   // straddling entries are truncated/split. Host pages are the caller's
   // business (sys_munmap keeps them mapped; stale guest pointers then read
   // stable garbage instead of faulting, and the NEXT mapping there rules).
-  void remove(uint8_t *ptr, size_t size);
-  pageInfo *get(uint8_t *ptr);
+  void remove(u8 *ptr, size_t size);
+  pageInfo *get(u8 *ptr);
 
   // Apply a protection to every tracked mapping intersecting [ptr, ptr+size)
   // (kernel vm_map_protect: a range with no tracked mapping is fine, not an
   // error). Updates both the host r/w/x prot and the full SCE prot so
   // sceKernelVirtualQuery reports the mprotect result.
-  void protectRange(uint8_t *ptr, size_t size, mprot prot, uint32_t sceProt);
+  void protectRange(u8 *ptr, size_t size, mprot prot, u32 sceProt);
   // Attach a name to every tracked mapping intersecting [ptr, ptr+size)
   // (kernel vm_map_set_name). Takes a copy of the name.
-  void setRangeName(uint8_t *ptr, size_t size, const char *name);
+  void setRangeName(u8 *ptr, size_t size, const char *name);
 
   // true if [ptr, ptr+size) hits a tracked mapping
-  bool overlaps(uint8_t *ptr, size_t size) const;
+  bool overlaps(u8 *ptr, size_t size) const;
 
   // Diagnostic: invoke `fn(ctx, ptr, size)` for every tracked mapping in the GPU
   // aperture [0x8000_0000_00, 0x8100_0000_00) that is small enough to sweep
   // (<= 4 MiB) -- used to locate the guest's PM4 command buffers without a
   // multi-GB scan of the big dmem pools.
-  void forEachGpuAperturePage(void (*fn)(void *, uint8_t *, size_t),
+  void forEachGpuAperturePage(void (*fn)(void *, u8 *, size_t),
                               void *ctx) const;
 
-  uint8_t *mapMemory(uint8_t *preference, size_t size, utl::pageProtection);
-  void unmapRtMemory(uint8_t *);
+  u8 *mapMemory(u8 *preference, size_t size, utl::pageProtection);
+  void unmapRtMemory(u8 *);
 
 private:
-  void punchHoleLocked(uint8_t *ptr, size_t size);
+  void punchHoleLocked(u8 *ptr, size_t size);
 
   procInfo &pinfo;
 

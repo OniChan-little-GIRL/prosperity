@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
 // FreeBSD POSIX kernel semaphores (ksem_*). These are the libc/pthread-backing
@@ -23,12 +24,12 @@ namespace krnl {
 // timedwait prototype is well-formed; layout matches FreeBSD's struct timespec
 // on the 64-bit ABI.
 struct ksem_timespec {
-  int64_t tv_sec;
-  int64_t tv_nsec;
+  i64 tv_sec;
+  i64 tv_nsec;
 };
 
 int PS4ABI sys_ksem_init(int *idp, unsigned value);
-int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, uint16_t mode,
+int PS4ABI sys_ksem_open(int *idp, const char *name, int oflag, u16 mode,
                          unsigned value);
 int PS4ABI sys_ksem_unlink(const char *name);
 int PS4ABI sys_ksem_close(int id);

@@ -3,13 +3,14 @@
  */
 
 #include "gpu/gcn/spirv/translator.h"
+#include "base/arch.h"
 
 #ifdef DELTA_HAVE_SPIRV_BACKEND
 
 namespace gpu::gcn {
 namespace {
 
-Id InlineHalf(Translator& t, uint32_t field) {
+Id InlineHalf(Translator& t, u32 field) {
   switch (field) {
     case 240:
       return t.U32(0x3800);  // 0.5
@@ -34,13 +35,13 @@ Id InlineHalf(Translator& t, uint32_t field) {
   }
 }
 
-bool IsInlineFloat(uint32_t field) {
+bool IsInlineFloat(u32 field) {
   return field >= 240 && field <= 248;
 }
 
 Id Source16(Translator& t,
-            uint32_t field,
-            uint32_t literal,
+            u32 field,
+            u32 literal,
             bool high,
             bool sign_extend = false) {
   if (IsInlineFloat(field))
@@ -73,7 +74,7 @@ Id FloatToHalf(Translator& t, Id value) {
                t.U32(0xffff));
 }
 
-void Write16(Translator& t, uint32_t vdst, Id value, bool high) {
+void Write16(Translator& t, u32 vdst, Id value, bool high) {
   const Id old = t.Vg(vdst);
   const Id result =
       high ? t.Or(t.And(old, t.U32(0x0000ffff)),
@@ -88,7 +89,7 @@ Id ApplyFloatMods(Translator& t, Id value, bool neg, bool abs) {
   return neg ? t.FNeg(value) : value;
 }
 
-Id ApplyOmod(Translator& t, Id value, uint32_t omod) {
+Id ApplyOmod(Translator& t, Id value, u32 omod) {
   switch (omod) {
     case 1:
       return t.FMul(value, t.F32(2.0f));
@@ -180,8 +181,8 @@ Id FrexpExponent16(Translator& t, Id bits) {
   const Id exponent = t.And(t.Shr(bits, t.U32(10)), t.U32(0x1f));
   const Id fraction = t.And(bits, t.U32(0x3ff));
   const Id msb = t.m.ExtInst(t.t_u, GLSLstd450FindUMsb, {fraction});
-  const Id denorm = t.Add(msb, t.U32(static_cast<uint32_t>(-23)));
-  const Id normal = t.Add(exponent, t.U32(static_cast<uint32_t>(-14)));
+  const Id denorm = t.Add(msb, t.U32(static_cast<u32>(-23)));
+  const Id normal = t.Add(exponent, t.U32(static_cast<u32>(-14)));
   const Id result = t.SelectB(t.IsZero(exponent), denorm, normal);
   const Id zero_or_special = t.m.Emit(
       spv::Op::OpLogicalOr, t.t_bool,
@@ -204,7 +205,7 @@ Id FrexpMantissa16(Translator& t, Id bits) {
   return t.SelectB(t.Eq(exponent, t.U32(31)), bits, zero_result);
 }
 
-Id F16Binary(Translator& t, uint32_t op, Id a, Id b) {
+Id F16Binary(Translator& t, u32 op, Id a, Id b) {
   switch (op) {
     case 0x32:
       return t.FAdd(a, b);
@@ -237,8 +238,8 @@ Id MedianI16(Translator& t, Id a, Id b, Id c, bool is_signed) {
 Id PermuteByte(Translator& t, Id src0, Id src1, Id select) {
   Id result = t.U32(0xff);
   result = t.SelectB(t.Eq(select, t.U32(12)), t.U32(0), result);
-  for (uint32_t index = 8; index <= 11; index++) {
-    const uint32_t byte_index = (index - 8) * 2 + 1;
+  for (u32 index = 8; index <= 11; index++) {
+    const u32 byte_index = (index - 8) * 2 + 1;
     const Id source = byte_index < 4 ? src1 : src0;
     const Id byte =
         t.And(t.Shr(source, t.U32((byte_index & 3) * 8)), t.U32(0xff));
@@ -246,7 +247,7 @@ Id PermuteByte(Translator& t, Id src0, Id src1, Id select) {
         t.SelectB(t.IsNonZero(t.And(byte, t.U32(0x80))), t.U32(0xff), t.U32(0));
     result = t.SelectB(t.Eq(select, t.U32(index)), sign, result);
   }
-  for (uint32_t index = 0; index < 8; index++) {
+  for (u32 index = 0; index < 8; index++) {
     const Id source = index < 4 ? src1 : src0;
     const Id byte = t.And(t.Shr(source, t.U32((index & 3) * 8)), t.U32(0xff));
     result = t.SelectB(t.Eq(select, t.U32(index)), byte, result);
@@ -280,7 +281,7 @@ Id FloatClass16(Translator& t, Id bits, Id mask) {
       t.LAnd(finite_exp, not_sign), t.LAnd(is_inf, not_sign),
   };
   Id result = t.m.ConstBool(false);
-  for (uint32_t i = 0; i < 10; i++) {
+  for (u32 i = 0; i < 10; i++) {
     const Id enabled = t.IsNonZero(t.And(mask, t.U32(1u << i)));
     result = t.m.Emit(spv::Op::OpLogicalOr, t.t_bool,
                       {result, t.LAnd(enabled, classes[i])});
@@ -289,16 +290,16 @@ Id FloatClass16(Translator& t, Id bits, Id mask) {
 }
 
 bool EmitNeoVop1At(Translator& t,
-                   uint32_t op,
-                   uint32_t vdst,
-                   uint32_t field,
-                   uint32_t literal,
+                   u32 op,
+                   u32 vdst,
+                   u32 field,
+                   u32 literal,
                    bool src_high,
                    bool dst_high,
                    bool neg,
                    bool abs,
                    bool clamp,
-                   uint32_t omod,
+                   u32 omod,
                    bool compact) {
   if (op < 0x50 || op > 0x65)
     return false;
@@ -307,7 +308,7 @@ bool EmitNeoVop1At(Translator& t,
       WarnUnsupported("v_swap_b32.modifier", op);
       return true;
     }
-    const uint32_t source = field - 256;
+    const u32 source = field - 256;
     const Id old_dst = t.Vg(vdst), old_source = t.Vg(source);
     t.SetVg(vdst, old_source);
     t.SetVg(source, old_dst);
@@ -445,8 +446,8 @@ bool EmitNeoVop1At(Translator& t,
 }  // namespace
 
 bool EmitNeoVop1(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0], op = inst.opcode;
-  const uint32_t vdst = (w >> 17) & 0xff, field = w & 0x1ff;
+  const u32 w = inst.raw[0], op = inst.opcode;
+  const u32 vdst = (w >> 17) & 0xff, field = w & 0x1ff;
   if (op == 0x0a) {
     Write16(t, vdst,
             FloatToHalf(t, t.m.Bitcast(t.t_f, t.SrcRaw(field, inst.literal))),
@@ -462,10 +463,10 @@ bool EmitNeoVop1(Translator& t, const Inst& inst) {
 }
 
 bool EmitNeoVop2(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0], op = inst.opcode;
+  const u32 w = inst.raw[0], op = inst.opcode;
   if (op < 0x32 || op > 0x3b)
     return false;
-  const uint32_t vdst = (w >> 17) & 0xff;
+  const u32 vdst = (w >> 17) & 0xff;
   const Id a = HalfFloat(t, Source16(t, w & 0x1ff, inst.literal, false));
   const Id b =
       HalfFloat(t, Source16(t, 256 + ((w >> 9) & 0xff), inst.literal, false));
@@ -489,18 +490,18 @@ bool EmitNeoVop2(Translator& t, const Inst& inst) {
 }
 
 bool EmitNeoVopc(Translator& t,
-                 uint32_t op,
-                 uint32_t dst,
-                 uint32_t src0,
-                 uint32_t src1,
-                 uint32_t literal,
+                 u32 op,
+                 u32 dst,
+                 u32 src0,
+                 u32 src1,
+                 u32 literal,
                  bool src0_high,
                  bool src1_high,
                  bool src0_neg,
                  bool src1_neg,
                  bool src0_abs,
                  bool src1_abs) {
-  uint32_t mapped = 0;
+  u32 mapped = 0;
   bool is_float = false, is_signed = false;
   if ((op >= 0x89 && op <= 0x8e) || (op >= 0x99 && op <= 0x9e)) {
     mapped = (op >= 0x90 ? 0x90 : 0x80) | (op & 7);
@@ -509,7 +510,7 @@ bool EmitNeoVopc(Translator& t,
     mapped = (op >= 0xb0 ? 0xd0 : 0xc0) | (op & 7);
   } else if ((op >= 0xc8 && op <= 0xcf) || (op >= 0xd8 && op <= 0xdf) ||
              (op >= 0xe8 && op <= 0xef) || (op >= 0xf8 && op <= 0xff)) {
-    const uint32_t condition = (op & 7) | (op >= 0xe0 ? 8 : 0);
+    const u32 condition = (op & 7) | (op >= 0xe0 ? 8 : 0);
     mapped = condition | ((op & 0x10) ? 0x10 : 0);
     is_float = true;
   } else if (op == 0x8f || op == 0x9f) {
@@ -546,12 +547,12 @@ bool EmitNeoVopc(Translator& t,
 }
 
 bool EmitNeoVop3(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
-  const uint32_t vdst = w & 0xff, op_sel = (w >> 12) & 0xf;
-  const uint32_t fields[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff,
+  const u32 w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
+  const u32 vdst = w & 0xff, op_sel = (w >> 12) & 0xf;
+  const u32 fields[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff,
                               (w1 >> 18) & 0x1ff};
-  const uint32_t neg = (w1 >> 29) & 7, abs = (w >> 8) & 7;
-  const uint32_t omod = (w1 >> 27) & 3;
+  const u32 neg = (w1 >> 29) & 7, abs = (w >> 8) & 7;
+  const u32 omod = (w1 >> 27) & 3;
   if (op == 0x18a || op == 0x18b) {
     if (op_sel) {
       WarnUnsupported("vop3.cvt_f16.op_sel", op, w, w1);
@@ -593,7 +594,7 @@ bool EmitNeoVop3(Translator& t, const Inst& inst) {
                          false);
 
   Id raw[3], signed16[3], f16[3];
-  for (uint32_t i = 0; i < 3; i++) {
+  for (u32 i = 0; i < 3; i++) {
     raw[i] = Source16(t, fields[i], inst.literal, op_sel & (1u << i));
     signed16[i] = SignExtend16(t, raw[i]);
     f16[i] = ApplyFloatMods(t, HalfFloat(t, raw[i]), neg & (1u << i),
@@ -828,7 +829,7 @@ bool EmitNeoVop3(Translator& t, const Inst& inst) {
       const Id source1 = t.SrcRaw(fields[1], inst.literal);
       const Id select = t.SrcRaw(fields[2], inst.literal);
       result = t.U32(0);
-      for (uint32_t byte = 0; byte < 4; byte++) {
+      for (u32 byte = 0; byte < 4; byte++) {
         const Id selector = t.And(t.Shr(select, t.U32(byte * 8)), t.U32(0xff));
         result = t.Or(result, t.Shl(PermuteByte(t, source0, source1, selector),
                                     t.U32(byte * 8)));
@@ -847,16 +848,16 @@ bool EmitNeoVop3(Translator& t, const Inst& inst) {
 }
 
 bool EmitNeoVop3p(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
-  const uint32_t fields[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff,
+  const u32 w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
+  const u32 fields[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff,
                               (w1 >> 18) & 0x1ff};
-  const uint32_t op_sel = (w >> 11) & 7;
-  const uint32_t op_sel_hi = ((w1 >> 27) & 3) | (((w >> 14) & 1) << 2);
-  const uint32_t neg_lo = (w1 >> 29) & 7, neg_hi = (w >> 8) & 7;
+  const u32 op_sel = (w >> 11) & 7;
+  const u32 op_sel_hi = ((w1 >> 27) & 3) | (((w >> 14) & 1) << 2);
+  const u32 neg_lo = (w1 >> 29) & 7, neg_hi = (w >> 8) & 7;
   const bool clamp = (w >> 15) & 1;
   if (op >= 0x20 && op <= 0x22) {
     Id source[3];
-    for (uint32_t i = 0; i < 3; i++) {
+    for (u32 i = 0; i < 3; i++) {
       source[i] = (op_sel_hi & (1u << i))
                       ? HalfFloat(t, Source16(t, fields[i], inst.literal,
                                               op_sel & (1u << i)))
@@ -876,11 +877,11 @@ bool EmitNeoVop3p(Translator& t, const Inst& inst) {
   if (op > 0x12)
     return false;
   Id packed = t.U32(0);
-  for (uint32_t lane = 0; lane < 2; lane++) {
-    const uint32_t selections = lane ? op_sel_hi : op_sel;
-    const uint32_t negations = lane ? neg_hi : neg_lo;
+  for (u32 lane = 0; lane < 2; lane++) {
+    const u32 selections = lane ? op_sel_hi : op_sel;
+    const u32 negations = lane ? neg_hi : neg_lo;
     Id raw[3], signed16[3], floats[3];
-    for (uint32_t i = 0; i < 3; i++) {
+    for (u32 i = 0; i < 3; i++) {
       raw[i] = Source16(t, fields[i], inst.literal, selections & (1u << i));
       if (negations & (1u << i))
         raw[i] = t.And(t.Sub(t.U32(0), raw[i]), t.U32(0xffff));

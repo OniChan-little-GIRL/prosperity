@@ -6,6 +6,7 @@
  */
 
 #include "gpu/ps4/shader_cache.h"
+#include "base/arch.h"
 
 #include <functional>
 #include <unordered_map>
@@ -16,22 +17,22 @@
 namespace gpu::ps4 {
 namespace {
 
-constexpr uint64_t kGoldenRatio64 = 0x9e3779b97f4a7c15ull;
+constexpr u64 kGoldenRatio64 = 0x9e3779b97f4a7c15ull;
 
-void MixHash(uint64_t& hash, uint64_t value) {
+void MixHash(u64& hash, u64 value) {
   hash ^= value + kGoldenRatio64 + (hash << 6) + (hash >> 2);
 }
 
 // Two draws share a module iff their keys match. `vs`/`ps` are code content
 // hashes rather than addresses (see GraphicsKeyOf).
 struct GraphicsKey {
-  uint64_t vs = 0, ps = 0, fetch = 0;
-  uint32_t ps_input_ena = 0;
-  uint32_t ps_in_cntl_hash = 0;
-  uint32_t tex_3d_mask = 0;
-  uint32_t tex_1d_mask = 0;
-  uint32_t tex_uint_mask = 0;
-  uint32_t mrt_uint_mask = 0;
+  u64 vs = 0, ps = 0, fetch = 0;
+  u32 ps_input_ena = 0;
+  u32 ps_in_cntl_hash = 0;
+  u32 tex_3d_mask = 0;
+  u32 tex_1d_mask = 0;
+  u32 tex_uint_mask = 0;
+  u32 mrt_uint_mask = 0;
   bool gl_clip = false;
   bool neo = false;
 
@@ -40,7 +41,7 @@ struct GraphicsKey {
 
 struct GraphicsKeyHash {
   size_t operator()(const GraphicsKey& k) const {
-    uint64_t h = k.vs ^ (k.ps + kGoldenRatio64 + (k.vs << 6) + (k.vs >> 2));
+    u64 h = k.vs ^ (k.ps + kGoldenRatio64 + (k.vs << 6) + (k.vs >> 2));
     MixHash(h, k.fetch);
     MixHash(h, k.ps_input_ena);
     MixHash(h, k.ps_in_cntl_hash);
@@ -49,15 +50,15 @@ struct GraphicsKeyHash {
     MixHash(h, k.tex_uint_mask);
     MixHash(h, k.mrt_uint_mask);
     h ^= k.gl_clip ? kGoldenRatio64 : 0ull;
-    h ^= static_cast<uint64_t>(k.neo) << 63;
+    h ^= static_cast<u64>(k.neo) << 63;
     return static_cast<size_t>(h);
   }
 };
 
 struct ComputeKey {
-  uint64_t address = 0;
-  uint32_t thread_x = 0, thread_y = 0, thread_z = 0;
-  uint32_t user_sgpr = 0, tgid_enable = 0, lds_dwords = 0;
+  u64 address = 0;
+  u32 thread_x = 0, thread_y = 0, thread_z = 0;
+  u32 user_sgpr = 0, tgid_enable = 0, lds_dwords = 0;
   bool neo = false;
 
   bool operator==(const ComputeKey& other) const = default;
@@ -65,7 +66,7 @@ struct ComputeKey {
 
 struct ComputeKeyHash {
   size_t operator()(const ComputeKey& key) const {
-    uint64_t h = std::hash<uint64_t>{}(key.address);
+    u64 h = std::hash<u64>{}(key.address);
     MixHash(h, key.thread_x);
     MixHash(h, key.thread_y);
     MixHash(h, key.thread_z);
@@ -87,9 +88,9 @@ bool UsesGetPc(const gcn::Program& program) {
 // FNV-1a over the OFFSET field of every input-control slot plus NUM_INTERP: the
 // module bakes the mapping into its input Locations, so the same code under a
 // different mapping is another module.
-uint32_t PsInputCntlHash(const uint32_t* ps_in_cntl, uint32_t num_interp) {
-  uint32_t hash = 2166136261u;
-  for (uint32_t i = 0; i < 32; i++)
+u32 PsInputCntlHash(const u32* ps_in_cntl, u32 num_interp) {
+  u32 hash = 2166136261u;
+  for (u32 i = 0; i < 32; i++)
     hash = (hash ^ (ps_in_cntl[i] & 0x3F)) * 16777619u;
   return (hash ^ (num_interp & 0x3F)) * 16777619u;
 }
@@ -143,8 +144,8 @@ const gcn::Recompiled& GetGraphicsShader(const Regs& regs,
   return cache
       .emplace(key,
                gcn::Recompile(
-                   reinterpret_cast<const uint32_t*>(state.vs_addr),
-                   reinterpret_cast<const uint32_t*>(state.ps_addr),
+                   reinterpret_cast<const u32*>(state.vs_addr),
+                   reinterpret_cast<const u32*>(state.ps_addr),
                    regs.At(mmSPI_SHADER_USER_DATA_VS_0),
                    regs.At(mmSPI_SHADER_USER_DATA_PS_0), state.ps_input_ena,
                    state.honour_ps_in_cntl ? state.ps_in_cntl : nullptr,
@@ -166,7 +167,7 @@ const gcn::RecompiledCs& GetComputeShader(const ComputeShaderState& state) {
     return it->second;
   return cache
       .emplace(key, gcn::RecompileCompute(
-                        reinterpret_cast<const uint32_t*>(state.cs_addr),
+                        reinterpret_cast<const u32*>(state.cs_addr),
                         state.thread_x, state.thread_y, state.thread_z,
                         state.user_sgpr, state.tgid_enable, state.lds_dwords))
       .first->second;

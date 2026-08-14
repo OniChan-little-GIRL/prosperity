@@ -11,17 +11,18 @@
  */
 
 #include "gpu/ps5/rdna/rdna_translate.h"
+#include "base/arch.h"
 
 #ifndef DELTA_HAVE_SPIRV_BACKEND
 namespace gpu::rdna {
-gpu::gcn::Recompiled Recompile(const uint32_t*,
-                               const uint32_t*,
-                               const uint32_t*,
-                               const uint32_t*,
-                               uint32_t,
+gpu::gcn::Recompiled Recompile(const u32*,
+                               const u32*,
+                               const u32*,
+                               const u32*,
+                               u32,
                                bool,
-                               uint32_t,
-                               uint32_t) {
+                               u32,
+                               u32) {
   return {};
 }
 }  // namespace gpu::rdna
@@ -113,14 +114,14 @@ bool BufLoadIsVertexFetch(const Inst& in, bool chained) {
 // taken from the s_load, not from the position of the load. Returns, per
 // buffer_load pc, {table root SGPR pair, entry index}; absent means the V# is
 // inline in user data at srsrc.
-std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t> >
+std::unordered_map<u32, std::pair<u32, u32> >
 MapTableChainedLoads(const Program& insts) {
-  std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t> > out;
-  int32_t root[128];
-  uint32_t slot[128] = {};
+  std::unordered_map<u32, std::pair<u32, u32> > out;
+  i32 root[128];
+  u32 slot[128] = {};
   for (int i = 0; i < 128; i++)
     root[i] = -1;
-  std::unordered_map<uint32_t, uint32_t> next_slot;  // per table root
+  std::unordered_map<u32, u32> next_slot;  // per table root
   for (const Inst& in : insts) {
     if (in.enc == Enc::kSop1 && in.opcode == 0x20)
       break;  // s_setpc_b64 (return)
@@ -128,25 +129,25 @@ MapTableChainedLoads(const Program& insts) {
       break;  // s_endpgm
     if (in.enc == Enc::kSmrd &&
         in.opcode <= 0x04) {  // s_load_dword{,x2,x4,x8,x16}
-      const uint32_t sdst = (in.raw[0] >> 6) & 0x7F;
-      const uint32_t sbase = (in.raw[0] & 0x3F) * 2;
-      const uint32_t nreg = in.opcode == 0   ? 1
+      const u32 sdst = (in.raw[0] >> 6) & 0x7F;
+      const u32 sbase = (in.raw[0] & 0x3F) * 2;
+      const u32 nreg = in.opcode == 0   ? 1
                             : in.opcode == 1 ? 2
                             : in.opcode == 2 ? 4
                             : in.opcode == 3 ? 8
                                              : 16;
-      const uint32_t s = in.opcode == 2 ? next_slot[sbase]++ : 0;
-      for (uint32_t k = 0; k < nreg && sdst + k < 128; k++) {
-        root[sdst + k] = static_cast<int32_t>(sbase);
+      const u32 s = in.opcode == 2 ? next_slot[sbase]++ : 0;
+      for (u32 k = 0; k < nreg && sdst + k < 128; k++) {
+        root[sdst + k] = static_cast<i32>(sbase);
         slot[sdst + k] = s;
       }
       continue;
     }
     if ((in.enc != Enc::kMubuf && in.enc != Enc::kMtbuf) || in.opcode > 0x03)
       continue;
-    const uint32_t srsrc = ((in.raw[1] >> 16) & 0x1F) * 4;
+    const u32 srsrc = ((in.raw[1] >> 16) & 0x1F) * 4;
     if (srsrc < 128 && root[srsrc] >= 0)
-      out[in.pc] = {static_cast<uint32_t>(root[srsrc]), slot[srsrc]};
+      out[in.pc] = {static_cast<u32>(root[srsrc]), slot[srsrc]};
   }
   return out;
 }
@@ -213,34 +214,34 @@ void DumpProgram(const Program& prog, const char* tag) {
 
 // RDNA2 renumbered v_cndmask_b32 from GFX7's VOP2 0x00 to 0x01 (0x01 is
 // v_readlane on GFX7); map it back to the shared emitter's VCC select.
-uint32_t RemapVop2(uint32_t op) {
+u32 RemapVop2(u32 op) {
   return op == 0x01 ? 0x00 : op;
 }
 
-bool RdnaSharedVop2(uint32_t op) {
+bool RdnaSharedVop2(u32 op) {
   return (op >= 0x03 && op <= 0x05) || (op >= 0x08 && op <= 0x0c) ||
          (op >= 0x0f && op <= 0x14) || op == 0x16 || op == 0x18 ||
          (op >= 0x1a && op <= 0x1d) || op == 0x2f;
 }
 
-bool UnsupportedRdnaScalarSource(uint32_t field) {
+bool UnsupportedRdnaScalarSource(u32 field) {
   return (field >= 108 && field <= 123) || (field >= 209 && field <= 239) ||
          field == 249 || field == 250 || field == 254;
 }
 
-bool UnsupportedRdnaValuSource(uint32_t field) {
+bool UnsupportedRdnaValuSource(u32 field) {
   if (field >= 256)
     return false;
   return (field >= 108 && field <= 123) || (field >= 209 && field <= 239) ||
          field == 249 || field == 250 || field == 254;
 }
 
-bool UnsupportedRdnaSdwaSource(uint32_t field) {
+bool UnsupportedRdnaSdwaSource(u32 field) {
   return UnsupportedRdnaValuSource(field) || field == 255;
 }
 
 bool UsesUnsupportedRdnaSource(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
   switch (inst.enc) {
     case Enc::kSop1:
       return UnsupportedRdnaScalarSource(w & 0xff);
@@ -252,7 +253,7 @@ bool UsesUnsupportedRdnaSource(const Inst& inst) {
       return UnsupportedRdnaScalarSource((w1 >> 25) & 0x7f);
     case Enc::kVop1: {
       if (inst.extension == gpu::gcn::InstExtension::kSdwa) {
-        const uint32_t src0 = (w1 & 0xff) + (((w1 >> 23) & 1) ? 0 : 256);
+        const u32 src0 = (w1 & 0xff) + (((w1 >> 23) & 1) ? 0 : 256);
         return UnsupportedRdnaSdwaSource(src0);
       }
       return UnsupportedRdnaValuSource(w & 0x1ff);
@@ -260,8 +261,8 @@ bool UsesUnsupportedRdnaSource(const Inst& inst) {
     case Enc::kVop2:
     case Enc::kVopc: {
       if (inst.extension == gpu::gcn::InstExtension::kSdwa) {
-        const uint32_t src0 = (w1 & 0xff) + (((w1 >> 23) & 1) ? 0 : 256);
-        const uint32_t src1 = ((w >> 9) & 0xff) + (((w1 >> 31) & 1) ? 0 : 256);
+        const u32 src0 = (w1 & 0xff) + (((w1 >> 23) & 1) ? 0 : 256);
+        const u32 src1 = ((w >> 9) & 0xff) + (((w1 >> 31) & 1) ? 0 : 256);
         return UnsupportedRdnaSdwaSource(src0) ||
                UnsupportedRdnaSdwaSource(src1);
       }
@@ -269,8 +270,8 @@ bool UsesUnsupportedRdnaSource(const Inst& inst) {
     }
     case Enc::kVop3:
     case Enc::kVop3p: {
-      const uint32_t count = Vop3SourceCount(inst.enc, inst.opcode);
-      for (uint32_t source = 0; source < count; source++)
+      const u32 count = Vop3SourceCount(inst.enc, inst.opcode);
+      for (u32 source = 0; source < count; source++)
         if (UnsupportedRdnaValuSource((w1 >> (source * 9)) & 0x1ff))
           return true;
       return false;
@@ -280,8 +281,8 @@ bool UsesUnsupportedRdnaSource(const Inst& inst) {
   }
 }
 
-Id RdnaF16Bits(Translator& t, uint32_t field, uint32_t literal) {
-  static constexpr uint16_t kInline[] = {0x3800, 0xb800, 0x3c00, 0xbc00, 0x4000,
+Id RdnaF16Bits(Translator& t, u32 field, u32 literal) {
+  static constexpr u16 kInline[] = {0x3800, 0xb800, 0x3c00, 0xbc00, 0x4000,
                                          0xc000, 0x4400, 0xc400, 0x3118};
   if (field >= 240 && field <= 248)
     return t.U32(kInline[field - 240]);
@@ -290,16 +291,16 @@ Id RdnaF16Bits(Translator& t, uint32_t field, uint32_t literal) {
 
 // RDNA2 VOP3 integer operations whose gfx10 opcodes or destination layouts do
 // not match the shared GFX7 emitter.
-bool RdnaVop3HasSdst(uint32_t op) {
+bool RdnaVop3HasSdst(u32 op) {
   return op == 0x128 || op == 0x129 || op == 0x12A || op == 0x30F ||
          op == 0x310 || op == 0x319 || op == 0x16D || op == 0x16E ||
          op == 0x176 || op == 0x177;
 }
 
 bool RdnaEmitVop3Int(Translator& t,
-                     uint32_t op,
-                     uint32_t vdst,
-                     uint32_t sdst,
+                     u32 op,
+                     u32 vdst,
+                     u32 sdst,
                      Id s0,
                      Id s1,
                      Id s2) {
@@ -375,13 +376,13 @@ bool RdnaEmitVop3Int(Translator& t,
 // VOP3P packed f16: componentwise on the unpacked f32x2. op_sel/neg/clamp and
 // packed-integer ops are not modelled (fall back).
 bool RdnaEmitVop3p(Translator& t,
-                   uint32_t op,
-                   uint32_t vdst,
-                   uint32_t s0,
-                   uint32_t s1,
-                   uint32_t s2,
-                   uint32_t lit) {
-  auto unpack = [&](uint32_t f) {
+                   u32 op,
+                   u32 vdst,
+                   u32 s0,
+                   u32 s1,
+                   u32 s2,
+                   u32 lit) {
+  auto unpack = [&](u32 f) {
     return t.m.ExtInst(t.t_v2, GLSLstd450UnpackHalf2x16,
                        {RdnaF16Bits(t, f, lit)});
   };
@@ -419,17 +420,17 @@ bool RdnaEmitVop3p(Translator& t,
 // returns the root user-data SGPR; *len is the number of dereferences (0 ==
 // already a user-data descriptor). Bounded to 3 levels.
 struct CbufDef {
-  uint32_t source, offset, count;
+  u32 source, offset, count;
 };
 
-bool Overlaps(uint32_t first,
-              uint32_t count,
-              uint32_t other_first,
-              uint32_t other_count) {
+bool Overlaps(u32 first,
+              u32 count,
+              u32 other_first,
+              u32 other_count) {
   return first < other_first + other_count && other_first < first + count;
 }
 
-void InvalidateCbufDefs(std::unordered_map<uint32_t, CbufDef>& loads,
+void InvalidateCbufDefs(std::unordered_map<u32, CbufDef>& loads,
                         ScalarWrite write) {
   if (!write.count)
     return;
@@ -442,10 +443,10 @@ void InvalidateCbufDefs(std::unordered_map<uint32_t, CbufDef>& loads,
 }
 
 bool UsedAsBaseBeforeOverwrite(const Program& program,
-                               uint32_t index,
-                               uint32_t sdst,
-                               uint32_t count) {
-  for (uint32_t i = index + 1; i < program.size(); i++) {
+                               u32 index,
+                               u32 sdst,
+                               u32 count) {
+  for (u32 i = index + 1; i < program.size(); i++) {
     const Inst& inst = program[i];
     if (inst.enc == Enc::kSmrd && SmemLoadCount(inst.opcode) &&
         DecodeSmem(inst).sbase == sdst)
@@ -457,33 +458,33 @@ bool UsedAsBaseBeforeOverwrite(const Program& program,
   return false;
 }
 
-std::unordered_map<uint32_t, uint64_t> BufferVersionKeys(
+std::unordered_map<u32, u64> BufferVersionKeys(
     const Program& program) {
-  std::unordered_map<uint32_t, uint64_t> out;
-  uint32_t versions[136] = {};
-  uint32_t generation = 1;
+  std::unordered_map<u32, u64> out;
+  u32 versions[136] = {};
+  u32 generation = 1;
   for (const Inst& inst : program) {
     if (inst.enc == Enc::kSmrd && SmemLoadCount(inst.opcode)) {
       const Smem smem = DecodeSmem(inst);
-      const uint32_t dwords = smem.op >= 0x08 ? 4 : 2;
-      uint64_t key = smem.sbase | (static_cast<uint64_t>(dwords == 4) << 7);
-      for (uint32_t i = 0; i < dwords; i++)
-        key |= static_cast<uint64_t>(versions[smem.sbase + i]) << (8 + i * 13);
+      const u32 dwords = smem.op >= 0x08 ? 4 : 2;
+      u64 key = smem.sbase | (static_cast<u64>(dwords == 4) << 7);
+      for (u32 i = 0; i < dwords; i++)
+        key |= static_cast<u64>(versions[smem.sbase + i]) << (8 + i * 13);
       out.emplace(inst.pc, key);
     }
     const ScalarWrite write = DecodeScalarWrite(inst);
-    for (uint32_t i = 0; i < write.count && write.first + i < 136; i++)
+    for (u32 i = 0; i < write.count && write.first + i < 136; i++)
       versions[write.first + i] = generation;
     generation++;
   }
   return out;
 }
 
-uint32_t TraceCbufChain(uint32_t sbase,
-                        const std::unordered_map<uint32_t, CbufDef>& loads,
-                        uint32_t chain_off[3],
-                        uint32_t* len) {
-  uint32_t cur = sbase, n = 0, tmp[3] = {};
+u32 TraceCbufChain(u32 sbase,
+                        const std::unordered_map<u32, CbufDef>& loads,
+                        u32 chain_off[3],
+                        u32* len) {
+  u32 cur = sbase, n = 0, tmp[3] = {};
   while (n < 3) {
     auto it = loads.find(cur);
     if (it == loads.end())
@@ -491,7 +492,7 @@ uint32_t TraceCbufChain(uint32_t sbase,
     tmp[n++] = it->second.offset;
     cur = it->second.source;
   }
-  for (uint32_t i = 0; i < n; i++)
+  for (u32 i = 0; i < n; i++)
     chain_off[i] = tmp[n - 1 - i];  // reverse
   *len = n;
   return cur;
@@ -501,19 +502,19 @@ uint32_t TraceCbufChain(uint32_t sbase,
 // s_load writing one of these fetches a DESCRIPTOR, not constant data, so the
 // cbuf planner must leave it alone: ParseFetchInsts/RdnaPlanBufLoadCbufs and
 // RdnaPlanMimg resolve those at draw time from user data instead.
-static std::unordered_set<uint32_t> VmemDescriptorSgprs(const Program& program) {
-  std::unordered_set<uint32_t> regs;
+static std::unordered_set<u32> VmemDescriptorSgprs(const Program& program) {
+  std::unordered_set<u32> regs;
   for (const Inst& inst : program) {
     const bool buf = inst.enc == Enc::kMubuf || inst.enc == Enc::kMtbuf;
     const bool img = inst.enc == Enc::kMimg;
     if (!buf && !img)
       continue;
-    const uint32_t srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
-    for (uint32_t i = 0; i < 8; i++)
+    const u32 srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
+    for (u32 i = 0; i < 8; i++)
       regs.insert(srsrc + i);
     if (img && inst.opcode >= 0x20) {
-      const uint32_t ssamp = ((inst.raw[1] >> 21) & 0x1F) * 4;
-      for (uint32_t i = 0; i < 4; i++)
+      const u32 ssamp = ((inst.raw[1] >> 21) & 0x1F) * 4;
+      for (u32 i = 0; i < 4; i++)
         regs.insert(ssamp + i);
     }
   }
@@ -528,35 +529,35 @@ static std::unordered_set<uint32_t> VmemDescriptorSgprs(const Program& program) 
 // descriptor table), the chain back to the user-data root is recorded so the
 // renderer can walk it.
 bool RdnaPlanCbufs(const Program& program,
-                   uint32_t first_binding,
+                   u32 first_binding,
                    std::vector<ShaderCbuf>& cbufs,
-                   std::unordered_map<uint32_t, uint32_t>& bindings,
-                   std::unordered_map<uint32_t, uint32_t>& by_pc) {
+                   std::unordered_map<u32, u32>& bindings,
+                   std::unordered_map<u32, u32>& by_pc) {
   // Walk in program order, growing the def map as s_loads appear, so each
   // SMEM's base traces through the defs live AT that instruction. Shaders
   // reuse SGPRs (the sprite VS s_buffer_loads its transform from the s[8:11]
   // user-data V#, then s_loads the vertex V# INTO s[8:11]); a whole-program
   // last-write map would misroute the transform to the vertex chain.
-  std::unordered_map<uint32_t, CbufDef> loads;
-  std::unordered_map<uint64_t, uint32_t> binding_by_producer;
+  std::unordered_map<u32, CbufDef> loads;
+  std::unordered_map<u64, u32> binding_by_producer;
   const auto version_keys = BufferVersionKeys(program);
   const auto descriptor_sgprs = VmemDescriptorSgprs(program);
-  uint32_t inst_index = 0;
+  u32 inst_index = 0;
   for (const Inst& inst : program) {
-    const uint32_t producer = inst_index++;
+    const u32 producer = inst_index++;
     if (inst.enc != Enc::kSmrd) {
       InvalidateCbufDefs(loads, DecodeScalarWrite(inst));
       continue;
     }
     const Smem smem = DecodeSmem(inst);
-    const uint32_t op = smem.op;
+    const u32 op = smem.op;
     const bool sbufload = op >= 0x08 && op <= 0x0C, sload = op <= 0x04;
     if (!sbufload && !sload)
       continue;
-    const uint32_t sbase = smem.sbase, sdst = smem.sdst;
-    const uint32_t load_count = SmemLoadCount(op);
-    const int32_t off =
-        sbufload ? static_cast<int32_t>(inst.raw[1] & 0xFFFFF) : smem.offset;
+    const u32 sbase = smem.sbase, sdst = smem.sdst;
+    const u32 load_count = SmemLoadCount(op);
+    const i32 off =
+        sbufload ? static_cast<i32>(inst.raw[1] & 0xFFFFF) : smem.offset;
     // A descriptor fetch (the V# a vertex fetch or texture op then reads). Its
     // offset is often a runtime table index -- Minecraft's NGG VS computes one
     // into vcc_hi -- which no cbuf binding can express, and treating it as a
@@ -575,13 +576,13 @@ bool RdnaPlanCbufs(const Program& program,
     if (sload &&
         UsedAsBaseBeforeOverwrite(program, producer, sdst, load_count)) {
       InvalidateCbufDefs(loads, {sdst, load_count});
-      loads[sdst] = {sbase, static_cast<uint32_t>(off), load_count};
+      loads[sdst] = {sbase, static_cast<u32>(off), load_count};
       continue;
     }
-    const uint32_t hi =
+    const u32 hi =
         smem.soffset != 125
             ? gpu::gcn::kCbufDwords
-            : static_cast<uint32_t>(off < 0 ? 0 : off) / 4 + SmemLoadCount(op);
+            : static_cast<u32>(off < 0 ? 0 : off) / 4 + SmemLoadCount(op);
     if (smem.soffset != 125 || hi > gpu::gcn::kCbufDwords) {
       if (ShDbg())
         BASE_LOGI("gcnspv",
@@ -592,14 +593,14 @@ bool RdnaPlanCbufs(const Program& program,
       return false;
     }
 
-    uint32_t chain_off[3] = {}, chain_len = 0;
-    const uint32_t root = TraceCbufChain(sbase, loads, chain_off, &chain_len);
-    const uint64_t key = version_keys.at(inst.pc);
+    u32 chain_off[3] = {}, chain_len = 0;
+    const u32 root = TraceCbufChain(sbase, loads, chain_off, &chain_len);
+    const u64 key = version_keys.at(inst.pc);
 
     auto it = binding_by_producer.find(key);
     if (it == binding_by_producer.end()) {
-      const uint32_t binding =
-          first_binding + static_cast<uint32_t>(cbufs.size());
+      const u32 binding =
+          first_binding + static_cast<u32>(cbufs.size());
       if (binding >= kMaxCbufBindings) {
         if (ShDbg())
           BASE_LOGI("gcnspv", "cbuf plan reject pc={:#x} out of "
@@ -614,7 +615,7 @@ bool RdnaPlanCbufs(const Program& program,
       cb.ud_sgpr = root;
       cb.num_dwords = hi;
       cb.chain_len = chain_len;
-      for (uint32_t i = 0; i < 3; i++)
+      for (u32 i = 0; i < 3; i++)
         cb.chain_off[i] = chain_off[i];
       cb.use_pc = inst.pc;
       cbufs.push_back(cb);
@@ -640,24 +641,24 @@ bool RdnaPlanCbufs(const Program& program,
 // PlanGfxBuffers cannot be reused: its descriptor-reload versioning reads the
 // SMEM sdst with GCN field positions.
 void RdnaPlanGfxBuffers(const Program& program,
-                        uint32_t first_binding,
-                        const std::unordered_set<uint32_t>* claimed,
+                        u32 first_binding,
+                        const std::unordered_set<u32>* claimed,
                         std::vector<gpu::gcn::ShaderBuffer>& buffers,
-                        std::unordered_map<uint32_t, uint32_t>& bindings) {
-  std::unordered_map<uint32_t, uint32_t> by_srsrc;
+                        std::unordered_map<u32, u32>& bindings) {
+  std::unordered_map<u32, u32> by_srsrc;
   for (const Inst& inst : program) {
     if (inst.enc != Enc::kMubuf || inst.opcode < 0x08 || inst.opcode > 0x0f)
       continue;
     if (claimed && claimed->count(inst.pc))
       continue;
-    const uint32_t srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
+    const u32 srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
     const auto found = by_srsrc.find(srsrc);
     if (found != by_srsrc.end()) {
       bindings[inst.pc] = found->second;
       continue;
     }
-    const uint32_t binding =
-        first_binding + static_cast<uint32_t>(buffers.size());
+    const u32 binding =
+        first_binding + static_cast<u32>(buffers.size());
     if (binding >= gpu::gcn::MaxGfxBuffers()) {
       gpu::gcn::WarnUnsupported("mubuf.binding-count", binding + 1);
       continue;
@@ -669,10 +670,10 @@ void RdnaPlanGfxBuffers(const Program& program,
 }
 
 void RdnaPlanBufLoadCbufs(const Program& program,
-                          uint32_t first_binding,
+                          u32 first_binding,
                           std::vector<ShaderCbuf>& cbufs,
-                          std::unordered_map<uint32_t, uint32_t>& bindings,
-                          std::unordered_map<uint32_t, uint32_t>& by_pc) {
+                          std::unordered_map<u32, u32>& bindings,
+                          std::unordered_map<u32, u32>& by_pc) {
   // Mirror ParseFetchInsts' walk: srsrc SGPRs written by an s_load hold V#s
   // from the user-data descriptor TABLE (entry index from
   // MapTableChainedLoads). A constant load through such a V# becomes a chained
@@ -689,13 +690,13 @@ void RdnaPlanBufLoadCbufs(const Program& program,
     if ((inst.enc != Enc::kMubuf && inst.enc != Enc::kMtbuf) ||
         inst.opcode > 0x03)
       continue;
-    const uint32_t srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
+    const u32 srsrc = ((inst.raw[1] >> 16) & 0x1F) * 4;
     const auto chain = chained_loads.find(inst.pc);
     const bool chained = chain != chained_loads.end();
     if (BufLoadIsVertexFetch(inst, chained))
       continue;  // real fetch -> vertex input
-    const uint32_t binding =
-        first_binding + static_cast<uint32_t>(cbufs.size());
+    const u32 binding =
+        first_binding + static_cast<u32>(cbufs.size());
     if (chained) {
       if (binding >= kMaxCbufBindings)
         return;
@@ -730,14 +731,14 @@ void RdnaPlanBufLoadCbufs(const Program& program,
 // Emitting the mov would read our zero-initialised register file and turn EXEC
 // off, making the CFG path skip every export (the PS then kills all fragments).
 // Those movs are dropped so EXEC keeps its all-on seed.
-std::unordered_set<uint32_t> LaunchExecMovPcs(const Program& program) {
-  std::unordered_set<uint32_t> skip, written;
+std::unordered_set<u32> LaunchExecMovPcs(const Program& program) {
+  std::unordered_set<u32> skip, written;
   for (const Inst& in : program) {
-    uint32_t d0 = 0xFFFF, n = 1;
+    u32 d0 = 0xFFFF, n = 1;
     switch (in.enc) {
       case Enc::kSop1: {
-        const uint32_t sdst = (in.raw[0] >> 16) & 0x7F;
-        const uint32_t src = in.raw[0] & 0xFF;
+        const u32 sdst = (in.raw[0] >> 16) & 0x7F;
+        const u32 src = in.raw[0] & 0xFF;
         const bool b64 = in.opcode == 0x04;
         if ((in.opcode == 0x03 || b64) && sdst == 126 && src <= 105 &&
             !written.count(src) && (!b64 || !written.count(src + 1))) {
@@ -764,7 +765,7 @@ std::unordered_set<uint32_t> LaunchExecMovPcs(const Program& program) {
         break;
     }
     if (d0 <= 105)
-      for (uint32_t k = 0; k < n; k++)
+      for (u32 k = 0; k < n; k++)
         written.insert(d0 + k);
   }
   return skip;
@@ -772,7 +773,7 @@ std::unordered_set<uint32_t> LaunchExecMovPcs(const Program& program) {
 
 void RdnaEmitSmem(Translator& t, const Inst& inst, StageContext& sc) {
   const Smem smem = DecodeSmem(inst);
-  const uint32_t op = smem.op;
+  const u32 op = smem.op;
   // s_load* (op 0x00-0x04, a pointer in the sbase pair) and s_buffer_load* (op
   // 0x08-0x0C, a V# in the sbase quad) read `off` bytes into sdst.. from the
   // UBO the renderer bound for this sbase. A 2D VS reads its transform matrix
@@ -789,17 +790,17 @@ void RdnaEmitSmem(Translator& t, const Inst& inst, StageContext& sc) {
                                   inst.raw[1]);
       return;
     }
-    const uint32_t binding =
+    const u32 binding =
         pc_it != sc.smem_cbuf_by_pc.end() ? pc_it->second : base_it->second;
-    const uint32_t immediate = op >= 0x08
+    const u32 immediate = op >= 0x08
                                    ? inst.raw[1] & 0xFFFFC
-                                   : static_cast<uint32_t>(smem.offset) & ~3u;
+                                   : static_cast<u32>(smem.offset) & ~3u;
     const Id soffset =
         smem.soffset == 125 ? t.U32(0) : t.SrcRaw(smem.soffset, 0);
     const Id byte_offset = t.Add(t.And(soffset, t.U32(~3u)), t.U32(immediate));
     const Id dword0 = t.Shr(byte_offset, t.U32(2));
-    const uint32_t n = SmemLoadCount(op);
-    for (uint32_t k = 0; k < n; k++)
+    const u32 n = SmemLoadCount(op);
+    for (u32 k = 0; k < n; k++)
       t.SetSdst(smem.sdst, k, t.CbufDwordId(binding, t.Add(dword0, t.U32(k))));
     return;
   }
@@ -807,15 +808,15 @@ void RdnaEmitSmem(Translator& t, const Inst& inst, StageContext& sc) {
 }
 
 // Address of the shader being translated, for shader-specific debug output.
-thread_local uint64_t g_ps_addr = 0;
+thread_local u64 g_ps_addr = 0;
 
 // ---- exports ----------------------------------------------------------------
 // gfx10.3 export targets: MRT0..7 = 0..7, MRTZ = 8, NULL = 9, POS0..4 = 12..16,
 // PRIM = 20 (NGG connectivity), PARAM0..31 = 32..63.
 void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t en = w & 0xF, target = (w >> 4) & 0x3F, compr = (w >> 10) & 1;
-  const uint32_t v[4] = {w1 & 0xFF, (w1 >> 8) & 0xFF, (w1 >> 16) & 0xFF,
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 en = w & 0xF, target = (w >> 4) & 0x3F, compr = (w >> 10) & 1;
+  const u32 v[4] = {w1 & 0xFF, (w1 >> 8) & 0xFF, (w1 >> 16) & 0xFF,
                          (w1 >> 24) & 0xFF};
   if (ShDbg())
     BASE_LOGI("gcnspv",
@@ -828,8 +829,8 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
     // shader does not export gets a default here, and defaulting alpha to 1
     // would make every SRC_ALPHA blend opaque.
     if (kExpTrace && target <= 7) {
-      static uint32_t seen[256] = {};
-      const uint32_t k = ((target & 7) << 5) | ((en & 0xF) << 1) | compr;
+      static u32 seen[256] = {};
+      const u32 k = ((target & 7) << 5) | ((en & 0xF) << 1) | compr;
       if (seen[k]++ == 0)
         BASE_LOGI("exp", "ps {:#x} mrt{} en={:#x} compr={}",
                   (unsigned long)g_ps_addr, target, en, compr);
@@ -926,16 +927,16 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
                               : sc.dbg_pos_comps == 3 ? t.t_v3
                                                       : t.t_v4,
                               sc.dbg_pos_in);
-      for (uint32_t i = 0; i < 4; i++)
+      for (u32 i = 0; i < 4; i++)
         in[i] = i < sc.dbg_pos_comps ? t.m.CompositeExtract(t.t_f, val, i)
                                      : t.F32(i == 3 ? 1.f : 0.f);
       if (sc.dbg_pos_world >= 0) {
         Id w[4];
-        for (uint32_t r = 0; r < 3; r++) {
+        for (u32 r = 0; r < 3; r++) {
           w[r] = t.F32(0.f);
-          for (uint32_t c = 0; c < 4; c++) {
+          for (u32 c = 0; c < 4; c++) {
             const Id m = t.m.Bitcast(
-                t.t_f, t.CbufDword(static_cast<uint32_t>(sc.dbg_pos_world),
+                t.t_f, t.CbufDword(static_cast<u32>(sc.dbg_pos_world),
                                    r * 4 + c));
             w[r] = t.FAdd(w[r], t.FMul(m, in[c]));
           }
@@ -945,11 +946,11 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
           in[i] = w[i];
       }
       Id row[4];
-      for (uint32_t r = 0; r < 4; r++) {
+      for (u32 r = 0; r < 4; r++) {
         row[r] = t.F32(0.f);
-        for (uint32_t c = 0; c < 4; c++) {
+        for (u32 c = 0; c < 4; c++) {
           const Id m = t.m.Bitcast(
-              t.t_f, t.CbufDword(static_cast<uint32_t>(sc.dbg_pos_cbuf),
+              t.t_f, t.CbufDword(static_cast<u32>(sc.dbg_pos_cbuf),
                                  sc.dbg_pos_dword + r * 4 + c));
           row[r] = t.FAdd(row[r], t.FMul(m, in[c]));
         }
@@ -964,7 +965,7 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
     t.m.Store(sc.pos_out,
               t.m.CompositeConstruct(t.t_v4, {c[0], c[1], c[2], c[3]}));
   } else if (target >= 32 && target <= 63) {  // PARAM0..31
-    const uint32_t p = target - 32;
+    const u32 p = target - 32;
     if (p + 1 > sc.max_param)
       sc.max_param = p + 1;
     const Id out_var = gpu::gcn::VsParamOut(t, sc, p);
@@ -985,22 +986,22 @@ void EmitExport(Translator& t, const Inst& inst, StageContext& sc) {
 // SDWA (src0 field == 249) puts the real operands in the extension dword. DPP
 // extensions are rejected before reaching this partial SDWA implementation.
 struct SdwaMod {
-  uint32_t src0 = 0, src1 = 0;          // resolved operand fields
-  uint32_t src0_sel = 6, src1_sel = 6;  // 0-3 byte, 4-5 word, 6 whole dword
+  u32 src0 = 0, src1 = 0;          // resolved operand fields
+  u32 src0_sel = 6, src1_sel = 6;  // 0-3 byte, 4-5 word, 6 whole dword
   bool src0_sext = false, src1_sext = false;
   bool src0_neg = false, src0_abs = false;
   bool src1_neg = false, src1_abs = false;
-  uint32_t dst_sel = 6;
+  u32 dst_sel = 6;
   bool clamp = false;
-  uint32_t omod = 0;
+  u32 omod = 0;
 };
 
 // S0/S1 (bits 23/31) choose the SCALAR file for that operand. Reading them as
 // VGPRs instead is silent corruption: a 3D vertex shader multiplies its
 // transform out of SGPRs, so the matrix comes back as zeros and every position
 // collapses. DPP has no scalar-source form (its src0 is always a VGPR).
-SdwaMod DecodeSdwa(const Inst& inst, uint32_t vsrc1, bool dpp) {
-  const uint32_t m = inst.raw[1];
+SdwaMod DecodeSdwa(const Inst& inst, u32 vsrc1, bool dpp) {
+  const u32 m = inst.raw[1];
   SdwaMod s;
   s.src0 = (m & 0xFF) + ((!dpp && ((m >> 23) & 1)) ? 0u : 256u);
   s.src1 = vsrc1 + 256u;
@@ -1037,11 +1038,11 @@ Id SdwaFloatMod(Translator& t, Id raw, bool neg, bool abs) {
 }
 
 // Apply one operand's SDWA sub-dword selection to its raw 32-bit value.
-Id SdwaSelect(Translator& t, Id raw, uint32_t sel, bool sext) {
+Id SdwaSelect(Translator& t, Id raw, u32 sel, bool sext) {
   if (sel >= 6)
     return raw;
-  const uint32_t bits = sel < 4 ? 8u : 16u;
-  const uint32_t off = sel < 4 ? sel * 8u : (sel - 4) * 16u;
+  const u32 bits = sel < 4 ? 8u : 16u;
+  const u32 off = sel < 4 ? sel * 8u : (sel - 4) * 16u;
   const Id shifted = t.Shr(raw, t.U32(off));
   if (!sext)
     return t.And(shifted, t.U32(bits == 8 ? 0xFFu : 0xFFFFu));
@@ -1050,9 +1051,9 @@ Id SdwaSelect(Translator& t, Id raw, uint32_t sel, bool sext) {
 }
 
 void ResolveValuSrc0(const Inst& inst,
-                     uint32_t src0,
-                     uint32_t& field,
-                     uint32_t& literal) {
+                     u32 src0,
+                     u32& field,
+                     u32& literal) {
   if (inst.extension == gpu::gcn::InstExtension::kSdwa) {
     field = DecodeSdwa(inst, 0, false).src0;
     literal = 0;
@@ -1068,7 +1069,7 @@ void ResolveValuSrc0(const Inst& inst,
 // field layouts are identical to GFX7; VOP3 differs only in the opcode-field
 // width and the CLAMP bit position (bit 15, not 11); SMEM replaces SMRD.
 void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
   if (inst.extension == gpu::gcn::InstExtension::kDpp ||
       inst.extension == gpu::gcn::InstExtension::kDpp8 ||
       inst.extension == gpu::gcn::InstExtension::kDpp8Fi) {
@@ -1103,9 +1104,9 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       if (inst.opcode >= 0x17 && inst.opcode <= 0x1A)
         break;  // per-counter waits; translated memory operations are ordered
       if (inst.opcode == 0x10) {
-        const uint32_t sdst = (w >> 16) & 0x7f;
-        const uint32_t simm = static_cast<uint32_t>(
-            static_cast<int32_t>(static_cast<int16_t>(w & 0xffff)));
+        const u32 sdst = (w >> 16) & 0x7f;
+        const u32 simm = static_cast<u32>(
+            static_cast<i32>(static_cast<i16>(w & 0xffff)));
         t.SetSdst(sdst, 0, t.Mul(t.Sdst(sdst), t.U32(simm)));
         break;  // RDNA s_mulk_i32 does not modify SCC.
       }
@@ -1133,9 +1134,9 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       RdnaEmitSmem(t, inst, sc);
       break;
     case Enc::kVop1: {
-      const uint32_t op = inst.opcode, vdst = (w >> 17) & 0xFF;
-      const uint32_t raw0 = w & 0x1FF;
-      uint32_t src0, lit;
+      const u32 op = inst.opcode, vdst = (w >> 17) & 0xFF;
+      const u32 raw0 = w & 0x1FF;
+      u32 src0, lit;
       ResolveValuSrc0(inst, raw0, src0, lit);
       if (op == 0x02) {
         gpu::gcn::WarnUnsupported("v_readfirstlane_b32", op, w, w1);
@@ -1170,19 +1171,19 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       break;
     }
     case Enc::kVop2: {
-      const uint32_t op = inst.opcode, vdst = (w >> 17) & 0xFF;
-      const uint32_t vsrc1 = (w >> 9) & 0xFF;
-      const uint32_t raw0 = w & 0x1FF;
-      uint32_t src0, lit;
+      const u32 op = inst.opcode, vdst = (w >> 17) & 0xFF;
+      const u32 vsrc1 = (w >> 9) & 0xFF;
+      const u32 raw0 = w & 0x1FF;
+      u32 src0, lit;
       ResolveValuSrc0(inst, raw0, src0, lit);
       if (raw0 == 249 && op >= 0x2b && op <= 0x2d) {
         gpu::gcn::WarnUnsupported("vop2.fma-sdwa", op, w, w1);
         break;
       }
-      uint32_t src1 = 256 + vsrc1;
+      u32 src1 = 256 + vsrc1;
       Id sdwa0 = 0, sdwa1 = 0;
       bool sdwa_clamp = false;
-      uint32_t sdwa_omod = 0;
+      u32 sdwa_omod = 0;
       if (raw0 == 249) {
         const SdwaMod sd = DecodeSdwa(inst, vsrc1, false);
         if (sd.dst_sel != 6 || sd.src0_sel > 6 || sd.src1_sel > 6)
@@ -1291,7 +1292,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       break;
     }
     case Enc::kVop3p: {
-      const uint32_t op = inst.opcode, vdst = w & 0xFF;
+      const u32 op = inst.opcode, vdst = w & 0xFF;
       // Componentwise packed operations select each source's low half for the
       // low result and high half for the high result.
       if ((w & 0x0000FF00u) != 0x00004000u ||
@@ -1299,28 +1300,28 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         gpu::gcn::WarnUnsupported("vop3p.modifier", op, w, w1);
         break;
       }
-      const uint32_t p0 = w1 & 0x1FF, p1 = (w1 >> 9) & 0x1FF;
-      const uint32_t p2 = (w1 >> 18) & 0x1FF;
+      const u32 p0 = w1 & 0x1FF, p1 = (w1 >> 9) & 0x1FF;
+      const u32 p2 = (w1 >> 18) & 0x1FF;
       if (!RdnaEmitVop3p(t, op, vdst, p0, p1, p2, inst.literal))
         gpu::gcn::WarnUnsupported("vop3p", op, w, w1);
       break;
     }
     case Enc::kVop3: {
-      const uint32_t rdna_op = inst.opcode;
-      uint32_t op = rdna_op;
-      const uint32_t vdst = w & 0xFF;
+      const u32 rdna_op = inst.opcode;
+      u32 op = rdna_op;
+      const u32 vdst = w & 0xFF;
       // VOP3-form v_cndmask is the VOP2 alias 0x101 on RDNA2 (0x01 renumber);
       // GFX7's explicit-S2 cndmask VOP3 op is 0x100.
       if (op == 0x101)
         op = 0x100;
-      const uint32_t s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF;
-      const uint32_t s2 = (w1 >> 18) & 0x1FF, neg = (w1 >> 29) & 7;
+      const u32 s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF;
+      const u32 s2 = (w1 >> 18) & 0x1FF, neg = (w1 >> 29) & 7;
       const bool vop3b = RdnaVop3HasSdst(op);
-      const uint32_t sdst = vop3b ? ((w >> 8) & 0x7F) : 106;
-      const uint32_t abs = vop3b ? 0 : ((w >> 8) & 7);
-      const uint32_t op_sel = vop3b ? 0 : ((w >> 11) & 0xF);
+      const u32 sdst = vop3b ? ((w >> 8) & 0x7F) : 106;
+      const u32 abs = vop3b ? 0 : ((w >> 8) & 7);
+      const u32 op_sel = vop3b ? 0 : ((w >> 11) & 0xF);
       const bool clamp = (w >> 15) & 1;
-      const uint32_t omod = (w1 >> 27) & 3;
+      const u32 omod = (w1 >> 27) & 3;
       if (op == 0x102 || op == 0x10D) {
         gpu::gcn::WarnUnsupported("vop3.dot.rdna", op, w, w1);
         break;
@@ -1430,10 +1431,10 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       break;
     }
     case Enc::kVopc: {
-      const uint32_t op = inst.opcode;
-      uint32_t vsrc1 = (w >> 9) & 0xFF;
-      const uint32_t raw0 = w & 0x1FF;
-      uint32_t src0, lit;
+      const u32 op = inst.opcode;
+      u32 vsrc1 = (w >> 9) & 0xFF;
+      const u32 raw0 = w & 0x1FF;
+      u32 src0, lit;
       ResolveValuSrc0(inst, raw0, src0, lit);
       if (inst.extension == gpu::gcn::InstExtension::kSdwa) {
         const SdwaMod sd = DecodeSdwa(inst, vsrc1, false);
@@ -1444,7 +1445,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         // A compare has no VGPR destination, so SDWA reuses those bits (which
         // carry DST_SEL/CLAMP/OMOD elsewhere) for the scalar one: SD picks
         // SDST over VCC.
-        const uint32_t dst = ((w1 >> 15) & 1) ? ((w1 >> 8) & 0x7F) : 106u;
+        const u32 dst = ((w1 >> 15) & 1) ? ((w1 >> 8) & 0x7F) : 106u;
         const Id a = SdwaFloatMod(
             t, SdwaSelect(t, t.SrcRaw(sd.src0, 0), sd.src0_sel, sd.src0_sext),
             sd.src0_neg, sd.src0_abs);
@@ -1455,14 +1456,14 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
                            a, b, dst);
         break;
       }
-      uint32_t vopc_src1 = 256 + vsrc1;
+      u32 vopc_src1 = 256 + vsrc1;
       if (raw0 == 249)
         vopc_src1 = DecodeSdwa(inst, vsrc1, false).src1;
       // RDNA2 f16 compares sit at 0xC8-0xCF, which the GFX7-numbered EmitVopc
       // would read as u32 integer compares; run the float predicate (op-0xC8)
       // on the low-half f16 operands instead. u32 compares stay at 0xC0-0xC7.
       if (op >= 0xC8 && op <= 0xCF) {
-        auto f16 = [&](uint32_t f) {
+        auto f16 = [&](u32 f) {
           return t.m.CompositeExtract(
               t.t_f,
               t.m.ExtInst(t.t_v2, GLSLstd450UnpackHalf2x16,
@@ -1491,8 +1492,8 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         gpu::gcn::WarnUnsupported("vintrp.stage", inst.opcode, w, w1);
         break;
       }
-      const uint32_t chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
-      const uint32_t op = (w >> 16) & 3, vdst = (w >> 18) & 0xFF;
+      const u32 chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
+      const u32 op = (w >> 16) & 3, vdst = (w >> 18) & 0xFF;
       if (op == 1 || (op == 2 && (w & 0xFF) == 2)) {
         const Id var = gpu::gcn::PsInputVar(t, sc, attr);
         const Id p_in_f = t.m.TypePointer(spv::StorageClass::Input, t.t_f);
@@ -1523,7 +1524,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       }
       const bool tfe = (w1 >> 23) & 1;
       const bool lds = inst.enc == Enc::kMubuf && ((w >> 16) & 1);
-      const uint32_t soffset = (w1 >> 24) & 0xff;
+      const u32 soffset = (w1 >> 24) & 0xff;
       if (tfe || lds) {
         gpu::gcn::WarnUnsupported("buffer.control.rdna", inst.opcode, w, w1);
         break;
@@ -1543,7 +1544,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
                            : vs.num_comps == 3 ? t.t_v3
                                                : t.t_v4;
         const Id val = t.m.Load(comp_ty, vs.in_var);
-        for (uint32_t c = 0; c < vs.num_comps; c++)
+        for (u32 c = 0; c < vs.num_comps; c++)
           t.SetVgF(vs.dest_vgpr + c, vs.num_comps == 1
                                          ? val
                                          : t.m.CompositeExtract(t.t_f, val, c));
@@ -1563,8 +1564,8 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
                                   w, w1);
         break;
       }
-      const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
-      uint32_t binding;
+      const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
+      u32 binding;
       auto pit = sc.mubuf_cbuf_by_pc.find(inst.pc);
       if (pit != sc.mubuf_cbuf_by_pc.end()) {
         binding = pit->second;
@@ -1576,22 +1577,22 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         }
         binding = it->second;
       }
-      const uint32_t nc = (inst.opcode & 3) + 1;
+      const u32 nc = (inst.opcode & 3) + 1;
       // A typed constant load delivers the buffer's dwords unchanged only when
       // its format is 32-bit per channel; narrower ones would need unpacking.
       if (inst.enc == Enc::kMtbuf) {
-        const uint32_t fmt = (w >> 19) & 0x7F;
+        const u32 fmt = (w >> 19) & 0x7F;
         if (!(fmt >= 20 && (fmt <= 22 || (fmt >= 62 && fmt <= 77))))
           gpu::gcn::WarnUnsupported("mtbuf.fmt", fmt, w, w1);
       }
-      const uint32_t inst_offset = w & 0xFFF, vdata = (w1 >> 8) & 0xFF;
+      const u32 inst_offset = w & 0xFFF, vdata = (w1 >> 8) & 0xFF;
       const bool idxen = (w >> 13) & 1, offen = (w >> 12) & 1;
       if (idxen) {
         gpu::gcn::WarnUnsupported("mtbuf.descriptor-stride.rdna", inst.opcode,
                                   w, w1);
         break;
       }
-      const uint32_t vaddr = w1 & 0xFF;
+      const u32 vaddr = w1 & 0xFF;
       // byte offset = inst_offset + index*stride + voffset. The V# stride is
       // not available in the shader (the descriptor SGPRs are not seeded), so
       // an indexed uniform row-select assumes tight packing (stride == nc*4);
@@ -1602,7 +1603,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       if (offen)
         byte_off = t.Add(byte_off, t.Vg(vaddr + (idxen ? 1u : 0u)));
       const Id dword0 = t.Shr(byte_off, t.U32(2));
-      for (uint32_t k = 0; k < nc; k++)
+      for (u32 k = 0; k < nc; k++)
         t.SetVg(vdata + k, t.CbufDwordId(binding, t.Add(dword0, t.U32(k))));
       break;
     }
@@ -1619,7 +1620,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         break;
       }
       Inst lowered = inst;
-      const uint32_t dim = (w >> 3) & 0x7;
+      const u32 dim = (w >> 3) & 0x7;
       // dim 3 (cube) arrives with the face already selected, so it is the
       // same (s, t, layer) address the 2D-array path takes.
       const bool arrayed_dim = dim == 3 || dim == 5;
@@ -1635,7 +1636,7 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       // NSA names every address component explicitly. Load them before emitting
       // the image operation so aliases cannot overwrite a later source and no
       // architectural VGPRs are used as scratch storage.
-      const uint32_t nsa = (w >> 1) & 0x3;
+      const u32 nsa = (w >> 1) & 0x3;
       // A cube sample's s/t reach the hardware biased by +1.5 (the compiler
       // emits v_madak_f32 s, sc, rcp(|ma|), 1.5); gfx10's cube addressing
       // consumes that range. The 2D-array lowering wants a plain [0,1], so
@@ -1644,18 +1645,18 @@ void RdnaEmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       const bool cube = dim == 3;
       if (nsa || cube) {
         std::array<Id, 13> address{};
-        const uint32_t vaddr = w1 & 0xFF;
+        const u32 vaddr = w1 & 0xFF;
         if (nsa) {
           address[0] = t.Vg(vaddr);
-          for (uint32_t d = 0; d < nsa; d++)
-            for (uint32_t c = 0; c < 4; c++)
+          for (u32 d = 0; d < nsa; d++)
+            for (u32 c = 0; c < 4; c++)
               address[1 + d * 4 + c] = t.Vg((inst.raw[2 + d] >> (c * 8)) & 0xFF);
         } else {
-          for (uint32_t c = 0; c < address.size(); c++)
+          for (u32 c = 0; c < address.size(); c++)
             address[c] = t.Vg(vaddr + c);
         }
         if (cube)
-          for (uint32_t c = 0; c < 2; c++)
+          for (u32 c = 0; c < 2; c++)
             address[c] = t.m.Bitcast(
                 t.t_u, t.FSub(t.m.Bitcast(t.t_f, address[c]), t.F32(1.0f)));
         gpu::gcn::EmitMimg(t, lowered, sc, address.data());
@@ -1730,24 +1731,24 @@ Id BranchTaken(Translator& t, int kind) {
   }
 }
 
-std::vector<uint32_t> BlockStarts(const Program& program, uint32_t max_pc) {
-  std::vector<uint32_t> leaders{0};
+std::vector<u32> BlockStarts(const Program& program, u32 max_pc) {
+  std::vector<u32> leaders{0};
   for (const Inst& inst : program) {
     const int k = BranchKind(inst);
     if (k == 0)
       continue;
     leaders.push_back(inst.pc + inst.size);
     if (k >= 1 && k <= 7) {
-      const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-      leaders.push_back(static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                              static_cast<int32_t>(inst.size) +
+      const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+      leaders.push_back(static_cast<u32>(static_cast<i32>(inst.pc) +
+                                              static_cast<i32>(inst.size) +
                                               simm));
     }
   }
   std::sort(leaders.begin(), leaders.end());
   leaders.erase(std::unique(leaders.begin(), leaders.end()), leaders.end());
-  std::vector<uint32_t> starts;
-  for (uint32_t l : leaders)
+  std::vector<u32> starts;
+  for (u32 l : leaders)
     if (l < max_pc)
       starts.push_back(l);
   return starts;
@@ -1779,11 +1780,11 @@ void EmitBody(Translator& t, const Program& program, StageContext& sc) {
 // are recovered and the VS seeds from VertexIndex/InstanceIndex (procedural
 // path).
 struct FetchAttr {
-  uint32_t semantic, num_comps, dest_vgpr, table_sgpr, dword_off;
-  uint32_t pc =
+  u32 semantic, num_comps, dest_vgpr, table_sgpr, dword_off;
+  u32 pc =
       ~0u;  // inline fetch MUBUF pc (~0 = standalone fetch sub-shader)
-  uint32_t inst_format = 0;  // typed (MTBUF) fetch format; 0 = take the V#'s
-  uint32_t inst_offset = 0;  // byte offset immediate: this attr's field offset
+  u32 inst_format = 0;  // typed (MTBUF) fetch format; 0 = take the V#'s
+  u32 inst_offset = 0;  // byte offset immediate: this attr's field offset
 };
 
 // Scan an instruction stream for the s_load_dwordx4(V# table) +
@@ -1793,7 +1794,7 @@ struct FetchAttr {
 // RdnaEmitInst as an unsupported op.
 std::vector<FetchAttr> ParseFetchInsts(const Program& insts) {
   std::vector<FetchAttr> out;
-  uint32_t sem = 0;  // dense vertex-input location (per-vertex fetches only)
+  u32 sem = 0;  // dense vertex-input location (per-vertex fetches only)
   const auto chained_loads = MapTableChainedLoads(insts);
   for (const Inst& in : insts) {
     if (in.enc == Enc::kSop1 && in.opcode == 0x20)
@@ -1806,20 +1807,20 @@ std::vector<FetchAttr> ParseFetchInsts(const Program& insts) {
     const bool typed = in.enc == Enc::kMtbuf;
     if ((in.enc != Enc::kMubuf && !typed) || in.opcode > 0x03)
       continue;
-    const uint32_t vdata = (in.raw[1] >> 8) & 0xFF;
-    const uint32_t srsrc = ((in.raw[1] >> 16) & 0x1F) * 4;
-    const uint32_t nc = (in.opcode & 3) + 1;
+    const u32 vdata = (in.raw[1] >> 8) & 0xFF;
+    const u32 srsrc = ((in.raw[1] >> 16) & 0x1F) * 4;
+    const u32 nc = (in.opcode & 3) + 1;
     const bool idxen = (in.raw[0] >> 13) & 1, offen = (in.raw[0] >> 12) & 1;
-    const uint32_t inst_offset = in.raw[0] & 0xFFF;
-    const uint32_t vaddr = in.raw[1] & 0xFF, soffset = (in.raw[1] >> 24) & 0xFF;
+    const u32 inst_offset = in.raw[0] & 0xFFF;
+    const u32 vaddr = in.raw[1] & 0xFF, soffset = (in.raw[1] >> 24) & 0xFF;
     // If srsrc's V# was loaded via s_load from a user_data pointer, this fetch
     // reads a TABLE of V#s at that pointer: table_sgpr = the s_load's sbase and
     // this attribute is that s_load's 16-byte (4-dword) entry. Otherwise the V#
     // is inline in user data at srsrc (table_sgpr = srsrc, dword_off = 0).
     const auto chain = chained_loads.find(in.pc);
     const bool chained = chain != chained_loads.end();
-    const uint32_t table_sgpr = chained ? chain->second.first : srsrc;
-    const uint32_t dword_off = chained ? chain->second.second * 4 : 0;
+    const u32 table_sgpr = chained ? chain->second.first : srsrc;
+    const u32 dword_off = chained ? chain->second.second * 4 : 0;
     const bool vtx = BufLoadIsVertexFetch(in, chained);
     if (ShDbg())
       BASE_LOGI("gcnspv",
@@ -1839,12 +1840,12 @@ std::vector<FetchAttr> ParseFetchInsts(const Program& insts) {
   return out;
 }
 
-std::vector<FetchAttr> ParseFetch(uint64_t fetch_addr) {
-  constexpr uint64_t kMaxFetchBytes = 256 * sizeof(uint32_t);
+std::vector<FetchAttr> ParseFetch(u64 fetch_addr) {
+  constexpr u64 kMaxFetchBytes = 256 * sizeof(u32);
   if (!gpu::gcn::InGuest(fetch_addr) ||
       !gpu::IsReadableRange(fetch_addr, kMaxFetchBytes))
     return {};
-  const auto* code = reinterpret_cast<const uint32_t*>(fetch_addr);
+  const auto* code = reinterpret_cast<const u32*>(fetch_addr);
   std::vector<FetchAttr> attrs = ParseFetchInsts(Decode(code, 256));
   for (FetchAttr& attr : attrs)
     attr.pc = ~0u;
@@ -1852,7 +1853,7 @@ std::vector<FetchAttr> ParseFetch(uint64_t fetch_addr) {
 }
 
 // Address of the VS being translated, for shader-specific debug knobs.
-thread_local uint64_t g_vs_addr = 0;
+thread_local u64 g_vs_addr = 0;
 
 // ---- VS / PS drivers --------------------------------------------------------
 Id DeclareUserData(Translator& t) {
@@ -1867,27 +1868,27 @@ Id DeclareUserData(Translator& t) {
 
 void SeedUserData(Translator& t,
                   Id user_data,
-                  uint32_t sgpr_base,
-                  uint32_t count) {
+                  u32 sgpr_base,
+                  u32 count) {
   const Id p_u = t.m.TypePointer(spv::StorageClass::PushConstant, t.t_u);
-  for (uint32_t i = 0; i < std::min(count, 32u); i++)
+  for (u32 i = 0; i < std::min(count, 32u); i++)
     t.SetSg(
         sgpr_base + i,
         t.m.Load(t.t_u, t.m.AccessChain(p_u, user_data, {t.U32(0), t.U32(i)})));
 }
 
 bool TranslateVs(const Program& program,
-                 const uint32_t* vs_user_data,
-                 const std::unordered_set<uint32_t>& flat_attrs,
+                 const u32* vs_user_data,
+                 const std::unordered_set<u32>& flat_attrs,
                  Recompiled& r,
                  Translator& t,
                  bool gl_clip_space,
-                 uint32_t user_sgprs) {
+                 u32 user_sgprs) {
   if (ShDbg())
     DumpProgram(program, "vs");
-  const uint64_t fetch =
+  const u64 fetch =
       user_sgprs >= 2
-          ? (static_cast<uint64_t>(vs_user_data[1] & 0xFFFF) << 32) |
+          ? (static_cast<u64>(vs_user_data[1] & 0xFFFF) << 32) |
                 vs_user_data[0]
           : 0;
   // Prefer a stand-alone fetch sub-shader; otherwise recover the fetch that the
@@ -1909,7 +1910,7 @@ bool TranslateVs(const Program& program,
       t.m.Variable(t.m.TypePointer(spv::StorageClass::Output, t.t_v4),
                    spv::StorageClass::Output);
   t.m.Decorate(pos_out, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::Position)});
+               {static_cast<u32>(spv::BuiltIn::Position)});
   iface.push_back(pos_out);
 
   const Id user_data = DeclareUserData(t);
@@ -1921,7 +1922,7 @@ bool TranslateVs(const Program& program,
   // 1-vert/1-prim wave so that math yields a live lane instead of zeros.
   t.SetSg(3, t.U32(0x0101));
 
-  std::unordered_map<uint32_t, StageContext::VfetchSeed> vfetch_seed;
+  std::unordered_map<u32, StageContext::VfetchSeed> vfetch_seed;
   Id vertex_index = 0;
   if (attrs.empty()) {  // procedural VS: seed the ABI VGPRs from Vulkan
                         // built-ins
@@ -1929,9 +1930,9 @@ bool TranslateVs(const Program& program,
     vertex_index = t.m.Variable(p_in_u, spv::StorageClass::Input);
     const Id instance_index = t.m.Variable(p_in_u, spv::StorageClass::Input);
     t.m.Decorate(vertex_index, spv::Decoration::BuiltIn,
-                 {static_cast<uint32_t>(spv::BuiltIn::VertexIndex)});
+                 {static_cast<u32>(spv::BuiltIn::VertexIndex)});
     t.m.Decorate(instance_index, spv::Decoration::BuiltIn,
-                 {static_cast<uint32_t>(spv::BuiltIn::InstanceIndex)});
+                 {static_cast<u32>(spv::BuiltIn::InstanceIndex)});
     iface.push_back(vertex_index);
     iface.push_back(instance_index);
     t.SetVg(0, t.m.Load(t.t_u, vertex_index));
@@ -1941,7 +1942,7 @@ bool TranslateVs(const Program& program,
   }
 
   Id first_attr_var = 0;
-  uint32_t first_attr_comps = 0;
+  u32 first_attr_comps = 0;
   for (const FetchAttr& a : attrs) {
     const Id comp_ty = a.num_comps == 1   ? t.t_f
                        : a.num_comps == 2 ? t.t_v2
@@ -1954,7 +1955,7 @@ bool TranslateVs(const Program& program,
     t.m.Name(in_var, "v_attr" + std::to_string(a.semantic));
     iface.push_back(in_var);
     const Id val = t.m.Load(comp_ty, in_var);
-    for (uint32_t c = 0; c < a.num_comps; c++) {
+    for (u32 c = 0; c < a.num_comps; c++) {
       const Id comp =
           a.num_comps == 1 ? val : t.m.CompositeExtract(t.t_f, val, c);
       t.SetVgF(a.dest_vgpr + c, comp);
@@ -1993,11 +1994,11 @@ bool TranslateVs(const Program& program,
   // DELTA_GPU_DBGPOS=<vs address>[:<dword offset>]: recompute this one shader's
   // position export from its position input and a 4x4 transform in its cbuffer
   // (address 0 = every shader; the offset picks which matrix in the window).
-  static const uint64_t dbg_pos_vs =
+  static const u64 dbg_pos_vs =
       kDbgPos ? std::strtoull(kDbgPos, nullptr, 0) : ~0ull;
-  static const uint32_t dbg_pos_off = [] {
+  static const u32 dbg_pos_off = [] {
     const char* c = kDbgPos ? std::strchr(kDbgPos, ':') : nullptr;
-    return c ? (uint32_t)std::strtoul(c + 1, nullptr, 0) : 0u;
+    return c ? (u32)std::strtoul(c + 1, nullptr, 0) : 0u;
   }();
   // ...:<world binding> applies a 4x3 world matrix from that binding first, so
   // the probe can reproduce a world-then-view-projection chain.
@@ -2034,7 +2035,7 @@ bool TranslateVs(const Program& program,
       vidx_var = t.m.Variable(t.m.TypePointer(spv::StorageClass::Input, t.t_u),
                               spv::StorageClass::Input);
       t.m.Decorate(vidx_var, spv::Decoration::BuiltIn,
-                   {static_cast<uint32_t>(spv::BuiltIn::VertexIndex)});
+                   {static_cast<u32>(spv::BuiltIn::VertexIndex)});
       iface.push_back(vidx_var);
     }
     const Id vidx = t.m.Load(t.t_u, vidx_var);
@@ -2107,11 +2108,11 @@ bool TranslateVs(const Program& program,
 }
 
 bool TranslatePs(const Program& program,
-                 const std::unordered_set<uint32_t>& flat_attrs,
-                 uint32_t ps_input_ena,
+                 const std::unordered_set<u32>& flat_attrs,
+                 u32 ps_input_ena,
                  Recompiled& r,
                  Translator& t,
-                 uint32_t user_sgprs) {
+                 u32 user_sgprs) {
   if (ShDbg())
     DumpProgram(program, "ps");
   std::vector<Id> iface;
@@ -2121,16 +2122,16 @@ bool TranslatePs(const Program& program,
   sc.iface = &iface;
   sc.flat_attrs = &flat_attrs;
   sc.skip_launch_movs = LaunchExecMovPcs(program);
-  if (!RdnaPlanCbufs(program, static_cast<uint32_t>(r.vs_cbufs.size()),
+  if (!RdnaPlanCbufs(program, static_cast<u32>(r.vs_cbufs.size()),
                      r.ps_cbufs, sc.cbuf_bind, sc.smem_cbuf_by_pc))
     return false;
-  RdnaPlanGfxBuffers(program, static_cast<uint32_t>(r.vs_bufs.size()),
+  RdnaPlanGfxBuffers(program, static_cast<u32>(r.vs_bufs.size()),
                      nullptr, r.ps_bufs, sc.gfx_buf_bind);
   const gpu::gcn::MimgBindingPlan mimg_plan = RdnaPlanMimg(program);
   if (mimg_plan.binding_srsrc.size() > StageContext::kMaxPsSamplers)
     return false;
   sc.mimg_plan = &mimg_plan;  // borrowed by EmitBody
-  for (uint32_t i = 0; i < mimg_plan.binding_srsrc.size(); i++)
+  for (u32 i = 0; i < mimg_plan.binding_srsrc.size(); i++)
     r.ps_texs.push_back(
         {i, mimg_plan.binding_srsrc[i], mimg_plan.binding_storage[i]});
 
@@ -2240,16 +2241,16 @@ bool TranslateDepthOnlyPs(Translator& t) {
 // Shared with the compute stage (rdna_compute.cc), which lowers the same
 // branches through the same per-instruction dispatch.
 void EmitCfg(Translator& t, const Program& program, StageContext& sc) {
-  const uint32_t max_pc =
+  const u32 max_pc =
       program.empty() ? 0 : program.back().pc + program.back().size;
-  const std::vector<uint32_t> starts = BlockStarts(program, max_pc);
-  const uint32_t num_blocks = static_cast<uint32_t>(starts.size());
-  const uint32_t kExit = num_blocks;
-  const auto block_of = [&](uint32_t pc) -> uint32_t {
+  const std::vector<u32> starts = BlockStarts(program, max_pc);
+  const u32 num_blocks = static_cast<u32>(starts.size());
+  const u32 kExit = num_blocks;
+  const auto block_of = [&](u32 pc) -> u32 {
     if (pc >= max_pc)
       return kExit;
-    uint32_t b = 0;
-    for (uint32_t i = 0; i < num_blocks; i++)
+    u32 b = 0;
+    for (u32 i = 0; i < num_blocks; i++)
       if (starts[i] <= pc)
         b = i;
       else
@@ -2273,15 +2274,15 @@ void EmitCfg(Translator& t, const Program& program, StageContext& sc) {
   t.m.OpenBlock(dispatch);
   const Id state = t.State();
   t.m.SelectionMerge(merge_sel);
-  std::vector<std::pair<uint32_t, Id> > cases;
-  for (uint32_t i = 0; i < num_blocks; i++)
+  std::vector<std::pair<u32, Id> > cases;
+  for (u32 i = 0; i < num_blocks; i++)
     cases.push_back({i, case_labels[i]});
   t.m.Switch(state, exit_blk, cases);
 
-  for (uint32_t bi = 0; bi < num_blocks; bi++) {
+  for (u32 bi = 0; bi < num_blocks; bi++) {
     t.m.OpenBlock(case_labels[bi]);
-    const uint32_t blk_start = starts[bi];
-    const uint32_t blk_end = (bi + 1 < num_blocks) ? starts[bi + 1] : max_pc;
+    const u32 blk_start = starts[bi];
+    const u32 blk_end = (bi + 1 < num_blocks) ? starts[bi + 1] : max_pc;
     bool terminated = false;
     for (const Inst& inst : program) {
       if (inst.pc < blk_start || inst.pc >= blk_end)
@@ -2291,19 +2292,19 @@ void EmitCfg(Translator& t, const Program& program, StageContext& sc) {
         RdnaEmitInst(t, inst, sc);
         continue;
       }
-      const uint32_t fall = (bi + 1 < num_blocks) ? bi + 1 : kExit;
+      const u32 fall = (bi + 1 < num_blocks) ? bi + 1 : kExit;
       if (k == 8) {
         t.SetState(kExit);
       } else if (k == 1) {
-        const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
+        const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
         t.SetState(block_of(
-            static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                  static_cast<int32_t>(inst.size) + simm)));
+            static_cast<u32>(static_cast<i32>(inst.pc) +
+                                  static_cast<i32>(inst.size) + simm)));
       } else {
-        const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-        const uint32_t target = block_of(
-            static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                  static_cast<int32_t>(inst.size) + simm));
+        const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+        const u32 target = block_of(
+            static_cast<u32>(static_cast<i32>(inst.pc) +
+                                  static_cast<i32>(inst.size) + simm));
         t.SetStateId(t.SelectB(BranchTaken(t, k), t.U32(target), t.U32(fall)));
       }
       terminated = true;
@@ -2322,21 +2323,21 @@ void EmitCfg(Translator& t, const Program& program, StageContext& sc) {
   t.m.OpenBlock(merge);
 }
 
-Recompiled Recompile(const uint32_t* vs_code,
-                     const uint32_t* ps_code,
-                     const uint32_t* vs_user_data,
-                     const uint32_t* ps_user_data,
-                     uint32_t ps_input_ena,
+Recompiled Recompile(const u32* vs_code,
+                     const u32* ps_code,
+                     const u32* vs_user_data,
+                     const u32* ps_user_data,
+                     u32 ps_input_ena,
                      bool gl_clip_space,
-                     uint32_t vs_user_sgprs,
-                     uint32_t ps_user_sgprs) {
+                     u32 vs_user_sgprs,
+                     u32 ps_user_sgprs) {
   Recompiled r;
   if (!vs_code || !vs_user_data || !ps_user_data)
     return r;
 
-  constexpr uint64_t kMaxShaderBytes = 4096 * sizeof(uint32_t);
-  const uint64_t vs_address = reinterpret_cast<uintptr_t>(vs_code);
-  const uint64_t ps_address = reinterpret_cast<uintptr_t>(ps_code);
+  constexpr u64 kMaxShaderBytes = 4096 * sizeof(u32);
+  const u64 vs_address = reinterpret_cast<uintptr_t>(vs_code);
+  const u64 ps_address = reinterpret_cast<uintptr_t>(ps_code);
   if (!gpu::IsReadableRange(vs_address, kMaxShaderBytes) ||
       (ps_code && !gpu::IsReadableRange(ps_address, kMaxShaderBytes)))
     return r;
@@ -2347,7 +2348,7 @@ Recompiled Recompile(const uint32_t* vs_code,
 
   // V_INTERP_MOV P0 reads a per-primitive (flat) parameter; represent those
   // locations as flat varyings in both stages.
-  std::unordered_set<uint32_t> flat_attrs;
+  std::unordered_set<u32> flat_attrs;
   for (const Inst& inst : ps_program)
     if (inst.enc == Enc::kVintrp && inst.opcode == 2 &&
         (inst.raw[0] & 0xFF) == 2)
@@ -2383,11 +2384,11 @@ Recompiled Recompile(const uint32_t* vs_code,
     return r;
   }
 
-  const std::vector<uint32_t> vs = tv.m.Assemble();
-  const std::vector<uint32_t> ps = tp.m.Assemble();
+  const std::vector<u32> vs = tv.m.Assemble();
+  const std::vector<u32> ps = tp.m.Assemble();
   // gfx10.3 RECTLIST draws reach us as three corners of a rectangle; Vulkan has
   // no such topology, so carry the same expansion stage the GFX7 path uses.
-  const std::vector<uint32_t> gs =
+  const std::vector<u32> gs =
       gpu::gcn::EmitRectListGeometry(r.num_params, flat_attrs);
   std::string err;
   if (!gpu::gcn::spirv::Validate(vs, &err)) {

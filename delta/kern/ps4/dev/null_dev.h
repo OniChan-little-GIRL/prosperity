@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -12,9 +13,9 @@ class nullDevice : public device {
 public:
   nullDevice(proc *p);
 
-  int64_t read(void *, size_t) override;
-  int64_t write(const void *, size_t) override;
-  int64_t lseek(int64_t, int) override;
+  i64 read(void *, size_t) override;
+  i64 write(const void *, size_t) override;
+  i64 lseek(i64, int) override;
   int fstat(void *stat) override;
 };
 } // namespace krnl

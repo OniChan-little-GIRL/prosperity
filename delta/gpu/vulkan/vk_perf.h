@@ -8,6 +8,7 @@
 // stacked-column overlay that draws the history into the presented image.
 
 #include <chrono>
+#include "base/arch.h"
 #include <cstdint>
 
 namespace gpu::vk {
@@ -16,42 +17,42 @@ namespace gpu::vk {
 // per-frame wall time goes: our GPU code (draw + EndFrame, including the
 // readback stall and synchronous texture uploads) vs the guest/FEX time
 // outside it.
-extern uint64_t g_ns_draw, g_ns_end, g_ns_readback, g_ns_tex_up;
-extern uint64_t g_ns_cs, g_cs_bytes;
-extern uint64_t g_ns_cs_in, g_ns_cs_gpu, g_ns_cs_out;
-extern uint64_t g_ns_submit, g_ns_present;
-extern uint64_t g_ns_gpu_exec;
-extern uint32_t g_cs_count, g_tex_ups;
-extern uint32_t g_gpu_exec_samples;
-extern uint32_t g_cs_stage_n, g_cs_flush_n;
-extern uint64_t g_cs_stage_bytes;
+extern u64 g_ns_draw, g_ns_end, g_ns_readback, g_ns_tex_up;
+extern u64 g_ns_cs, g_cs_bytes;
+extern u64 g_ns_cs_in, g_ns_cs_gpu, g_ns_cs_out;
+extern u64 g_ns_submit, g_ns_present;
+extern u64 g_ns_gpu_exec;
+extern u32 g_cs_count, g_tex_ups;
+extern u32 g_gpu_exec_samples;
+extern u32 g_cs_stage_n, g_cs_flush_n;
+extern u64 g_cs_stage_bytes;
 // Compute writeback coverage: how much of what we copy back to guest memory the
 // dispatch actually changed. The gap is memory the CPU owns and we were
 // reverting -- see CsRangeFlushOne.
-extern uint64_t g_cs_wb_bytes_written, g_cs_wb_bytes_total;
+extern u64 g_cs_wb_bytes_written, g_cs_wb_bytes_total;
 
 // Submit+wait round trips a frame, broken down by what asked for each.
 void CsSyncReport(double frames);
 
 // Per-frame accumulators (ns), reset when a frame's sample is pushed.
-extern uint64_t g_fr_draw, g_fr_submit, g_fr_wait, g_fr_present, g_fr_tex_up;
+extern u64 g_fr_draw, g_fr_submit, g_fr_wait, g_fr_present, g_fr_tex_up;
 
-inline uint64_t NowNs() {
+inline u64 NowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
 struct ScopeNs {
-  uint64_t t0;
-  uint64_t* acc;
-  explicit ScopeNs(uint64_t* a) : t0(NowNs()), acc(a) {}
+  u64 t0;
+  u64* acc;
+  explicit ScopeNs(u64* a) : t0(NowNs()), acc(a) {}
   ~ScopeNs() { *acc += NowNs() - t0; }
 };
 
 // Close out this frame's stage sample and start the next.
 void PushStageSample();
-void DrawPerfOverlay(uint8_t* bgra, uint32_t w, uint32_t h);
+void DrawPerfOverlay(u8* bgra, u32 w, u32 h);
 void ReportFps();
 
 }  // namespace gpu::vk

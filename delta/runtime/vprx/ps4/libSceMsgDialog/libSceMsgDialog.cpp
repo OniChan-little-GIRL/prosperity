@@ -13,6 +13,7 @@
  */
 
 #include "libSceMsgDialog.h"
+#include "base/arch.h"
 
 #include <atomic>
 #include <cstdint>
@@ -63,15 +64,15 @@ int PS4ABI sceMsgDialogGetResult(void *result) {
   return 0;
 }
 
-int PS4ABI sceMsgDialogProgressBarSetValue(uint32_t target, uint32_t rate) {
+int PS4ABI sceMsgDialogProgressBarSetValue(u32 target, u32 rate) {
   return 0;
 }
 
-int PS4ABI sceMsgDialogProgressBarInc(uint32_t target, uint32_t delta) {
+int PS4ABI sceMsgDialogProgressBarInc(u32 target, u32 delta) {
   return 0;
 }
 
-int PS4ABI sceMsgDialogProgressBarSetMsg(uint32_t target, const char *msg) {
+int PS4ABI sceMsgDialogProgressBarSetMsg(u32 target, const char *msg) {
   return 0;
 }
 

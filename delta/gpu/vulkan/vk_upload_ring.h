@@ -9,6 +9,7 @@
 // overwritten (see vk_frame).
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 #include <vector>
@@ -20,18 +21,18 @@ namespace gpu::vk {
 struct TextureUploadBlock {
   VkBuffer buffer = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
-  uint8_t* map = nullptr;
+  u8* map = nullptr;
   VkDeviceSize capacity = 0;
   VkDeviceSize offset = 0;
   // Consecutive ResetTextureUploads calls with no allocation from this block;
   // long-idle blocks are destroyed at reset (see ResetTextureUploads).
-  uint64_t idle_resets = 0;
+  u64 idle_resets = 0;
 };
 
 struct TextureUploadSlice {
   VkBuffer buffer = VK_NULL_HANDLE;
   VkDeviceSize offset = 0;
-  uint8_t* map = nullptr;
+  u8* map = nullptr;
 };
 
 // Per-frame vertex ring. A 1080p title that re-draws its whole scene for a
@@ -59,8 +60,8 @@ constexpr VkDeviceSize kIbRing =
     128ull * 1024 * 1024;  // per-frame index ring (32-bit), see kVbRing
 constexpr VkDeviceSize kUboRing =
     256ull * 1024 * 1024;  // per-frame recomp cbuffer ring
-constexpr uint32_t kCbufWindow = gpu::gcn::kCbufDwords * 4;
-constexpr uint32_t kCbufBindings =
+constexpr u32 kCbufWindow = gpu::gcn::kCbufDwords * 4;
+constexpr u32 kCbufBindings =
     gpu::gcn::kMaxCbufBindings;  // set-1 UBO bindings
 // Raw-buffer ring: the windows a recompiled shader's hand-written MUBUF loads
 // read from, at set-2 bindings 0..kRawBufBindings-1. Four dynamic storage
@@ -73,21 +74,21 @@ constexpr uint32_t kCbufBindings =
 // 65536K/65536K) -- a heavy cut binds more unique raw buffers (skinning
 // palettes, instance tables) than that even deduped. 512 MiB = 256 windows.
 constexpr VkDeviceSize kSboRing = 512ull * 1024 * 1024;
-constexpr uint32_t kRawBufWindow = gpu::gcn::kGfxBufferDwords * 4;
-constexpr uint32_t kRawBufBindings = gpu::gcn::kMaxGfxBuffers;
+constexpr u32 kRawBufWindow = gpu::gcn::kGfxBufferDwords * 4;
+constexpr u32 kRawBufBindings = gpu::gcn::kMaxGfxBuffers;
 
 struct UploadRings {
   // Vertex ring: interleaved pos+colour+uv for the heuristic path, the raw
   // guest vertex records for the recompiled path.
   VkBuffer vb = VK_NULL_HANDLE;
   VkDeviceMemory vb_mem = VK_NULL_HANDLE;
-  uint8_t* vb_map = nullptr;
+  u8* vb_map = nullptr;
   VkDeviceSize vb_offset = 0, vb_end = kVbRing;
 
   // Index ring: 32-bit indices (16-bit guest indices are widened on upload).
   VkBuffer ib = VK_NULL_HANDLE;
   VkDeviceMemory ib_mem = VK_NULL_HANDLE;
-  uint8_t* ib_map = nullptr;
+  u8* ib_map = nullptr;
   VkDeviceSize ib_offset = 0, ib_end = kIbRing;
 
   // Recomp cbuffer ring: per-draw VS/PS constant buffers live at set 1 bindings
@@ -95,11 +96,11 @@ struct UploadRings {
   // empty_layout fills set 0 for untextured recomp draws.
   VkBuffer ubo_buf = VK_NULL_HANDLE;
   VkDeviceMemory ubo_mem = VK_NULL_HANDLE;
-  uint8_t* ubo_map = nullptr;
+  u8* ubo_map = nullptr;
   VkDeviceSize ubo_offset = 0, ubo_end = kUboRing;
-  uint32_t ubo_align = 256;
+  u32 ubo_align = 256;
   VkDeviceSize ubo_stride = kCbufWindow;
-  std::vector<uint32_t> ubo_written;
+  std::vector<u32> ubo_written;
   bool zero_window_initialized = false;
   VkDescriptorSetLayout ubo_layout = VK_NULL_HANDLE;
   VkDescriptorSetLayout empty_layout = VK_NULL_HANDLE;
@@ -112,15 +113,15 @@ struct UploadRings {
   // what an unresolved binding points at.
   VkBuffer sbo_buf = VK_NULL_HANDLE;
   VkDeviceMemory sbo_mem = VK_NULL_HANDLE;
-  uint8_t* sbo_map = nullptr;
+  u8* sbo_map = nullptr;
   VkDeviceSize sbo_offset = 0, sbo_end = kSboRing;
   // Bindings actually created, = min(device dynamic-SSBO limit, kRawBufBindings).
   // The recompiler is told this via gcn::SetMaxGfxBuffers so it never plans a
   // binding the layout does not have.
-  uint32_t sbo_count = gpu::gcn::kMinGfxBuffers;
-  uint32_t sbo_align = 256;
+  u32 sbo_count = gpu::gcn::kMinGfxBuffers;
+  u32 sbo_align = 256;
   VkDeviceSize sbo_stride = kRawBufWindow;
-  std::vector<uint32_t> sbo_written;
+  std::vector<u32> sbo_written;
   VkDescriptorSetLayout sbo_layout = VK_NULL_HANDLE;
   VkDescriptorPool sbo_pool = VK_NULL_HANDLE;
   VkDescriptorSet sbo_set = VK_NULL_HANDLE;
@@ -138,10 +139,10 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props);
 // vertex-input state already covers never binds set 2 at all. The set layout
 // itself is created up front, because pipeline layouts name it.
 bool EnsureRawBufferRing();
-bool AllocateTextureUpload(uint32_t slot,
+bool AllocateTextureUpload(u32 slot,
                            VkDeviceSize bytes,
                            VkDeviceSize alignment,
                            TextureUploadSlice& slice);
-void ResetTextureUploads(uint32_t slot);
+void ResetTextureUploads(u32 slot);
 
 }  // namespace gpu::vk

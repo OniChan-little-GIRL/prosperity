@@ -6,6 +6,7 @@
  */
 
 #include "libSceVideoOut.h"
+#include "base/arch.h"
 
 #include <atomic>
 #include <chrono>
@@ -31,7 +32,7 @@ DELTA_OPTION(bool, kVoNostomp, "DELTA_VO_NOSTOMP", false);
 
 // PS5 present bridge: forwards the flip to the AGC command processor's
 // vk::endFrame (gpu/ps5/cmd_processor.cpp).
-extern "C" void prosperity_agc_flip(uint64_t scanoutBase);
+extern "C" void prosperity_agc_flip(u64 scanoutBase);
 
 using namespace krnl;
 
@@ -39,13 +40,13 @@ namespace {
 
 // SCE pixel formats we care about. A8R8G8B8 is BGRA in little-endian memory;
 // A8B8G8R8 is RGBA. The high bit marks the family, bit 0x2200 the channel order.
-constexpr uint32_t kFmtA8R8G8B8_SRGB = 0x80000000u;
+constexpr u32 kFmtA8R8G8B8_SRGB = 0x80000000u;
 
 // PS4 videoout kernel-event filter. Real EVFILT_DISPLAY is -13 (the vblank pump
 // already uses it). Flip completions are a distinct source, so give them their
 // own filter so the 60 Hz vblank pump never spuriously fires a flip knote.
-constexpr int16_t kFilterFlip = -10;
-constexpr int16_t kFilterVblank = -13;
+constexpr i16 kFilterFlip = -10;
+constexpr i16 kFilterVblank = -13;
 
 // videoout event ids returned by sceVideoOutGetEventId.
 constexpr int kEventFlip = 0;
@@ -53,52 +54,52 @@ constexpr int kEventVblank = 1;
 
 // SceVideoOutResolutionStatus, 0x30 bytes.
 struct ResolutionStatus {
-  int32_t width;
-  int32_t height;
-  int32_t paneWidth;
-  int32_t paneHeight;
-  uint64_t refreshRate;
+  i32 width;
+  i32 height;
+  i32 paneWidth;
+  i32 paneHeight;
+  u64 refreshRate;
   float screenSizeInInch;
-  uint16_t flags;
-  uint16_t reserved0;
-  uint32_t reserved1[3];
+  u16 flags;
+  u16 reserved0;
+  u32 reserved1[3];
 };
 
 // SceVideoOutFlipStatus, 0x40 bytes.
 struct FlipStatus {
-  uint64_t count;
-  uint64_t processTime;
-  uint64_t tsc;
-  int64_t flipArg;
-  uint64_t submitTsc;
-  uint64_t reserved0;
-  int32_t gcQueueNum;
-  int32_t flipPendingNum;
-  int32_t currentBuffer;
-  uint32_t reserved1;
+  u64 count;
+  u64 processTime;
+  u64 tsc;
+  i64 flipArg;
+  u64 submitTsc;
+  u64 reserved0;
+  i32 gcQueueNum;
+  i32 flipPendingNum;
+  i32 currentBuffer;
+  u32 reserved1;
 };
 
 // SceVideoOutVblankStatus, 0x30 bytes.
 struct VblankStatus {
-  uint64_t count;
-  uint64_t processTime;
-  uint64_t tsc;
-  uint64_t reserved[1];
-  uint8_t flags;
-  uint8_t pad[7];
+  u64 count;
+  u64 processTime;
+  u64 tsc;
+  u64 reserved[1];
+  u8 flags;
+  u8 pad[7];
 };
 
 // SceVideoOutBufferAttribute, 0x28 bytes.
 struct BufferAttribute {
-  uint32_t pixelFormat;
-  int32_t tilingMode;
-  int32_t aspectRatio;
-  uint32_t width;
-  uint32_t height;
-  uint32_t pitchInPixel;
-  uint32_t option;
-  uint32_t reserved0;
-  uint64_t reserved1;
+  u32 pixelFormat;
+  i32 tilingMode;
+  i32 aspectRatio;
+  u32 width;
+  u32 height;
+  u32 pitchInPixel;
+  u32 option;
+  u32 reserved0;
+  u64 reserved1;
 };
 
 constexpr int kMaxBuffers = 16;
@@ -107,25 +108,25 @@ constexpr int kHandleBase = 1;
 struct VideoPort {
   bool open = false;
   int flipRate = 0;
-  uint32_t width = 1920;
-  uint32_t height = 1080;
-  uint32_t pitch = 1920;       // in pixels
-  uint32_t pixelFormat = kFmtA8R8G8B8_SRGB;
+  u32 width = 1920;
+  u32 height = 1080;
+  u32 pitch = 1920;       // in pixels
+  u32 pixelFormat = kFmtA8R8G8B8_SRGB;
   void *buffers[kMaxBuffers] = {};
   int bufferCount = 0;
 
   // flip bookkeeping (read back via sceVideoOutGetFlipStatus).
-  std::atomic<uint64_t> flipCount{0};
-  std::atomic<uint64_t> submitCount{0};
-  int64_t lastFlipArg = -1;
+  std::atomic<u64> flipCount{0};
+  std::atomic<u64> submitCount{0};
+  i64 lastFlipArg = -1;
   int currentBuffer = -1;
   // When the last flip was submitted and when it completed. Zero here is not
   // harmless: a title that decides a per-frame resource is retired by comparing
   // its own submit stamp against the flip's never sees one advance, so it
   // allocates a fresh one every frame instead of recycling.
-  std::atomic<uint64_t> lastSubmitTsc{0};
-  std::atomic<uint64_t> lastFlipTsc{0};
-  std::atomic<uint64_t> lastProcessTime{0};
+  std::atomic<u64> lastSubmitTsc{0};
+  std::atomic<u64> lastFlipTsc{0};
+  std::atomic<u64> lastProcessTime{0};
 
   // equeue (by handle) a flip/vblank event was registered on, so SubmitFlip can
   // wake exactly that queue. Isaac uses one display port + one equeue.
@@ -140,36 +141,36 @@ struct VideoPort {
   // command processor's label range check rightly refuses to write host .bss
   // -- SotC's render fence never landed and its LoadInitialWorld job chain
   // stalled forever on the unset label.
-  uint64_t *labels = nullptr;
+  u64 *labels = nullptr;
 };
 
 // Monotonic nanoseconds, used for the flip/vblank timestamps the SCE structs
 // carry (processTime is documented as microseconds, tsc as a raw counter).
-static uint64_t nowNs() {
-  return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+static u64 nowNs() {
+  return (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
-uint64_t *videoLabels();  // fwd (needs g_mtx/g_port below)
+u64 *videoLabels();  // fwd (needs g_mtx/g_port below)
 
 std::mutex g_mtx;
 VideoPort g_port;            // single display port is enough for Isaac
 
 // Guest-visible 16-slot label block, allocated on first use (either the pump
 // or the title asking for the address can get here first).
-uint64_t *videoLabels() {
+u64 *videoLabels() {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!g_port.labels)
     g_port.labels =
-        reinterpret_cast<uint64_t *>(krnl::allocLowGuest(16 * sizeof(uint64_t)));
+        reinterpret_cast<u64 *>(krnl::allocLowGuest(16 * sizeof(u64)));
   return g_port.labels;
 }
 std::atomic<bool> g_gfxUp{false};
 
 std::atomic<int> g_gfxState{0};  // 0=untried, 1=up, 2=failed
 
-bool ensureGfx(uint32_t w, uint32_t h) {
+bool ensureGfx(u32 w, u32 h) {
   int st = g_gfxState.load();
   if (st == 1)
     return true;
@@ -194,7 +195,7 @@ equeue *findEqueue(int handle) {
   auto *p = proc::getActive();
   if (!p)
     return nullptr;
-  auto *obj = p->getObjTable().get(static_cast<uint32_t>(handle));
+  auto *obj = p->getObjTable().get(static_cast<u32>(handle));
   if (!obj || obj->type() != kObject::oType::equeue)
     return nullptr;
   return static_cast<equeue *>(obj);
@@ -203,7 +204,7 @@ equeue *findEqueue(int handle) {
 // Present the most recently flipped scanout buffer to the window.
 void presentScanout() {
   void *fb;
-  uint32_t w, h, pitch, fmt;
+  u32 w, h, pitch, fmt;
   {
     std::lock_guard<std::mutex> lk(g_mtx);
     int idx = g_port.currentBuffer >= 0 ? g_port.currentBuffer : 0;
@@ -242,7 +243,7 @@ void startFlipPump() {
       // intermittently deadlocks Vulkan. This pump only synthesizes flip
       // completion (labels + events) to unblock the game's flip wait; the guest
       // scanout buffer it used to blit is never CPU-written by the title anyway.
-      uint64_t c = g_port.flipCount.fetch_add(1) + 1;
+      u64 c = g_port.flipCount.fetch_add(1) + 1;
       // Mark GPU/flip completion in the buffer labels. Gnm's prepareFlip packet
       // tells the GPU to write the buffer's label (sceVideoOutGetBufferLabelAddress
       // + bufferIndex*8) when the flip completes; the game busy-polls that label
@@ -256,11 +257,11 @@ void startFlipPump() {
       // (Isaac), but overwrites the EXACT flip-arg a real Gnm flip protocol
       // may compare against.
       if (!kVoNostomp)
-        if (uint64_t *lb = videoLabels())
+        if (u64 *lb = videoLabels())
           for (int i = 0; i < 16; i++)
             lb[i] = c;
       // post the flip-complete event to whichever equeue holds a flip knote.
-      triggerAllEqueues(kEventFlip, kFilterFlip, static_cast<int64_t>(c));
+      triggerAllEqueues(kEventFlip, kFilterFlip, static_cast<i64>(c));
     }
   }).detach();
 }
@@ -302,8 +303,8 @@ int PS4ABI sceVideoOutGetResolutionStatus(int handle, void *status) {
     return -1;
   auto *s = static_cast<ResolutionStatus *>(status);
   std::memset(s, 0, sizeof(*s));
-  s->width = static_cast<int32_t>(g_port.width);
-  s->height = static_cast<int32_t>(g_port.height);
+  s->width = static_cast<i32>(g_port.width);
+  s->height = static_cast<i32>(g_port.height);
   s->paneWidth = s->width;
   s->paneHeight = s->height;
   s->refreshRate = 1;  // SCE_VIDEO_OUT_REFRESH_RATE_59_94HZ
@@ -312,17 +313,17 @@ int PS4ABI sceVideoOutGetResolutionStatus(int handle, void *status) {
   return 0;
 }
 
-int PS4ABI sceVideoOutSetBufferAttribute(void *attribute, uint32_t pixelFormat,
-                                         uint32_t tilingMode, uint32_t aspectRatio,
-                                         uint32_t width, uint32_t height,
-                                         uint32_t pitchInPixel) {
+int PS4ABI sceVideoOutSetBufferAttribute(void *attribute, u32 pixelFormat,
+                                         u32 tilingMode, u32 aspectRatio,
+                                         u32 width, u32 height,
+                                         u32 pitchInPixel) {
   if (!attribute)
     return -1;
   auto *a = static_cast<BufferAttribute *>(attribute);
   std::memset(a, 0, sizeof(*a));
   a->pixelFormat = pixelFormat;
-  a->tilingMode = static_cast<int32_t>(tilingMode);
-  a->aspectRatio = static_cast<int32_t>(aspectRatio);
+  a->tilingMode = static_cast<i32>(tilingMode);
+  a->aspectRatio = static_cast<i32>(aspectRatio);
   a->width = width;
   a->height = height;
   a->pitchInPixel = pitchInPixel;
@@ -378,7 +379,7 @@ int PS4ABI sceVideoOutAddFlipEvent(int eqHandle, int handle, void *udata) {
     return -1;
   g_port.flipEqueue = eqHandle;
   g_port.flipUdata = udata;
-  eq->addEvent(static_cast<uint64_t>(kEventFlip), kFilterFlip, udata);
+  eq->addEvent(static_cast<u64>(kEventFlip), kFilterFlip, udata);
   startFlipPump();
   return 0;
 }
@@ -387,7 +388,7 @@ int PS4ABI sceVideoOutDeleteFlipEvent(int eqHandle, int handle) {
   BASE_LOGI("videoout", "deleteFlipEvent eq={} h={}", eqHandle, handle);
   auto *eq = findEqueue(eqHandle);
   if (eq)
-    eq->removeEvent(static_cast<uint64_t>(kEventFlip), kFilterFlip);
+    eq->removeEvent(static_cast<u64>(kEventFlip), kFilterFlip);
   g_port.flipEqueue = -1;
   return 0;
 }
@@ -401,7 +402,7 @@ int PS4ABI sceVideoOutAddVblankEvent(int eqHandle, int handle, void *udata) {
   g_port.vblankEqueue = eqHandle;
   g_port.vblankUdata = udata;
   // vblank rides the existing 60 Hz EVFILT_DISPLAY pump (ident wildcard).
-  eq->addEvent(static_cast<uint64_t>(kEventVblank), kFilterVblank, udata);
+  eq->addEvent(static_cast<u64>(kEventVblank), kFilterVblank, udata);
   return 0;
 }
 
@@ -419,7 +420,7 @@ int PS4ABI sceVideoOutGetEventId(const void *event) {
   return kEventFlip;
 }
 
-int PS4ABI sceVideoOutGetEventData(const void *event, int64_t *data) {
+int PS4ABI sceVideoOutGetEventData(const void *event, i64 *data) {
   if (!event || !data)
     return -1;
   auto *ev = static_cast<const kevent_t *>(event);
@@ -428,9 +429,9 @@ int PS4ABI sceVideoOutGetEventData(const void *event, int64_t *data) {
 }
 
 int PS4ABI sceVideoOutSubmitFlip(int handle, int bufferIndex, int flipMode,
-                                int64_t flipArg) {
+                                i64 flipArg) {
   void *fb = nullptr;
-  uint32_t w, h, pitch, fmt;
+  u32 w, h, pitch, fmt;
   int eqHandle;
   void *udata;
   {
@@ -443,7 +444,7 @@ int PS4ABI sceVideoOutSubmitFlip(int handle, int bufferIndex, int flipMode,
     fmt = g_port.pixelFormat;
     g_port.currentBuffer = bufferIndex;
     g_port.lastFlipArg = flipArg;
-    const uint64_t t = nowNs();
+    const u64 t = nowNs();
     g_port.lastSubmitTsc.store(t);
     g_port.lastFlipTsc.store(t);
     g_port.lastProcessTime.store(t / 1000);
@@ -469,13 +470,13 @@ int PS4ABI sceVideoOutSubmitFlip(int handle, int bufferIndex, int flipMode,
   if (eqHandle >= 0) {
     if (auto *eq = findEqueue(eqHandle))
       eq->trigger(kEventFlip, kFilterFlip,
-                  static_cast<int64_t>(g_port.flipCount.load()));
+                  static_cast<i64>(g_port.flipCount.load()));
   }
   return 0;
 }
 
 int PS4ABI sceVideoOutSubmitFlipEop(int handle, int bufferIndex, int flipMode,
-                                    int64_t flipArg, void *eopLabel) {
+                                    i64 flipArg, void *eopLabel) {
   // The real libSceGnmDriver (LLE submit path) flips through this internal
   // videoout entry instead of sceVideoOutSubmitFlip. It is the EOP-label variant:
   // the eopLabel is the GPU completion label the flip would wait on, which we
@@ -483,15 +484,15 @@ int PS4ABI sceVideoOutSubmitFlipEop(int handle, int bufferIndex, int flipMode,
   // Gnm (PM4 -> the GPU command processor's Vulkan render target), so present that
   // render target here (endFrame), not the raw guest scanout buffer (which the
   // title never CPU-writes). Then complete the flip exactly like SubmitFlip.
-  uint64_t scanout = 0;
+  u64 scanout = 0;
   int eqHandle;
   void *udata;
   {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (bufferIndex >= 0 && bufferIndex < kMaxBuffers) {
-      scanout = reinterpret_cast<uint64_t>(g_port.buffers[bufferIndex]);
+      scanout = reinterpret_cast<u64>(g_port.buffers[bufferIndex]);
       g_port.currentBuffer = bufferIndex;
-      const uint64_t t = nowNs();
+      const u64 t = nowNs();
       g_port.lastSubmitTsc.store(t);
       g_port.lastFlipTsc.store(t);
       g_port.lastProcessTime.store(t / 1000);
@@ -516,7 +517,7 @@ int PS4ABI sceVideoOutSubmitFlipEop(int handle, int bufferIndex, int flipMode,
   if (eqHandle >= 0) {
     if (auto *eq = findEqueue(eqHandle))
       eq->trigger(kEventFlip, kFilterFlip,
-                  static_cast<int64_t>(g_port.flipCount.load()));
+                  static_cast<i64>(g_port.flipCount.load()));
   }
   return 0;
 }
@@ -582,7 +583,7 @@ int PS4ABI sceVideoOutModeSetAny_(int handle, void *arg) {
 // Bridge for the HLE Gnm driver: the game flips via sceGnmSubmitAndFlip-
 // CommandBuffers (a GPU prepareFlip packet), so record the target scanout buffer
 // here; the flip pump then presents it and posts the flip-complete event.
-void prosperity_videoout_set_flip(int bufferIndex, int64_t flipArg) {
+void prosperity_videoout_set_flip(int bufferIndex, i64 flipArg) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (bufferIndex >= 0 && bufferIndex < kMaxBuffers)
     g_port.currentBuffer = bufferIndex;
@@ -592,10 +593,10 @@ void prosperity_videoout_set_flip(int bufferIndex, int64_t flipArg) {
 // The guest scanout buffer address for a registered buffer index (the GPU
 // render target the flip displays). Used by the GPU renderer to present the
 // right render target.
-uint64_t prosperity_videoout_buffer(int bufferIndex) {
+u64 prosperity_videoout_buffer(int bufferIndex) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (bufferIndex >= 0 && bufferIndex < kMaxBuffers)
-    return reinterpret_cast<uint64_t>(g_port.buffers[bufferIndex]);
+    return reinterpret_cast<u64>(g_port.buffers[bufferIndex]);
   return 0;
 }
 

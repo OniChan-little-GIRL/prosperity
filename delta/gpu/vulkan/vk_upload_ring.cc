@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_upload_ring.h"
+#include "base/arch.h"
 
 #include "gpu/gpu_check.h"
 #include "gpu/vulkan/vk_debug.h"
@@ -46,7 +47,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
   VKOK(vkBindBufferMemory(g_dev.device, g_ring.vb, g_ring.vb_mem, 0));
   VKOK(vkMapMemory(g_dev.device, g_ring.vb_mem, 0, VbRingBytes(), 0,
                    (void**)&g_ring.vb_map));
-  NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)g_ring.vb, "vertex ring");
+  NameObject(VK_OBJECT_TYPE_BUFFER, (u64)g_ring.vb, "vertex ring");
 
   // Index ring (host-visible, 32-bit indices).
   VkBufferCreateInfo ibi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -64,9 +65,9 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
   VKOK(vkBindBufferMemory(g_dev.device, g_ring.ib, g_ring.ib_mem, 0));
   VKOK(vkMapMemory(g_dev.device, g_ring.ib_mem, 0, kIbRing, 0,
                    (void**)&g_ring.ib_map));
-  NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)g_ring.ib, "index ring");
+  NameObject(VK_OBJECT_TYPE_BUFFER, (u64)g_ring.ib, "index ring");
   // Recomp cbuffer ring + dynamic-UBO descriptors (set 1) + empty set-0 layout.
-  g_ring.ubo_align = (uint32_t)props.limits.minUniformBufferOffsetAlignment;
+  g_ring.ubo_align = (u32)props.limits.minUniformBufferOffsetAlignment;
   if (g_ring.ubo_align < 1)
     g_ring.ubo_align = 1;
   if (props.limits.maxDescriptorSetUniformBuffersDynamic < kCbufBindings ||
@@ -94,7 +95,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     VKOK(vkMapMemory(g_dev.device, g_ring.ubo_mem, 0, kUboRing, 0,
                      (void**)&g_ring.ubo_map));
     std::memset(g_ring.ubo_map, 0, kUboRing);
-    NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)g_ring.ubo_buf, "cbuffer ring");
+    NameObject(VK_OBJECT_TYPE_BUFFER, (u64)g_ring.ubo_buf, "cbuffer ring");
     g_ring.ubo_stride = (kCbufWindow + g_ring.ubo_align - 1) &
                         ~(VkDeviceSize)(g_ring.ubo_align - 1);
     g_ring.ubo_written.resize(static_cast<size_t>(
@@ -106,7 +107,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     // sit right at 8 cbufs, so their transform matrix read back as an all-zero
     // matrix and collapsed every vertex position.
     VkDescriptorSetLayoutBinding ubs[kCbufBindings]{};
-    for (uint32_t i = 0; i < kCbufBindings; i++) {
+    for (u32 i = 0; i < kCbufBindings; i++) {
       ubs[i].binding = i;
       ubs[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
       ubs[i].descriptorCount = 1;
@@ -141,7 +142,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     VKOK(vkAllocateDescriptorSets(g_dev.device, &uai, &g_ring.ubo_set));
     VkDescriptorBufferInfo ubinfo[kCbufBindings];
     VkWriteDescriptorSet uw[kCbufBindings];
-    for (uint32_t i = 0; i < kCbufBindings; i++) {
+    for (u32 i = 0; i < kCbufBindings; i++) {
       ubinfo[i] = {g_ring.ubo_buf, 0, kCbufWindow};
       uw[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
       uw[i].dstSet = g_ring.ubo_set;
@@ -157,7 +158,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
   // shader reading buffers by hand names it, so it exists from the start; the
   // ring behind it is allocated only if such a shader actually appears.
   {
-    g_ring.sbo_align = (uint32_t)std::max<VkDeviceSize>(
+    g_ring.sbo_align = (u32)std::max<VkDeviceSize>(
         props.limits.minStorageBufferOffsetAlignment, 4);
     // These are DYNAMIC storage buffers, and maxDescriptorSetStorageBuffersDynamic
     // has a Vulkan floor of 4 while real desktop parts report 16+. Take what the
@@ -165,7 +166,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     // a shader referencing more raw buffers than 4 is planned rather than
     // declined wherever the hardware can carry it.
     g_ring.sbo_count =
-        std::min<uint32_t>(props.limits.maxDescriptorSetStorageBuffersDynamic,
+        std::min<u32>(props.limits.maxDescriptorSetStorageBuffersDynamic,
                            kRawBufBindings);
     if (g_ring.sbo_count < gpu::gcn::kMinGfxBuffers) {
       BASE_LOGI("gpuvk", "only {} dynamic storage buffers available, below "
@@ -196,7 +197,7 @@ bool CreateUploadRings(const VkPhysicalDeviceProperties& props) {
     g_ring.sbo_stride = (kRawBufWindow + g_ring.sbo_align - 1) &
                         ~(VkDeviceSize)(g_ring.sbo_align - 1);
     VkDescriptorSetLayoutBinding sbs[kRawBufBindings]{};
-    for (uint32_t i = 0; i < g_ring.sbo_count; i++) {
+    for (u32 i = 0; i < g_ring.sbo_count; i++) {
       sbs[i].binding = i;
       sbs[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
       sbs[i].descriptorCount = 1;
@@ -234,7 +235,7 @@ bool EnsureRawBufferRing() {
   VKOK(vkMapMemory(g_dev.device, g_ring.sbo_mem, 0, kSboRing, 0,
                    (void**)&g_ring.sbo_map));
   std::memset(g_ring.sbo_map, 0, kSboRing);
-  NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)g_ring.sbo_buf,
+  NameObject(VK_OBJECT_TYPE_BUFFER, (u64)g_ring.sbo_buf,
              "raw buffer ring");
   g_ring.sbo_written.assign(
       static_cast<size_t>((kSboRing + g_ring.sbo_stride - 1) /
@@ -256,7 +257,7 @@ bool EnsureRawBufferRing() {
   VKOK(vkAllocateDescriptorSets(g_dev.device, &sai, &g_ring.sbo_set));
   VkDescriptorBufferInfo sbinfo[kRawBufBindings];
   VkWriteDescriptorSet sw[kRawBufBindings];
-  for (uint32_t i = 0; i < g_ring.sbo_count; i++) {
+  for (u32 i = 0; i < g_ring.sbo_count; i++) {
     sbinfo[i] = {g_ring.sbo_buf, 0, kRawBufWindow};
     sw[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     sw[i].dstSet = g_ring.sbo_set;
@@ -272,7 +273,7 @@ bool EnsureRawBufferRing() {
   return true;
 }
 
-bool AllocateTextureUpload(uint32_t slot,
+bool AllocateTextureUpload(u32 slot,
                            VkDeviceSize bytes,
                            VkDeviceSize alignment,
                            TextureUploadSlice& slice) {
@@ -330,21 +331,21 @@ bool AllocateTextureUpload(uint32_t slot,
   block.capacity = capacity;
   block.offset = bytes;
   slice = {block.buffer, 0, block.map};
-  NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)block.buffer,
+  NameObject(VK_OBJECT_TYPE_BUFFER, (u64)block.buffer,
              "texup slot %u block %zu (%llu MB)", slot, blocks.size(),
              (unsigned long long)(capacity >> 20));
   blocks.push_back(block);
   return true;
 }
 
-void ResetTextureUploads(uint32_t slot) {
+void ResetTextureUploads(u32 slot) {
   GPU_BUGCHECK(slot < 2, "slot %u is not a frame-ring slot", slot);
   // Reset runs in BeginFrame after this slot's fence wait, so no in-flight
   // transfer references these blocks -- the one point where destroying one is
   // safe. Blocks grow on demand (a loading burst can leave hundreds of idle
   // megabytes behind), so drop any block that has sat unused for ~10s of
   // resets; the next burst simply recreates it.
-  constexpr uint64_t kIdleResetsBeforeTrim = 300;
+  constexpr u64 kIdleResetsBeforeTrim = 300;
   auto& blocks = g_ring.texture_uploads[slot];
   for (size_t i = 0; i < blocks.size();) {
     TextureUploadBlock& block = blocks[i];

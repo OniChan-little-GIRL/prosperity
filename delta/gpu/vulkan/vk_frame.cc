@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_frame.h"
+#include "base/arch.h"
 
 #include "gfx/gfx.h"
 #include "gpu/gcn/gcn_translate.h"
@@ -40,14 +41,14 @@ namespace {
 DELTA_OPTION(bool, kGpuSync, "DELTA_GPU_SYNC", false);
 DELTA_OPTION(int, kRdocFrame, "DELTA_RDOC_FRAME", 0);
 DELTA_OPTION(bool, kFbDump, "DELTA_GPU_FBDUMP", false);
-DELTA_OPTION(uint64_t, kMemWatch, "DELTA_GPU_MEMWATCH", 0);
+DELTA_OPTION(u64, kMemWatch, "DELTA_GPU_MEMWATCH", 0);
 DELTA_OPTION(bool, kRdocExit, "DELTA_RDOC_EXIT", false);
 DELTA_OPTION(int, kReportFrame, "DELTA_GPU_RTSTAT_FRAME", 0);
 DELTA_OPTION(int, kRtStatEvery, "DELTA_GPU_RTSTAT_EVERY", 200);
-DELTA_OPTION(uint64_t, kForceClear, "DELTA_GPU_FORCECLEAR", 0);
+DELTA_OPTION(u64, kForceClear, "DELTA_GPU_FORCECLEAR", 0);
 DELTA_OPTION(int, kWantW, "DELTA_GPU_PRESENT_RTW", 0);
 DELTA_OPTION(int, kWantH, "DELTA_GPU_PRESENT_RTH", 0);
-DELTA_OPTION(uint64_t, kWantAddr, "DELTA_GPU_PRESENT_ADDR", 0);
+DELTA_OPTION(u64, kWantAddr, "DELTA_GPU_PRESENT_ADDR", 0);
 DELTA_OPTION(int, kFlipMode, "DELTA_GPU_FLIP", 0);
 DELTA_OPTION(bool, kCsLazyFlush, "DELTA_GPU_CS_LAZY_FLUSH", false);
 DELTA_OPTION(int, kSnapAt, "DELTA_GPU_SNAP", 0);
@@ -73,7 +74,7 @@ DELTA_OPTION(bool, kGpuRtstat, "DELTA_GPU_RTSTAT", false);
 // Each score costs a synchronous submit and a full-image readback, and this
 // runs with the frame already submitted -- doing it for a 2048x2048 shadow
 // map alongside everything else is enough to take the guest down with it.
-DELTA_OPTION(uint64_t, kGpuDbStat, "DELTA_GPU_DBSTAT", 0);
+DELTA_OPTION(u64, kGpuDbStat, "DELTA_GPU_DBSTAT", 0);
 DELTA_OPTION(bool, kGpuRtstatAll, "DELTA_GPU_RTSTAT_ALL", false);
 DELTA_OPTION(bool, kNanDis, "DELTA_GPU_RTSTAT_DIS", false);
 DELTA_OPTION(bool, kNoPresent, "DELTA_GPU_NOPRESENT", false);
@@ -95,13 +96,13 @@ bool CreateFrameSlots() {
   ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   ca.commandBufferCount = 1;
   VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  uint32_t slot_index = 0;
+  u32 slot_index = 0;
   for (auto& slot : g_frame.slots) {
     VKOK(vkAllocateCommandBuffers(g_dev.device, &ca, &slot.cmd));
     VKOK(vkCreateFence(g_dev.device, &fc, nullptr, &slot.fence));
-    NameObject(VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)slot.cmd,
+    NameObject(VK_OBJECT_TYPE_COMMAND_BUFFER, (u64)slot.cmd,
                "frame slot %u", slot_index);
-    NameObject(VK_OBJECT_TYPE_FENCE, (uint64_t)slot.fence, "frame fence %u",
+    NameObject(VK_OBJECT_TYPE_FENCE, (u64)slot.fence, "frame fence %u",
                slot_index);
     slot_index++;
     if (g_dev.timestamp_valid_bits) {
@@ -124,7 +125,7 @@ bool FramePipelined() {
   return !(kGpuSync || kGpuRtstat);
 }
 
-void EnsureReadback(uint32_t w, uint32_t h, VkFormat fmt) {
+void EnsureReadback(u32 w, u32 h, VkFormat fmt) {
   VkDeviceSize need = (VkDeviceSize)w * h * FormatBytes(fmt);
   if (g_frame.readback && need <= g_frame.readback_size)
     return;
@@ -184,13 +185,13 @@ namespace {
 struct RdocApi {
   void* entry0[19];
   void (*StartFrameCapture)(void* dev, void* wnd);
-  uint32_t (*IsFrameCapturing)();
-  uint32_t (*EndFrameCapture)(void* dev, void* wnd);
+  u32 (*IsFrameCapturing)();
+  u32 (*EndFrameCapture)(void* dev, void* wnd);
 };
 
 RdocApi* GetRdocApi() {
   static RdocApi* api = []() -> RdocApi* {
-    using GetApi = int (*)(uint32_t version, void** out);
+    using GetApi = int (*)(u32 version, void** out);
     void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
     auto get = lib ? reinterpret_cast<GetApi>(dlsym(lib, "RENDERDOC_GetAPI"))
                    : nullptr;
@@ -282,21 +283,21 @@ bool ReportRtContents(FrameSlot& owner) {
     }
     vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
     // One texel is FormatBytes(fmt) wide, which is 8 for the RGBA16F targets
-    // P.T. lights into. Indexing a uint32_t* by TEXEL walked half a texel at a
+    // P.T. lights into. Indexing a u32* by TEXEL walked half a texel at a
     // time, so every other sample read (B,A) where it meant (R,G). Alpha on a
     // light volume is its coverage term and sits at 1.0 wherever the volume
     // covers; counting that as luminance is what produced the "P.T. has no
     // midtones" reading -- a 50% pile-up just under 1.0 with an empty midrange,
     // in a buffer that had neither.
-    const auto* px8 = static_cast<const uint8_t*>(g_frame.readback_map);
-    const uint32_t bpp = std::max(1u, (uint32_t)FormatBytes(rt.fmt));
+    const auto* px8 = static_cast<const u8*>(g_frame.readback_map);
+    const u32 bpp = std::max(1u, (u32)FormatBytes(rt.fmt));
     const bool is_h4 = rt.fmt == VK_FORMAT_R16G16B16A16_SFLOAT;
     const bool is_h2 = rt.fmt == VK_FORMAT_R16G16_SFLOAT;
     const bool is_half = is_h4 || is_h2;
-    const uint32_t chans = is_h4 ? 4u : (is_h2 ? 2u : (bpp >= 4 ? 4u : bpp));
-    const uint64_t n = static_cast<uint64_t>(rt.w) * rt.h;
-    const uint64_t step = n > 16384 ? n / 16384 : 1;
-    uint64_t nz = 0, rgb_nz = 0, samples = 0, nan_half = 0, inf_half = 0,
+    const u32 chans = is_h4 ? 4u : (is_h2 ? 2u : (bpp >= 4 ? 4u : bpp));
+    const u64 n = static_cast<u64>(rt.w) * rt.h;
+    const u64 step = n > 16384 ? n / 16384 : 1;
+    u64 nz = 0, rgb_nz = 0, samples = 0, nan_half = 0, inf_half = 0,
              hot = 0;
     double luma_sum = 0.0;
     // The HDR magnitude, which the buckets cannot show: they all collapse into
@@ -304,13 +305,13 @@ bool ReportRtContents(FrameSlot& owner) {
     // 1000. That difference is exactly "this pass is too bright" vs "something
     // downstream amplifies a correct pass".
     float lum_max = 0.f;
-    uint32_t max_x = 0, max_y = 0;
-    uint64_t hi = 0;  // samples far above any displayable value
+    u32 max_x = 0, max_y = 0;
+    u64 hi = 0;  // samples far above any displayable value
     // Where the runaway texels SIT. A contiguous block means a pass is not
     // covering that region and it keeps stale content; scattered means the
     // values are being computed. The two need completely different fixes and
     // no aggregate can tell them apart.
-    uint32_t hx0 = 0xffffffffu, hy0 = 0xffffffffu, hx1 = 0, hy1 = 0;
+    u32 hx0 = 0xffffffffu, hy0 = 0xffffffffu, hx1 = 0, hy1 = 0;
     // Alpha AT the runaway texels. P.T.'s feedback pass divides by (1-alpha),
     // so which band alpha sits in decides whether a texel resets or compounds;
     // a whole-buffer alpha average cannot answer that, only alpha conditioned
@@ -319,11 +320,11 @@ bool ReportRtContents(FrameSlot& owner) {
     double hi_a_sum = 0.0;
     float hi_a_min = 1e30f, hi_a_max = -1e30f;
     std::vector<float> lums;
-    uint64_t tone[8] = {};
-    uint32_t distinct[4] = {};
-    uint32_t num_distinct = 0;
-    const auto half_val = [](uint32_t h) -> float {
-      const uint32_t e = (h >> 10) & 0x1F, mn = h & 0x3FF;
+    u64 tone[8] = {};
+    u32 distinct[4] = {};
+    u32 num_distinct = 0;
+    const auto half_val = [](u32 h) -> float {
+      const u32 e = (h >> 10) & 0x1F, mn = h & 0x3FF;
       float f;
       if (e == 0)
         f = std::ldexp((float)mn, -24);
@@ -334,18 +335,18 @@ bool ReportRtContents(FrameSlot& owner) {
                : std::numeric_limits<float>::infinity();
       return (h & 0x8000u) ? -f : f;
     };
-    for (uint64_t i = 0; i < n; i += step, samples++) {
-      const uint8_t* t = px8 + i * bpp;
-      uint32_t v = 0;
-      std::memcpy(&v, t, std::min<uint32_t>(bpp, 4));
+    for (u64 i = 0; i < n; i += step, samples++) {
+      const u8* t = px8 + i * bpp;
+      u32 v = 0;
+      std::memcpy(&v, t, std::min<u32>(bpp, 4));
       // Channel values in display units: [0,1] is the displayable range for a
       // unorm target and for a float one alike.
       float ch[4] = {0.f, 0.f, 0.f, 1.f};
       bool finite = true;
-      for (uint32_t c = 0; c < chans; c++) {
+      for (u32 c = 0; c < chans; c++) {
         if (is_half) {
-          const uint32_t h =
-              (uint32_t)t[2 * c] | ((uint32_t)t[2 * c + 1] << 8);
+          const u32 h =
+              (u32)t[2 * c] | ((u32)t[2 * c + 1] << 8);
           // Inf and NaN share the exponent; only the mantissa tells them apart,
           // so counting NaN alone reports nothing for a buffer full of Inf --
           // and an Inf in an HDR target reads downstream as a clipped
@@ -360,7 +361,7 @@ bool ReportRtContents(FrameSlot& owner) {
         }
       }
       bool any = false, any_rgb = false;
-      for (uint32_t c = 0; c < chans; c++) {
+      for (u32 c = 0; c < chans; c++) {
         any |= ch[c] != 0.f;
         any_rgb |= c < 3 && ch[c] != 0.f;
       }
@@ -373,13 +374,13 @@ bool ReportRtContents(FrameSlot& owner) {
         luma_sum += std::min(1.f, std::max(0.f, lum));
         if (lum > lum_max) {
           lum_max = lum;
-          max_x = (uint32_t)(i % rt.w);
-          max_y = (uint32_t)(i / rt.w);
+          max_x = (u32)(i % rt.w);
+          max_y = (u32)(i / rt.w);
           a_at_max = ch[3];
         }
         if (lum > 100.f) {
           hi++;
-          const uint32_t hx = (uint32_t)(i % rt.w), hy = (uint32_t)(i / rt.w);
+          const u32 hx = (u32)(i % rt.w), hy = (u32)(i / rt.w);
           hx0 = std::min(hx0, hx);
           hy0 = std::min(hy0, hy);
           hx1 = std::max(hx1, hx);
@@ -417,7 +418,7 @@ bool ReportRtContents(FrameSlot& owner) {
           hot++;
       }
       bool seen = false;
-      for (uint32_t k = 0; k < num_distinct; k++)
+      for (u32 k = 0; k < num_distinct; k++)
         seen |= distinct[k] == v;
       if (!seen && num_distinct < 4)
         distinct[num_distinct++] = v;
@@ -432,20 +433,20 @@ bool ReportRtContents(FrameSlot& owner) {
                     (unsigned long)kv.first);
       if (FILE* rf2 = std::fopen(rp2, "wb")) {
         std::fprintf(rf2, "P6\n%u %u\n255\n", rt.w, rt.h);
-        for (uint64_t q = 0; q < (uint64_t)rt.w * rt.h; q++) {
-          const uint8_t* t8 = px8 + q * bpp;
+        for (u64 q = 0; q < (u64)rt.w * rt.h; q++) {
+          const u8* t8 = px8 + q * bpp;
           float c4[4];
-          for (uint32_t k = 0; k < 4; k++)
-            c4[k] = half_val((uint32_t)t8[2 * k] |
-                             ((uint32_t)t8[2 * k + 1] << 8));
+          for (u32 k = 0; k < 4; k++)
+            c4[k] = half_val((u32)t8[2 * k] |
+                             ((u32)t8[2 * k + 1] << 8));
           const float l = std::max({c4[0], c4[1], c4[2]});
-          uint8_t px3[3];
+          u8 px3[3];
           if (l > 100.f) {
             px3[0] = 255; px3[1] = 0; px3[2] = 0;
           } else {
             const float g = l <= 0.f ? 0.f : std::log10(1.f + l * 9.f);
             const int v8 = (int)(std::min(1.f, g) * 255.f);
-            px3[0] = px3[1] = px3[2] = (uint8_t)v8;
+            px3[0] = px3[1] = px3[2] = (u8)v8;
           }
           std::fwrite(px3, 1, 3, rf2);
         }
@@ -490,15 +491,15 @@ bool ReportRtContents(FrameSlot& owner) {
           if (vkResetFences(g_dev.device, 1, &g_dev.fence) == VK_SUCCESS &&
               vkQueueSubmit(g_dev.queue, 1, &fsi, g_dev.fence) == VK_SUCCESS) {
             vkWaitForFences(g_dev.device, 1, &g_dev.fence, VK_TRUE, UINT64_MAX);
-            uint64_t fhi = 0, below = 0;
+            u64 fhi = 0, below = 0;
             float fa_min = 1e30f, fa_max = -1e30f, fmax = 0.f;
             double fa_sum = 0.0;
-            for (uint64_t i = 0; i < n; i += step) {
-              const uint8_t* t8 = px8 + i * bpp;
+            for (u64 i = 0; i < n; i += step) {
+              const u8* t8 = px8 + i * bpp;
               float c4[4];
-              for (uint32_t k = 0; k < 4; k++)
-                c4[k] = half_val((uint32_t)t8[2 * k] |
-                                 ((uint32_t)t8[2 * k + 1] << 8));
+              for (u32 k = 0; k < 4; k++)
+                c4[k] = half_val((u32)t8[2 * k] |
+                                 ((u32)t8[2 * k + 1] << 8));
               const float l = std::max({c4[0], c4[1], c4[2]});
               fmax = std::max(fmax, l);
               if (l > 100.f) {
@@ -516,13 +517,13 @@ bool ReportRtContents(FrameSlot& owner) {
             // number that decides reset (alpha >= 0.89990) vs amplify.
             float at[4] = {0, 0, 0, 0};
             {
-              const uint64_t idx =
-                  (uint64_t)max_y * rt.w + (uint64_t)max_x;
+              const u64 idx =
+                  (u64)max_y * rt.w + (u64)max_x;
               if (idx < n) {
-                const uint8_t* t8 = px8 + idx * bpp;
-                for (uint32_t k = 0; k < 4; k++)
-                  at[k] = half_val((uint32_t)t8[2 * k] |
-                                   ((uint32_t)t8[2 * k + 1] << 8));
+                const u8* t8 = px8 + idx * bpp;
+                for (u32 k = 0; k < 4; k++)
+                  at[k] = half_val((u32)t8[2 * k] |
+                                   ((u32)t8[2 * k + 1] << 8));
               }
             }
             // A PICTURE of where the runaway texels are. Every aggregate so
@@ -536,21 +537,21 @@ bool ReportRtContents(FrameSlot& owner) {
                             (unsigned long)kv.first);
               if (FILE* pf = std::fopen(fp, "wb")) {
                 std::fprintf(pf, "P6\n%u %u\n255\n", rt.w, rt.h);
-                for (uint64_t q = 0; q < (uint64_t)rt.w * rt.h; q++) {
-                  const uint8_t* t8 = px8 + q * bpp;
+                for (u64 q = 0; q < (u64)rt.w * rt.h; q++) {
+                  const u8* t8 = px8 + q * bpp;
                   float c4[4];
-                  for (uint32_t k = 0; k < 4; k++)
-                    c4[k] = half_val((uint32_t)t8[2 * k] |
-                                     ((uint32_t)t8[2 * k + 1] << 8));
+                  for (u32 k = 0; k < 4; k++)
+                    c4[k] = half_val((u32)t8[2 * k] |
+                                     ((u32)t8[2 * k + 1] << 8));
                   const float l = std::max({c4[0], c4[1], c4[2]});
-                  uint8_t px3[3];
+                  u8 px3[3];
                   if (l > 100.f) {  // runaway: flag red
                     px3[0] = 255; px3[1] = 0; px3[2] = 0;
                   } else {  // else log-scaled grey so structure is visible
                     const float g = l <= 0.f ? 0.f
                                              : std::log10(1.f + l * 9.f);
                     const int v8 = (int)(std::min(1.f, g) * 255.f);
-                    px3[0] = px3[1] = px3[2] = (uint8_t)v8;
+                    px3[0] = px3[1] = px3[2] = (u8)v8;
                   }
                   std::fwrite(px3, 1, 3, pf);
                 }
@@ -576,13 +577,13 @@ bool ReportRtContents(FrameSlot& owner) {
     // contents live in its VkImage and nothing ever publishes them back, so a
     // title that reads one with the CPU reads whatever was there before. This
     // says whether there is anything there at all.
-    uint64_t guest_nz = 0, guest_bytes = 0;
+    u64 guest_nz = 0, guest_bytes = 0;
     {
-      const uint64_t fp = RtByteSize(rt);
+      const u64 fp = RtByteSize(rt);
       if (fp && fp <= (64u << 20) && gpu::IsReadableRange(kv.first, fp)) {
-        const auto* gp = reinterpret_cast<const uint8_t*>(kv.first);
-        const uint64_t gstep = fp > 65536 ? fp / 65536 : 1;
-        for (uint64_t k = 0; k < fp; k += gstep, guest_bytes++)
+        const auto* gp = reinterpret_cast<const u8*>(kv.first);
+        const u64 gstep = fp > 65536 ? fp / 65536 : 1;
+        for (u64 k = 0; k < fp; k += gstep, guest_bytes++)
           guest_nz += gp[k] != 0;
       }
     }
@@ -621,17 +622,17 @@ bool ReportRtContents(FrameSlot& owner) {
     // NaN-poisoned half-float target. Guest shader addresses differ from run to
     // run, so the shader has to be named in the same run that observed the NaN.
     if (kNanDis && nan_half && rt.last_ps) {
-      static std::vector<uint64_t> seen;
+      static std::vector<u64> seen;
       if (std::find(seen.begin(), seen.end(), rt.last_ps) == seen.end()) {
         seen.push_back(rt.last_ps);
         gcn::DisassembleAt(rt.last_ps, "nan.PS");
       }
     }
     if (kGpuRtdump) {
-      std::vector<uint8_t> bgra(n * 4);
-      const auto* src = static_cast<const uint8_t*>(g_frame.readback_map);
-      const uint32_t src_bytes = FormatBytes(rt.fmt);
-      for (uint64_t i = 0; i < n; i++)
+      std::vector<u8> bgra(n * 4);
+      const auto* src = static_cast<const u8*>(g_frame.readback_map);
+      const u32 src_bytes = FormatBytes(rt.fmt);
+      for (u64 i = 0; i < n; i++)
         ReadbackPixelBgra(src + i * src_bytes, rt.fmt, bgra.data() + i * 4);
       char path[256];
       std::snprintf(path, sizeof(path), "%s/rt_f%d_%#lx_%ux%u.ppm", DumpDir(),
@@ -659,7 +660,7 @@ bool ReportRtContents(FrameSlot& owner) {
   // Score parked variants too: the live one at a base is whichever geometry
   // ran last, which is routinely the small post-process pass rather than the
   // full-resolution one the scene was drawn into.
-  std::vector<std::pair<uint64_t, DepthTarget*>> depth_list;
+  std::vector<std::pair<u64, DepthTarget*>> depth_list;
   for (auto& kv : g_depths)
     depth_list.emplace_back(kv.first, &kv.second);
   for (auto& kv : g_depth_variants)
@@ -670,8 +671,8 @@ bool ReportRtContents(FrameSlot& owner) {
   else if (kGpuDbStat != 1)
     depth_list.erase(
         std::remove_if(depth_list.begin(), depth_list.end(),
-                       [](const std::pair<uint64_t, DepthTarget*>& e) {
-                         return e.first != (uint64_t)kGpuDbStat;
+                       [](const std::pair<u64, DepthTarget*>& e) {
+                         return e.first != (u64)kGpuDbStat;
                        }),
         depth_list.end());
   for (auto& entry : depth_list) {
@@ -748,12 +749,12 @@ bool ReportRtContents(FrameSlot& owner) {
       d.layout = old_layout;
     }
     const float* z = static_cast<const float*>(g_frame.readback_map);
-    const uint64_t n = static_cast<uint64_t>(d.w) * d.h;
-    const uint64_t step = n > 16384 ? n / 16384 : 1;
-    uint64_t samples = 0, zero = 0, one = 0;
+    const u64 n = static_cast<u64>(d.w) * d.h;
+    const u64 step = n > 16384 ? n / 16384 : 1;
+    u64 samples = 0, zero = 0, one = 0;
     float lo = 1e30f, hi = -1e30f;
     double sum = 0;
-    for (uint64_t i = 0; i < n; i += step, samples++) {
+    for (u64 i = 0; i < n; i += step, samples++) {
       const float v = z[i];
       zero += v == 0.f;
       one += v == 1.f;
@@ -770,10 +771,10 @@ bool ReportRtContents(FrameSlot& owner) {
     // number that fits several very different pictures, and which one it is
     // decides where to look next.
     if (kGpuRtdump && hi > lo) {
-      std::vector<uint8_t> bgra(n * 4);
-      for (uint64_t i = 0; i < n; i++) {
+      std::vector<u8> bgra(n * 4);
+      for (u64 i = 0; i < n; i++) {
         const float t = (z[i] - lo) / (hi - lo);
-        const uint8_t g = static_cast<uint8_t>(
+        const u8 g = static_cast<u8>(
             std::min(255.f, std::max(0.f, t * 255.f)));
         bgra[i * 4 + 0] = g;
         bgra[i * 4 + 1] = g;
@@ -949,14 +950,14 @@ void BeginFrame(Renderer& renderer) {
 void WatchGuestMem() {
   if (!kMemWatch)
     return;
-  const uint64_t a = kMemWatch.get();
+  const u64 a = kMemWatch.get();
   if (!gpu::IsReadableRange(a, 4096))
     return;
-  const auto* p = reinterpret_cast<const uint8_t*>(a);
-  uint64_t nz = 0;
-  for (uint32_t i = 0; i < 4096; i++)
+  const auto* p = reinterpret_cast<const u8*>(a);
+  u64 nz = 0;
+  for (u32 i = 0; i < 4096; i++)
     nz += p[i] != 0;
-  static uint64_t seen_nz = 0;
+  static u64 seen_nz = 0;
   static int reported = 0;
   if (nz)
     seen_nz++;
@@ -968,7 +969,7 @@ void WatchGuestMem() {
   }
 }
 
-void EndFrame(Renderer& renderer, uint64_t scanout_base) {
+void EndFrame(Renderer& renderer, u64 scanout_base) {
   WatchGuestMem();
   if (!renderer.available() || !g_frame.recording)
     return;
@@ -994,7 +995,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
 
   // Present the scanout RT (the flip buffer); fall back to the last RT
   // rendered.
-  uint64_t present_base =
+  u64 present_base =
       g_rts.count(scanout_base) ? scanout_base : g_region.last_rt;
   // Debug: present the busiest RT (the scene) instead of the composited
   // scanout.
@@ -1157,14 +1158,14 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
 
   // Finish a completed frame: the previous slot when pipelined (its raster ran
   // while this frame recorded), this frame's own when synchronous.
-  const uint32_t finish_idx =
+  const u32 finish_idx =
       FramePipelined() ? (g_frame.slot_idx ^ 1) : g_frame.slot_idx;
   if (FramePipelined())
     g_frame.slot_idx ^= 1;
   FrameSlot& fin = g_frame.slots[finish_idx];
   const bool waited = fin.submitted;
   if (fin.submitted) {
-    uint64_t _tr0 = NowNs();
+    u64 _tr0 = NowNs();
     const VkResult fin_wait =
         vkWaitForFences(g_dev.device, 1, &fin.fence, VK_TRUE, UINT64_MAX);
     if (fin_wait != VK_SUCCESS) {
@@ -1174,21 +1175,21 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
       renderer.state = nullptr;
       return;
     }
-    uint64_t dt = NowNs() - _tr0;
+    u64 dt = NowNs() - _tr0;
     g_ns_readback += dt;
     g_fr_wait += dt;
     if (fin.timestamps) {
-      uint64_t timestamps[2] = {};
+      u64 timestamps[2] = {};
       if (vkGetQueryPoolResults(g_dev.device, fin.timestamps, 0, 2,
                                 sizeof(timestamps), timestamps,
-                                sizeof(uint64_t),
+                                sizeof(u64),
                                 VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
-        const uint64_t mask =
+        const u64 mask =
             g_dev.timestamp_valid_bits >= 64
                 ? UINT64_MAX
-                : (uint64_t{1} << g_dev.timestamp_valid_bits) - 1;
-        const uint64_t ticks = (timestamps[1] - timestamps[0]) & mask;
-        g_ns_gpu_exec += static_cast<uint64_t>(static_cast<double>(ticks) *
+                : (u64{1} << g_dev.timestamp_valid_bits) - 1;
+        const u64 ticks = (timestamps[1] - timestamps[0]) & mask;
+        g_ns_gpu_exec += static_cast<u64>(static_cast<double>(ticks) *
                                                g_dev.timestamp_period);
         g_gpu_exec_samples++;
       }
@@ -1204,7 +1205,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
       return;
     }
     if (RdocFrame() && GetRdocApi() && GetRdocApi()->IsFrameCapturing()) {
-      uint32_t ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
+      u32 ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
       BASE_LOGI("rdoc", "capture {}", ok ? "written" : "FAILED");
       if (ok && kRdocExit) {
         std::fflush(nullptr);
@@ -1220,8 +1221,8 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
   // (which samples that upright content correctly), so the presented image
   // needs no flip. (The old default Y-flip existed only to undo the heuristic
   // composite's upside-down output.)
-  static std::vector<uint8_t> flipped;
-  auto* rb = static_cast<uint8_t*>(fin.readback_map);
+  static std::vector<u8> flipped;
+  auto* rb = static_cast<u8*>(fin.readback_map);
   // DELTA_GPU_RBTRACE: whether the bytes this present is about to show are
   // actually non-zero, and which slot's mapping they came from. "A black window"
   // has two very different causes that look identical downstream -- the readback
@@ -1231,7 +1232,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
   // one is NORMAL: presentation runs one frame behind recording.
   static const bool kRbTrace2 = std::getenv("DELTA_GPU_RBTRACE") != nullptr;
   if (kRbTrace2) {
-    uint64_t nz = 0, sampled = 0;
+    u64 nz = 0, sampled = 0;
     const size_t n = (size_t)fin.w * fin.h * 4;
     // Stride is deliberately not a multiple of 4, so the sample walks all four
     // channels rather than reporting on one of them.
@@ -1243,7 +1244,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
               (unsigned long)fin.present_base, fin.w, fin.h, fin.readback_map,
               fin.readback_map == g_frame.readback_map ? " (bound)" : "");
   }
-  uint8_t* pixels;
+  u8* pixels;
   if (kFlipMode == 0 && fin.fmt == VK_FORMAT_B8G8R8A8_UNORM) {
     // Common case: the readback is already BGRA8 in presentation order; the
     // consumers below (WritePpm/present) read it in place, so skip the 8 MB
@@ -1252,14 +1253,14 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     pixels = rb;
   } else {
     flipped.resize(static_cast<size_t>(fin.w) * fin.h * 4);
-    const uint32_t src_bytes = FormatBytes(fin.fmt);
-    const uint32_t src_stride = fin.w * src_bytes;
-    for (uint32_t y = 0; y < fin.h; y++) {
-      uint32_t sy = (kFlipMode & 1) ? (fin.h - 1 - y) : y;
-      const uint8_t* srow = rb + static_cast<size_t>(sy) * src_stride;
-      uint8_t* drow = flipped.data() + static_cast<size_t>(y) * fin.w * 4;
-      for (uint32_t x = 0; x < fin.w; x++) {
-        uint32_t sx = (kFlipMode & 2) ? (fin.w - 1 - x) : x;
+    const u32 src_bytes = FormatBytes(fin.fmt);
+    const u32 src_stride = fin.w * src_bytes;
+    for (u32 y = 0; y < fin.h; y++) {
+      u32 sy = (kFlipMode & 1) ? (fin.h - 1 - y) : y;
+      const u8* srow = rb + static_cast<size_t>(sy) * src_stride;
+      u8* drow = flipped.data() + static_cast<size_t>(y) * fin.w * 4;
+      for (u32 x = 0; x < fin.w; x++) {
+        u32 sx = (kFlipMode & 2) ? (fin.w - 1 - x) : x;
         ReadbackPixelBgra(srow + static_cast<size_t>(sx) * src_bytes, fin.fmt,
                           drow + static_cast<size_t>(x) * 4);
       }
@@ -1305,7 +1306,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
     WritePpm(p, pixels, fin.w, fin.h);
     if (FILE* alpha = std::fopen("/tmp/gpu_snap_alpha.pgm", "wb")) {
       std::fprintf(alpha, "P5\n%u %u\n255\n", fin.w, fin.h);
-      for (uint64_t i = 0; i < static_cast<uint64_t>(fin.w) * fin.h; i++)
+      for (u64 i = 0; i < static_cast<u64>(fin.w) * fin.h; i++)
         std::fputc(pixels[i * 4 + 3], alpha);
       std::fclose(alpha);
     }
@@ -1429,7 +1430,7 @@ void EndFrame(Renderer& renderer, uint64_t scanout_base) {
   }
 
   if (RdocFrame() && GetRdocApi() && GetRdocApi()->IsFrameCapturing()) {
-    uint32_t ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
+    u32 ok = GetRdocApi()->EndFrameCapture(RdocDevice(), nullptr);
     BASE_LOGI("rdoc", "capture {}", ok ? "written" : "FAILED");
     if (ok && kRdocExit) {
       std::fflush(nullptr);

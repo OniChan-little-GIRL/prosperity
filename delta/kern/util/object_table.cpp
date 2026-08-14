@@ -1,5 +1,6 @@
 
 #include <base.h>
+#include "base/arch.h"
 #include "object_table.h"
 #include <algorithm>
 #include <logger/logger.h>
@@ -13,7 +14,7 @@ void objectTable::reset() {
   std::lock_guard lock(omutex);
 
   // Release all objects.
-  for (uint32_t n = 0; n < tableCap; n++) {
+  for (u32 n = 0; n < tableCap; n++) {
     auto &entry = table[n];
     if (entry.obj)
       entry.obj->release();
@@ -31,7 +32,7 @@ void objectTable::reset() {
 void objectTable::purge() {
   std::lock_guard lock(omutex);
 
-  for (uint32_t slot = 0; slot < tableCap; slot++) {
+  for (u32 slot = 0; slot < tableCap; slot++) {
     auto &entry = table[slot];
     if (entry.obj) {
       entry.refCount = 0;
@@ -41,9 +42,9 @@ void objectTable::purge() {
   }
 }
 
-bool objectTable::resize(uint32_t newCap) {
-  uint32_t new_size = newCap * sizeof(entry);
-  uint32_t old_size = tableCap * sizeof(entry);
+bool objectTable::resize(u32 newCap) {
+  u32 new_size = newCap * sizeof(entry);
+  u32 old_size = tableCap * sizeof(entry);
 
   auto new_table = reinterpret_cast<entry *>(realloc(table, new_size));
   if (!new_table)
@@ -51,7 +52,7 @@ bool objectTable::resize(uint32_t newCap) {
 
   // Zero out new entries.
   if (new_size > old_size)
-    std::memset(reinterpret_cast<uint8_t *>(new_table) + old_size, 0,
+    std::memset(reinterpret_cast<u8 *>(new_table) + old_size, 0,
                 new_size - old_size);
 
   lastFreeEntry = tableCap;
@@ -61,9 +62,9 @@ bool objectTable::resize(uint32_t newCap) {
   return true;
 }
 
-bool objectTable::findSlot(uint32_t &out) {
-  uint32_t slot = lastFreeEntry;
-  uint32_t scan_count = 0;
+bool objectTable::findSlot(u32 &out) {
+  u32 slot = lastFreeEntry;
+  u32 scan_count = 0;
   while (scan_count < tableCap) {
     auto &entry = table[slot];
     if (!entry.obj) {
@@ -80,7 +81,7 @@ bool objectTable::findSlot(uint32_t &out) {
   }
 
   // Table out of slots, expand.
-  uint32_t new_table_capacity = std::max(16 * 1024u, tableCap * 2);
+  u32 new_table_capacity = std::max(16 * 1024u, tableCap * 2);
   if (!resize(new_table_capacity)) {
     LOG_ERROR("unable to resize handle table");
     return false;
@@ -93,8 +94,8 @@ bool objectTable::findSlot(uint32_t &out) {
   return true;
 }
 
-objectTable::entry *objectTable::findEntry(uint32_t handle) {
-  uint32_t slot = handle >> 2;
+objectTable::entry *objectTable::findEntry(u32 handle) {
+  u32 slot = handle >> 2;
 
   if (slot < tableCap)
     return &table[slot];
@@ -102,7 +103,7 @@ objectTable::entry *objectTable::findEntry(uint32_t handle) {
   return nullptr;
 }
 
-bool objectTable::keep(uint32_t handle) {
+bool objectTable::keep(u32 handle) {
   std::lock_guard lock(omutex);
 
   auto *e = findEntry(handle);
@@ -114,10 +115,10 @@ bool objectTable::keep(uint32_t handle) {
   return false;
 }
 
-bool objectTable::add(kObject *obj, uint32_t &handleOut) {
+bool objectTable::add(kObject *obj, u32 &handleOut) {
   std::lock_guard lock(omutex);
 
-  uint32_t slot = 0, handle = 0;
+  u32 slot = 0, handle = 0;
 
   bool result = findSlot(slot);
   if (result) {
@@ -141,7 +142,7 @@ bool objectTable::add(kObject *obj, uint32_t &handleOut) {
   return false;
 }
 
-bool objectTable::remove(uint32_t handle) {
+bool objectTable::remove(u32 handle) {
   std::lock_guard lock(omutex);
 
   auto *e = findEntry(handle);
@@ -163,7 +164,7 @@ bool objectTable::remove(uint32_t handle) {
   return false;
 }
 
-bool objectTable::release(uint32_t handle) {
+bool objectTable::release(u32 handle) {
   std::lock_guard lock(omutex);
 
   auto *e = findEntry(handle);
@@ -177,11 +178,11 @@ bool objectTable::release(uint32_t handle) {
   return true;
 }
 
-kObject *objectTable::get(uint32_t handle) {
+kObject *objectTable::get(u32 handle) {
   std::lock_guard lock(omutex);
 
   // Lower 2 bits are ignored.
-  uint32_t slot = handle >> 2;
+  u32 slot = handle >> 2;
   kObject *obj = nullptr;
 
   // Verify slot.

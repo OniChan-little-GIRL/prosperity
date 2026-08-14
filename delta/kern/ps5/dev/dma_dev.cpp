@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
@@ -40,13 +41,13 @@ namespace {
 // there -- which is how V8 lost the read-only heap it had just deserialized
 // when it shrank the page holding it.
 std::mutex g_dmemVaLock;
-std::unordered_map<uint64_t, size_t> g_dmemVaLen;
+std::unordered_map<u64, size_t> g_dmemVaLen;
 }  // namespace
 
-void forgetDmemVa(uint8_t *ptr, size_t size) {
+void forgetDmemVa(u8 *ptr, size_t size) {
   if (!ptr || !size)
     return;
-  const uint64_t lo = reinterpret_cast<uint64_t>(ptr), hi = lo + size;
+  const u64 lo = reinterpret_cast<u64>(ptr), hi = lo + size;
   std::lock_guard<std::mutex> lk(g_dmemVaLock);
   for (auto it = g_dmemVaLen.begin(); it != g_dmemVaLen.end();) {
     if (it->first >= lo && it->first < hi)
@@ -56,23 +57,23 @@ void forgetDmemVa(uint8_t *ptr, size_t size) {
   }
 }
 
-uint8_t *dmaDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t flags,
+u8 *dmaDevicePs5::map(void *addr, size_t len, u32 /*prot*/, u32 flags,
                            size_t offset) {
   int fd = dmemBackingFd();
   if (fd < 0 || len == 0 ||
-      static_cast<uint64_t>(offset) + len > dmemBackingSize())
-    return reinterpret_cast<uint8_t *>(-1);
-  uint8_t *va = static_cast<uint8_t *>(addr);
+      static_cast<u64>(offset) + len > dmemBackingSize())
+    return reinterpret_cast<u8 *>(-1);
+  u8 *va = static_cast<u8 *>(addr);
   const bool fixed = (flags & mFlags::fixed) != 0;
   // A fixed map onto the exact base of one the guest already has is it
   // re-pointing its own region, not asking for fresh memory: carry the contents
   // over so the remap behaves like reusing the same physical pages. A map at a
   // DIFFERENT base is a genuine new allocation (a piece committed inside a pool,
   // say) and must still read as fresh memory.
-  std::vector<uint8_t> carry;
+  std::vector<u8> carry;
   if (va && fixed && !kNoCarry) {
     std::lock_guard<std::mutex> lk(g_dmemVaLock);
-    auto it = g_dmemVaLen.find(reinterpret_cast<uint64_t>(va));
+    auto it = g_dmemVaLen.find(reinterpret_cast<u64>(va));
     if (it != g_dmemVaLen.end() && len <= it->second)
       carry.assign(va, va + len);
   }
@@ -92,25 +93,25 @@ uint8_t *dmaDevicePs5::map(void *addr, size_t len, uint32_t /*prot*/, uint32_t f
     }
   }
   if (p == MAP_FAILED) {
-    uint8_t *base = (va && fixed) ? va : allocLowGuest(len);
+    u8 *base = (va && fixed) ? va : allocLowGuest(len);
     if (!base)
-      return reinterpret_cast<uint8_t *>(-1);
+      return reinterpret_cast<u8 *>(-1);
     p = ::mmap(base, len, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd,
                static_cast<off_t>(offset));
   }
   if (p == MAP_FAILED)
-    return reinterpret_cast<uint8_t *>(-1);
-  noteGuestTaken(static_cast<uint8_t *>(p), len);
+    return reinterpret_cast<u8 *>(-1);
+  noteGuestTaken(static_cast<u8 *>(p), len);
   if (!carry.empty())
     std::memcpy(p, carry.data(), carry.size());
   {
     std::lock_guard<std::mutex> lk(g_dmemVaLock);
-    g_dmemVaLen[reinterpret_cast<uint64_t>(p)] = len;
+    g_dmemVaLen[reinterpret_cast<u64>(p)] = len;
   }
   if (kDmemTrace)
     BASE_LOGI("dmem",
               "devmap off={:#x} len={:#x} want={:p} fixed={} -> {:p} (shared)",
               offset, len, addr, (int)fixed, p);
-  return reinterpret_cast<uint8_t *>(p);
+  return reinterpret_cast<u8 *>(p);
 }
 }  // namespace krnl

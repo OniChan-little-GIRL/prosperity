@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
 enum fcFlags {
@@ -28,14 +29,14 @@ enum fcFlags {
   O_DIRECTORY = 0x00020000,
 };
 
-int PS4ABI sys_open(const char *path, uint32_t flags, uint32_t mode);
-int PS4ABI sys_close(uint32_t fd);
-int64_t PS4ABI sys_read(uint32_t fd, void *buf, size_t nbytes);
-void fdReadStat(uint32_t fd, int64_t n);
-int64_t PS4ABI sys_lseek(uint32_t fd, int64_t offset, int whence);
-int PS4ABI sys_fstat(uint32_t fd, void *stat);
+int PS4ABI sys_open(const char *path, u32 flags, u32 mode);
+int PS4ABI sys_close(u32 fd);
+i64 PS4ABI sys_read(u32 fd, void *buf, size_t nbytes);
+void fdReadStat(u32 fd, i64 n);
+i64 PS4ABI sys_lseek(u32 fd, i64 offset, int whence);
+int PS4ABI sys_fstat(u32 fd, void *stat);
 int PS4ABI sys_stat(const char *path, void *stat);
 int PS4ABI sys_statfs(const char *path, void *buf);
-int PS4ABI sys_fstatfs(uint32_t fd, void *buf);
-int64_t PS4ABI sys_getdents(uint32_t fd, void *buf, size_t nbytes);
+int PS4ABI sys_fstatfs(u32 fd, void *buf);
+i64 PS4ABI sys_getdents(u32 fd, void *buf, size_t nbytes);
 } // namespace krnl

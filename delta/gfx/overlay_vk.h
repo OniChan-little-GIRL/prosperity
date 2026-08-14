@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -17,14 +18,14 @@
 namespace gfx {
 
 bool overlayVkInit(VkPhysicalDevice phys, VkDevice device, VkQueue queue,
-                   uint32_t queueFamily, VkCommandPool pool, VkFormat swapFormat);
+                   u32 queueFamily, VkCommandPool pool, VkFormat swapFormat);
 void overlayVkSetSwapchain(const std::vector<VkImage> &images, VkExtent2D extent,
                            VkFormat format);
 // Records the overlay render pass into `cmd` for swapchain image `imageIndex`.
 // The overlay frame must have been built (overlayBuildFrame) first. Returns true
 // if it recorded a pass leaving the image in PRESENT_SRC (caller then skips its
 // own transition); false if nothing was drawn.
-bool overlayVkRender(VkCommandBuffer cmd, uint32_t imageIndex);
+bool overlayVkRender(VkCommandBuffer cmd, u32 imageIndex);
 void overlayVkShutdown();
 bool overlayVkReady();
 

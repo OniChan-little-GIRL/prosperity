@@ -18,6 +18,7 @@
  */
 
 #include "libSceGnmDriver.h"
+#include "base/arch.h"
 #include <utl/mem.h>
 #include <utl/mem.h>
 
@@ -34,14 +35,14 @@ namespace {
 DELTA_OPTION(bool, kDingDong, "DELTA_GPU_DINGDONG", false);
 DELTA_OPTION(bool, kGcSubmit, "DELTA_GC_SUBMIT", false);
 // Dwords of async-compute ring executed per queue per FRAME (0 = off).
-DELTA_OPTION(uint32_t, kGcAcbFrame, "DELTA_GPU_ACB_FRAME", 0);
-DELTA_OPTION(uint64_t, kGcSubmitMax, "DELTA_GC_SUBMIT_MAX", 0);
+DELTA_OPTION(u32, kGcAcbFrame, "DELTA_GPU_ACB_FRAME", 0);
+DELTA_OPTION(u64, kGcSubmitMax, "DELTA_GC_SUBMIT_MAX", 0);
 DELTA_OPTION(bool, kPm4dump, "DELTA_PM4DUMP", false);
 }  // namespace
 
 // VideoOut HLE flip bridge (same delta_runtime library).
-extern "C" void prosperity_videoout_set_flip(int bufferIndex, int64_t flipArg);
-extern "C" uint64_t prosperity_videoout_buffer(int bufferIndex);
+extern "C" void prosperity_videoout_set_flip(int bufferIndex, i64 flipArg);
+extern "C" u64 prosperity_videoout_buffer(int bufferIndex);
 
 // LLE submit bridge: the REAL libSceGnmDriver.sprx (the default now; the HLE
 // submit shim below is only used when DELTA_GNM_HLE forces it on) builds PM4 and
@@ -53,8 +54,8 @@ extern "C" uint64_t prosperity_videoout_buffer(int bufferIndex);
 // 0xC0023F00 = IT_INDIRECT_BUFFER (the dcb). Decode them to the same
 // submitCcb/submitDcb path the HLE entry points use. (Layout verified against the
 // 11.00 kernel gc_submit_internal and the sprx submit wrappers.)
-extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) {
-  auto *d = static_cast<const uint32_t *>(descArray);
+extern "C" void prosperity_gc_submit(const void *descArray, u32 descCount) {
+  auto *d = static_cast<const u32 *>(descArray);
   if (!d)
     return;
   // Guest bug shields: submits arrive with guest-controlled pointers. A stray
@@ -90,11 +91,11 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
                                       : submitDumps++ < (int)kGcSubmitMax);
   if (dumpThis)
     BASE_LOGI("gc", "submit descArray={:p} count={}", descArray, descCount);
-  for (uint32_t i = 0; i < descCount; i++) {
-    const uint32_t *e = d + i * 4;
-    uint32_t hdr = e[0];
-    uint64_t addr = (static_cast<uint64_t>(e[2] & 0xFF) << 32) | e[1];
-    uint32_t bytes = (e[3] & 0xFFFFF) * 4;  // ib_size is in dwords
+  for (u32 i = 0; i < descCount; i++) {
+    const u32 *e = d + i * 4;
+    u32 hdr = e[0];
+    u64 addr = (static_cast<u64>(e[2] & 0xFF) << 32) | e[1];
+    u32 bytes = (e[3] & 0xFFFFF) * 4;  // ib_size is in dwords
     if (dumpThis)
       BASE_LOGI("gc",
                 "  desc[{}]: {:08x} {:08x} {:08x} {:08x} -> addr={:#x} bytes={}",
@@ -116,17 +117,17 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
   }
 }
 
-extern "C" void prosperity_gc_submit_acb(const void *commands, uint32_t bytes) {
+extern "C" void prosperity_gc_submit_acb(const void *commands, u32 bytes) {
   gpu::ps4::SubmitDcb(commands, bytes);
 }
 
 // LLE flip bridge: /dev/dce owns display-buffer registration and supplies the
 // selected scanout address to /dev/gc when the real GnmDriver submits the frame.
 // endFrame falls back to the last RT if the address was not registered.
-extern "C" void prosperity_gc_drain_acb(uint32_t budget_dw);
+extern "C" void prosperity_gc_drain_acb(u32 budget_dw);
 
-extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
-                                    int64_t flipArg) {
+extern "C" void prosperity_gc_flip(u64 scanoutBase, int displayBufferIndex,
+                                    i64 flipArg) {
   // Execute the async-compute rings once per frame, before the frame ends.
   // Draining them inside the DingDong handler instead charges a whole backlog
   // to whichever frame rang the doorbell.
@@ -140,11 +141,11 @@ namespace {
 // Feed each command buffer to the GPU command processor. The Constant Engine runs
 // ahead of the Draw Engine, so process a submit's ccb (CE RAM -> shader constant
 // buffers) before its dcb draws.
-void processDcbs(void **dcbGpuAddrs, uint32_t *dcbSizes, void **ccbGpuAddrs,
-                 uint32_t *ccbSizes, uint32_t count) {
+void processDcbs(void **dcbGpuAddrs, u32 *dcbSizes, void **ccbGpuAddrs,
+                 u32 *ccbSizes, u32 count) {
   if (!dcbGpuAddrs || !dcbSizes)
     return;
-  for (uint32_t i = 0; i < count; i++) {
+  for (u32 i = 0; i < count; i++) {
     if (ccbGpuAddrs && ccbSizes && ccbGpuAddrs[i] && ccbSizes[i])
       gpu::ps4::SubmitCcb(ccbGpuAddrs[i], ccbSizes[i]);
     gpu::ps4::SubmitDcb(dcbGpuAddrs[i], dcbSizes[i]);
@@ -158,7 +159,7 @@ namespace {
 // addresses are identity-mapped, so the dcb is directly readable on the host.
 int g_pm4Frames = 0;
 
-const char *itName(uint32_t op) {
+const char *itName(u32 op) {
   switch (op) {
   case 0x10: return "NOP";
   case 0x12: return "CLEAR_STATE";
@@ -184,22 +185,22 @@ const char *itName(uint32_t op) {
   }
 }
 
-void dumpPm4(void **dcbGpuAddrs, uint32_t *dcbSizes, uint32_t count) {
+void dumpPm4(void **dcbGpuAddrs, u32 *dcbSizes, u32 count) {
   if (!kPm4dump || g_pm4Frames > 3 || !dcbGpuAddrs || !dcbSizes)
     return;
   g_pm4Frames++;
-  for (uint32_t b = 0; b < count; b++) {
-    auto *p = static_cast<uint32_t *>(dcbGpuAddrs[b]);
-    uint32_t words = dcbSizes[b] / 4;
+  for (u32 b = 0; b < count; b++) {
+    auto *p = static_cast<u32 *>(dcbGpuAddrs[b]);
+    u32 words = dcbSizes[b] / 4;
     BASE_LOGI("pm4", "dcb[{}] @{:p} words={}", b, p, words);
     if (!p) continue;
-    uint32_t i = 0, draws = 0;
+    u32 i = 0, draws = 0;
     while (i < words) {
-      uint32_t hdr = p[i];
-      uint32_t type = hdr >> 30;
-      uint32_t cnt = ((hdr >> 16) & 0x3FFF) + 1;  // dword count after header
+      u32 hdr = p[i];
+      u32 type = hdr >> 30;
+      u32 cnt = ((hdr >> 16) & 0x3FFF) + 1;  // dword count after header
       if (type == 3) {
-        uint32_t op = (hdr >> 8) & 0xFF;
+        u32 op = (hdr >> 8) & 0xFF;
         BASE_LOGI("pm4", "  T3 {:<20} op={:#04x} cnt={}", itName(op), op, cnt);
         if (op == 0x2D || op == 0x27 || op == 0x2F || op == 0x4C) draws++;
         i += 1 + cnt;
@@ -218,19 +219,19 @@ void dumpPm4(void **dcbGpuAddrs, uint32_t *dcbSizes, uint32_t count) {
 
 extern "C" {
 
-int PS4ABI sceGnmSubmitCommandBuffers(uint32_t count, void **dcbGpuAddrs,
-                                     uint32_t *dcbSizes, void **ccbGpuAddrs,
-                                     uint32_t *ccbSizes) {
+int PS4ABI sceGnmSubmitCommandBuffers(u32 count, void **dcbGpuAddrs,
+                                     u32 *dcbSizes, void **ccbGpuAddrs,
+                                     u32 *ccbSizes) {
   dumpPm4(dcbGpuAddrs, dcbSizes, count);
   processDcbs(dcbGpuAddrs, dcbSizes, ccbGpuAddrs, ccbSizes, count);
   return 0;
 }
 
-int PS4ABI sceGnmSubmitCommandBuffersForWorkload(uint32_t workload, uint32_t count,
+int PS4ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
                                                 void **dcbGpuAddrs,
-                                                uint32_t *dcbSizes,
+                                                u32 *dcbSizes,
                                                 void **ccbGpuAddrs,
-                                                uint32_t *ccbSizes) {
+                                                u32 *ccbSizes) {
   // Same as sceGnmSubmitCommandBuffers but tagged with a workload id; the command
   // buffers must still be processed (this was stubbed, silently dropping every
   // draw the game submitted through the workload path).
@@ -239,13 +240,13 @@ int PS4ABI sceGnmSubmitCommandBuffersForWorkload(uint32_t workload, uint32_t cou
   return 0;
 }
 
-int PS4ABI sceGnmSubmitAndFlipCommandBuffers(uint32_t count, void **dcbGpuAddrs,
-                                            uint32_t *dcbSizes,
+int PS4ABI sceGnmSubmitAndFlipCommandBuffers(u32 count, void **dcbGpuAddrs,
+                                            u32 *dcbSizes,
                                             void **ccbGpuAddrs,
-                                            uint32_t *ccbSizes,
-                                            uint32_t videoOutHandle,
-                                            uint32_t displayBufferIndex,
-                                            uint32_t flipMode, int64_t flipArg) {
+                                            u32 *ccbSizes,
+                                            u32 videoOutHandle,
+                                            u32 displayBufferIndex,
+                                            u32 flipMode, i64 flipArg) {
   // The flip target buffer is what should be scanned out next; record it so the
   // VideoOut flip pump presents it and posts the flip-complete event.
   dumpPm4(dcbGpuAddrs, dcbSizes, count);
@@ -257,9 +258,9 @@ int PS4ABI sceGnmSubmitAndFlipCommandBuffers(uint32_t count, void **dcbGpuAddrs,
 }
 
 int PS4ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
-    uint32_t workload, uint32_t count, void **dcbGpuAddrs, uint32_t *dcbSizes,
-    void **ccbGpuAddrs, uint32_t *ccbSizes, uint32_t videoOutHandle,
-    uint32_t displayBufferIndex, uint32_t flipMode, int64_t flipArg) {
+    u32 workload, u32 count, void **dcbGpuAddrs, u32 *dcbSizes,
+    void **ccbGpuAddrs, u32 *ccbSizes, u32 videoOutHandle,
+    u32 displayBufferIndex, u32 flipMode, i64 flipArg) {
   // Was a flip-only stub that dropped the submitted command buffers. Process them
   // (and end the frame on the flip) exactly like the non-workload variant.
   dumpPm4(dcbGpuAddrs, dcbSizes, count);
@@ -273,22 +274,22 @@ int PS4ABI sceGnmSubmitDone() { return 0; }
 
 int PS4ABI sceGnmAreSubmitsAllowed() { return 1; }
 
-int PS4ABI sceGnmDingDong(uint32_t ringId, uint32_t offset) {
+int PS4ABI sceGnmDingDong(u32 ringId, u32 offset) {
   static int n = 0;
   if (kDingDong && n++ < 20)
     BASE_LOGI("gnm", "sceGnmDingDong ring={} offset={:#x}", ringId, offset);
   return 0;
 }
 
-int PS4ABI sceGnmDingDongForWorkload(uint32_t workload, uint32_t ringId,
-                                    uint32_t offset) {
+int PS4ABI sceGnmDingDongForWorkload(u32 workload, u32 ringId,
+                                    u32 offset) {
   return 0;
 }
 
 int PS4ABI sceGnmFlushGarlic() { return 0; }
 
-int PS4ABI sceGnmInsertWaitFlipDone(void *cmdBuffer, uint32_t size,
-                                   uint32_t videoOutHandle, uint32_t bufferIndex) {
+int PS4ABI sceGnmInsertWaitFlipDone(void *cmdBuffer, u32 size,
+                                   u32 videoOutHandle, u32 bufferIndex) {
   return 0;
 }
 

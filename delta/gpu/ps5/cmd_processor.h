@@ -14,16 +14,17 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu::ps5 {
 
 // Process one AGC draw command buffer (guest GPU address, size in bytes).
-void SubmitDcb(const void* dcb, uint32_t size_bytes);
+void SubmitDcb(const void* dcb, u32 size_bytes);
 
 // Process one AGC constant command buffer.
-void SubmitCcb(const void* ccb, uint32_t size_bytes);
+void SubmitCcb(const void* ccb, u32 size_bytes);
 
 // End the current frame and present the render target at `scanout_base`.
-void EndFrame(uint64_t scanout_base);
+void EndFrame(u64 scanout_base);
 
 }  // namespace gpu::ps5

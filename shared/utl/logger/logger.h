@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include "base/arch.h"
 #include <cstdint>
 
 #include <base.h>
@@ -15,7 +16,7 @@
 // log impl is heavily influenced & based on the yuzu logger
 
 namespace utl {
-enum class logLevel : uint8_t {
+enum class logLevel : u8 {
   Trace,
   Debug,
   Info,
@@ -52,7 +53,7 @@ public:
 base::String formatLogEntry(const logEntry &entry);
 logBase *addLogSink(base::UniquePointer<logBase> sink);
 logBase *getLogSink(base::StringRef name);
-void formatLogMsg(logLevel lvl, uint32_t line, const char *func,
+void formatLogMsg(logLevel lvl, u32 line, const char *func,
                   const char *fmt, const fmt::format_args &args);
 
 void createLogger(bool withConsole = false);
@@ -68,13 +69,13 @@ void routeBaseLogging();
 void silenceLogging();
 
 template <typename... Args>
-inline void fmtLogMsg(logLevel lvl, uint32_t line, const char *func,
+inline void fmtLogMsg(logLevel lvl, u32 line, const char *func,
                       const char *fmt, const Args &... args) {
   formatLogMsg(lvl, line, func, fmt, fmt::make_format_args(args...));
 }
 
 template <typename... Args>
-inline void fmtLogMsg(logLevel lvl, uint32_t line, const char *func,
+inline void fmtLogMsg(logLevel lvl, u32 line, const char *func,
                       const base::String &text) {
   formatLogMsg(lvl, line, func, text.c_str(), {});
 }

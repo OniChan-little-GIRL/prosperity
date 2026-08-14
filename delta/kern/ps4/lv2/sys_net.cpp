@@ -1,6 +1,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
@@ -14,9 +15,9 @@
 
 namespace {
 // FreeBSD constants, as the guest passes them.
-constexpr int32_t kBsdAfInet = 2;
-constexpr int32_t kBsdAfInet6 = 28;
-constexpr int32_t kBsdSockDgram = 2;
+constexpr i32 kBsdAfInet = 2;
+constexpr i32 kBsdAfInet6 = 28;
+constexpr i32 kBsdSockDgram = 2;
 }  // namespace
 #include "kern/crash.h"
 #include <cstring>
@@ -27,8 +28,8 @@ DELTA_OPTION(bool, kNetTrace, "DELTA_NET_TRACE", false);
 }  // namespace
 
 namespace krnl {
-int PS4ABI sys_netcontrol(uint32_t fd, uint32_t op, void* buffer,
-        uint32_t size) {
+int PS4ABI sys_netcontrol(u32 fd, u32 op, void* buffer,
+        u32 size) {
 
     if (kNetTrace)
       BASE_LOGI("netctl", "fd={} op={:#x} buf={:p} size={}", (int)fd, op,
@@ -38,7 +39,7 @@ int PS4ABI sys_netcontrol(uint32_t fd, uint32_t op, void* buffer,
     return -SysError::eINVAL;
 
     if (op == 20) {
-      *static_cast<uint32_t *>(buffer) = 0xF00D;
+      *static_cast<u32 *>(buffer) = 0xF00D;
       return 0;
     }
 
@@ -48,8 +49,8 @@ int PS4ABI sys_netcontrol(uint32_t fd, uint32_t op, void* buffer,
 // Same policy as sys_socket below. Returning a fake success here hands the
 // guest fd 0: Bloodborne's net thread then spins on sceNetGetsockname(0)
 // getting EBADF forever instead of taking its offline path.
-int PS4ABI sys_socketex(const char* name, int32_t domain, int32_t type,
-    int32_t protocol) {
+int PS4ABI sys_socketex(const char* name, i32 domain, i32 type,
+    i32 protocol) {
   if (kNetTrace)
     BASE_LOGI("net", "socketex name='{}' domain={} type={} proto={}",
               name ? name : "", domain, type, protocol);
@@ -62,7 +63,7 @@ int PS4ABI sys_socketex(const char* name, int32_t domain, int32_t type,
 // guest uses to reach NP/ShellCore, and TCP) is still refused up front, so those
 // callers keep falling back to their offline path instead of blocking on a
 // service process we do not host.
-int PS4ABI sys_socket(int32_t domain, int32_t type, int32_t protocol) {
+int PS4ABI sys_socket(i32 domain, i32 type, i32 protocol) {
   const int hostDomain = domain == kBsdAfInet    ? AF_INET
                          : domain == kBsdAfInet6 ? AF_INET6
                                                  : -1;
@@ -80,12 +81,12 @@ int PS4ABI sys_socket(int32_t domain, int32_t type, int32_t protocol) {
   return -SysError::eAFNOSUPPORT;
 }
 
-int PS4ABI sys_bind(int32_t fd, const void *addr, uint32_t addrlen) {
+int PS4ABI sys_bind(i32 fd, const void *addr, u32 addrlen) {
   auto *s = fdToSocket(fd);
   return s ? s->bind(addr, addrlen) : 0;
 }
 
-int PS4ABI sys_getsockname(int32_t fd, void *addr, uint32_t *addrlen) {
+int PS4ABI sys_getsockname(i32 fd, void *addr, u32 *addrlen) {
   auto *s = fdToSocket(fd);
   if (!s) {
     if (addr && addrlen)
@@ -95,18 +96,18 @@ int PS4ABI sys_getsockname(int32_t fd, void *addr, uint32_t *addrlen) {
   return s->getsockname(addr, addrlen);
 }
 
-int PS4ABI sys_socketclose(int32_t fd) {
+int PS4ABI sys_socketclose(i32 fd) {
   auto *s = fdToSocket(fd);
   if (s)
     s->releaseHandle();
   return 0;
 }
 
-int PS4ABI sys_connect(int32_t fd, const void *addr, uint32_t addrlen) {
+int PS4ABI sys_connect(i32 fd, const void *addr, u32 addrlen) {
   return -SysError::eCONNREFUSED;
 }
 
-int PS4ABI sys_recvmsg(int32_t fd, void *msg, int32_t flags) {
+int PS4ABI sys_recvmsg(i32 fd, void *msg, i32 flags) {
   return -SysError::eBADF;
 }
 
@@ -114,14 +115,14 @@ int PS4ABI sys_recvmsg(int32_t fd, void *msg, int32_t flags) {
 // closed socket so callers error out. The old null_handler returned 0, which a
 // sender reads as "0 bytes sent" and retries forever (Shadow of the Tomb
 // Raider's telemetry spun millions of sendto calls and wedged its boot).
-int64_t PS4ABI sys_sendto(int32_t fd, const void *buf, size_t len,
-                          int32_t flags, const void *to, uint32_t tolen) {
+i64 PS4ABI sys_sendto(i32 fd, const void *buf, size_t len,
+                          i32 flags, const void *to, u32 tolen) {
   auto *s = fdToSocket(fd);
   return s ? s->sendto(buf, len, flags, to, tolen) : -SysError::eBADF;
 }
 
-int64_t PS4ABI sys_recvfrom(int32_t fd, void *buf, size_t len, int32_t flags,
-                            void *from, uint32_t *fromlen) {
+i64 PS4ABI sys_recvfrom(i32 fd, void *buf, size_t len, i32 flags,
+                            void *from, u32 *fromlen) {
   auto *s = fdToSocket(fd);
   return s ? s->recvfrom(buf, len, flags, from, fromlen) : -SysError::eBADF;
 }

@@ -15,6 +15,7 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 
 namespace gpu::ps4 {
@@ -33,7 +34,7 @@ void SetWriteWatchCallback(WriteWatchCallback callback);
 // Process one PM4 draw command buffer (guest GPU address, identity-mapped to a
 // host pointer; size in bytes). Walks the packet stream, updating register
 // state and issuing draws. Safe to call from the guest's GPU submit thread.
-void SubmitDcb(const void* dcb, uint32_t size_bytes);
+void SubmitDcb(const void* dcb, u32 size_bytes);
 
 // Process one PM4 constant command buffer (ccb). The Constant Engine fills its
 // on-chip CE RAM (WRITE/LOAD_CONST_RAM) and dumps it to guest memory
@@ -41,10 +42,10 @@ void SubmitDcb(const void* dcb, uint32_t size_bytes);
 // ignored this; draws whose cbuffers come via the CE then read stale memory.
 // Must run before the matching SubmitDcb (the CE runs ahead of the draw
 // engine).
-void SubmitCcb(const void* ccb, uint32_t size_bytes);
+void SubmitCcb(const void* ccb, u32 size_bytes);
 
 // End the current frame and present the render target at `scanout_base` (the
 // videoout flip buffer). Called by the Gnm submit-and-flip HLE.
-void EndFrame(uint64_t scanout_base);
+void EndFrame(u64 scanout_base);
 
 }  // namespace gpu::ps4

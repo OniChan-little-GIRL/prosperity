@@ -9,6 +9,7 @@
  */
 
 #include <logger/logger.h>
+#include "base/arch.h"
 #include <string>
 #include <utl/init_func.h>
 
@@ -16,7 +17,7 @@
 
 namespace runtime {
 struct funcInfo {
-  uint64_t hashId;
+  u64 hashId;
   const void *address;
 };
 
@@ -28,11 +29,11 @@ struct modInfo {
 
 void vprx_init();
 void vprx_reg(const modInfo *);
-uintptr_t vprx_get(const char *lib, uint64_t hid);
+uintptr_t vprx_get(const char *lib, u64 hid);
 // Table lookup that ignores the LLE-by-default policy gate (useHleShim). The PS5
 // import resolver uses it to force libSceVideoOut onto the HLE shim (its LLE port
 // backend never registers in our env, so sceVideoOutOpen fails).
-uintptr_t vprx_get_forced(const char *lib, uint64_t hid);
+uintptr_t vprx_get_forced(const char *lib, u64 hid);
 
 // PS5-only HLE alias tables. Prospero modules export some functions under NIDs
 // that differ from the PS4 ABI (e.g. sceVideoOutRegisterBuffers). Rather than
@@ -40,8 +41,8 @@ uintptr_t vprx_get_forced(const char *lib, uint64_t hid);
 // consulted first by vprx_get_forced, which is PS5-only. PS4 paths never touch it.
 void vprx_reg_ps5(const modInfo *);
 
-bool decode_nid(const char *subset, size_t len, uint64_t &);
-void encode_nid(const char *symName, uint8_t *out);
+bool decode_nid(const char *subset, size_t len, u64 &);
+void encode_nid(const char *symName, u8 *out);
 }
 
 #define MODULE_INIT(tname)                                                     \

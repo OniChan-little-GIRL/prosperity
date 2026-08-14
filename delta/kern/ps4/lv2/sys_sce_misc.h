@@ -9,11 +9,12 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
 
 /* --- Sony kernel --- */
-int64_t PS4ABI sys_jitshm_create(size_t len, uint32_t flags);
+i64 PS4ABI sys_jitshm_create(size_t len, u32 flags);
 int PS4ABI sys_jitshm_alias();
 int PS4ABI sys_dl_get_list();
 int PS4ABI sys_dl_get_info();
@@ -76,11 +77,11 @@ int PS4ABI sys_unk645();
 int PS4ABI sys_get_kernel_mem_statistics(void *out);
 int PS4ABI sys_get_sdk_compiled_version();
 int PS4ABI sys_app_state_change();
-int64_t PS4ABI sys_blockpool_map(int64_t pool, size_t len, uint32_t prot,
-                                 uint32_t flags);
+i64 PS4ABI sys_blockpool_map(i64 pool, size_t len, u32 prot,
+                                 u32 flags);
 int PS4ABI sys_blockpool_unmap();
-int64_t PS4ABI sys_blockpool_batch(uint64_t a0, uint64_t a1, uint64_t a2,
-                                   uint64_t a3, uint64_t a4, uint64_t a5);
+i64 PS4ABI sys_blockpool_batch(u64 a0, u64 a1, u64 a2,
+                                   u64 a3, u64 a4, u64 a5);
 int PS4ABI sys_dynlib_get_info_for_libdbg();
 int PS4ABI sys_dynlib_get_list_for_libdbg();
 int PS4ABI sys_dynlib_get_list2();
@@ -93,12 +94,12 @@ int PS4ABI sys_get_bio_usage_all();
 int PS4ABI sys_aio_init();
 
 /* --- leftover POSIX --- */
-int PS4ABI sys_getgroups(int gidsetlen, uint32_t *gidset);
+int PS4ABI sys_getgroups(int gidsetlen, u32 *gidset);
 int PS4ABI sys_setgroups();
 int PS4ABI sys_setpriority();
 int PS4ABI sys_getpriority();
 int PS4ABI sys_setsockopt();
-int PS4ABI sys_getsockopt(int fd, int level, int name, void *val, uint32_t *len);
+int PS4ABI sys_getsockopt(int fd, int level, int name, void *val, u32 *len);
 int PS4ABI sys_sync();
 int PS4ABI sys_getpagesize();
 int PS4ABI sys_flock();

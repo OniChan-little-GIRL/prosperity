@@ -3,13 +3,14 @@
 // Copyright (C) Force67 2019
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
 
-uint32_t dceCurrentBuffer();
-int64_t dceCurrentFlipArg();
-uint64_t dceScanoutBuffer(uint32_t index);
+u32 dceCurrentBuffer();
+i64 dceCurrentFlipArg();
+u64 dceScanoutBuffer(u32 index);
 
 // /dev/dce: the Display Control Engine (framebuffer scanout). The real
 // libSceVideoOut.sprx (LLE) opens it and drives the whole display pipe through
@@ -21,22 +22,22 @@ class dceDevice : public device {
 public:
   dceDevice(proc *);
 
-  bool init(const char *, uint32_t, uint32_t) override;
-  int32_t ioctl(uint32_t command, void *args) override;
+  bool init(const char *, u32, u32) override;
+  i32 ioctl(u32 command, void *args) override;
   // The module mmaps this fd at the offset sub-op 9 handed back to get its
   // scanout/control pool; return the matching slice of our pool.
-  uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) override;
+  u8 *map(void *, size_t, u32, u32, size_t) override;
 
 private:
   // One contiguous guest-addressable pool, bump-allocated by sub-op 9 (and the
   // 0xc0588212 variant). map(offset) returns poolBase + offset.
-  uint8_t *poolBase = nullptr;
-  uint64_t poolSize = 0;
-  uint64_t poolUsed = 0;
-  uint64_t nextHandle = 1;  // opaque display handle handed out by sub-op 0
+  u8 *poolBase = nullptr;
+  u64 poolSize = 0;
+  u64 poolUsed = 0;
+  u64 nextHandle = 1;  // opaque display handle handed out by sub-op 0
 
   // Allocate `bytes` from the pool (lazily creating it); returns the offset, or
   // UINT64_MAX on failure.
-  uint64_t poolAlloc(uint64_t bytes);
+  u64 poolAlloc(u64 bytes);
 };
 }  // namespace krnl

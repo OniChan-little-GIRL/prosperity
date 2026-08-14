@@ -7,15 +7,16 @@
 // 32-bit indices directly; guest 8-bit indices are widened to 16-bit.
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu::vk {
 
-uint32_t GuestIndexElementBytes(uint32_t index_type);
-uint32_t UploadedIndexElementBytes(uint32_t index_type);
-uint32_t MaxGuestIndex(const void* source, uint32_t count, uint32_t index_type);
+u32 GuestIndexElementBytes(u32 index_type);
+u32 UploadedIndexElementBytes(u32 index_type);
+u32 MaxGuestIndex(const void* source, u32 count, u32 index_type);
 void CopyGuestIndices(void* destination,
                       const void* source,
-                      uint32_t count,
-                      uint32_t index_type);
+                      u32 count,
+                      u32 index_type);
 
 }  // namespace gpu::vk

@@ -29,6 +29,7 @@
  */
 
 #include "sha1.h"
+#include "base/arch.h"
 
 /*
  * 32-bit integer manipulation macros (big endian)
@@ -37,10 +38,10 @@
 #define GET_UINT32_BE(n, b, i)                                                 \
   \
 {                                                                         \
-    (n) = (static_cast<uint32_t>((b)[(i)]) << 24) |                            \
-          (static_cast<uint32_t>((b)[(i) + 1]) << 16) |                        \
-          (static_cast<uint32_t>((b)[(i) + 2]) << 8) |                         \
-          (static_cast<uint32_t>((b)[(i) + 3]));                               \
+    (n) = (static_cast<u32>((b)[(i)]) << 24) |                            \
+          (static_cast<u32>((b)[(i) + 1]) << 16) |                        \
+          (static_cast<u32>((b)[(i) + 2]) << 8) |                         \
+          (static_cast<u32>((b)[(i) + 3]));                               \
   \
 }
 #endif
@@ -72,7 +73,7 @@ void sha1_starts(sha1_context *ctx) {
 }
 
 void sha1_process(sha1_context *ctx, const unsigned char data[64]) {
-  uint32_t temp, W[16], A, B, C, D, E;
+  u32 temp, W[16], A, B, C, D, E;
 
   GET_UINT32_BE(W[0], data, 0);
   GET_UINT32_BE(W[1], data, 4);
@@ -234,7 +235,7 @@ void sha1_process(sha1_context *ctx, const unsigned char data[64]) {
  */
 void sha1_update(sha1_context *ctx, const unsigned char *input, size_t ilen) {
   size_t fill;
-  uint32_t left;
+  u32 left;
 
   // TODO:: Syphurith: Orz. It is said that size_t is an unsigned type..
   if (ilen <= 0)
@@ -243,10 +244,10 @@ void sha1_update(sha1_context *ctx, const unsigned char *input, size_t ilen) {
   left = ctx->total[0] & 0x3F;
   fill = 64 - left;
 
-  ctx->total[0] += static_cast<uint32_t>(ilen);
+  ctx->total[0] += static_cast<u32>(ilen);
   ctx->total[0] &= 0xFFFFFFFF;
 
-  if (ctx->total[0] < static_cast<uint32_t>(ilen))
+  if (ctx->total[0] < static_cast<u32>(ilen))
     ctx->total[1]++;
 
   if (left && ilen >= fill) {
@@ -276,8 +277,8 @@ static const unsigned char sha1_padding[64] = {
  * SHA-1 final digest
  */
 void sha1_finish(sha1_context *ctx, unsigned char output[20]) {
-  uint32_t last, padn;
-  uint32_t high, low;
+  u32 last, padn;
+  u32 high, low;
   unsigned char msglen[8];
 
   high = (ctx->total[0] >> 29) | (ctx->total[1] << 3);

@@ -8,6 +8,7 @@
  */
 
 #include <cstdio>
+#include "base/arch.h"
 #include <base.h>
 #include <base/logging.h>
 #include <base/strings/format.h>
@@ -86,7 +87,7 @@ std::mutex g_releasedLock;
 std::vector<ReleasedRange> g_released;
 }  // namespace
 
-void noteGuestReleased(uint8_t *ptr, size_t size) {
+void noteGuestReleased(u8 *ptr, size_t size) {
   if (!ptr || !size)
     return;
   const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
@@ -102,7 +103,7 @@ void noteGuestReleased(uint8_t *ptr, size_t size) {
     g_released.push_back({base, base + size});
 }
 
-void noteGuestTaken(uint8_t *ptr, size_t size) {
+void noteGuestTaken(u8 *ptr, size_t size) {
   if (!ptr || !size)
     return;
   const uintptr_t lo = reinterpret_cast<uintptr_t>(ptr), hi = lo + size;
@@ -115,7 +116,7 @@ void noteGuestTaken(uint8_t *ptr, size_t size) {
   }
 }
 
-bool wasGuestReleased(uint8_t *ptr, size_t size) {
+bool wasGuestReleased(u8 *ptr, size_t size) {
   const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
   std::lock_guard<std::mutex> lk(g_releasedLock);
   for (const auto &r : g_released)
@@ -129,7 +130,7 @@ bool wasGuestReleased(uint8_t *ptr, size_t size) {
 // hands mmap(NULL) addresses far above that ceiling, so when we have to pick an
 // address ourselves, carve it from a dedicated low arena instead. Bump-only and
 // MAP_FIXED_NOREPLACE so we never clobber an existing mapping.
-uint8_t *allocLowGuest(size_t size, size_t align) {
+u8 *allocLowGuest(size_t size, size_t align) {
 #ifdef __ANDROID__
   // 39-bit user VA: keep the guest arena clear of the module region (32..~224
   // GiB) and the FEX heap / bionic up top, and still under the PS4 2^40 ceiling.
@@ -174,7 +175,7 @@ uint8_t *allocLowGuest(size_t size, size_t align) {
       if (kAllocTrace)
         BASE_LOGI("lowalloc", "{:#x} +{:#x}", (unsigned long)base,
                   (unsigned long)size);
-      return static_cast<uint8_t *>(p);
+      return static_cast<u8 *>(p);
     }
     if (p != MAP_FAILED)
       ::munmap(p, size);  // hint occupied; the CAS already skipped past it
@@ -190,7 +191,7 @@ uint8_t *allocLowGuest(size_t size, size_t align) {
 // is a low (<2^40) guest allocation; ftruncate or the first mmap allocates it.
 namespace {
 struct shmBacking {
-  uint8_t *base = nullptr;
+  u8 *base = nullptr;
   size_t size = 0;
 };
 using shmRef = std::shared_ptr<shmBacking>;
@@ -230,8 +231,8 @@ bool shmAudioTraceOn() {
   return kShmAudioTrace;
 }
 
-uint64_t shmAudioNowUs() {
-  return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+u64 shmAudioNowUs() {
+  return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
@@ -258,7 +259,7 @@ std::string shmAudioSanitize(const std::string &n) {
 // indistinguishable from one the guest never touches -- both read back as
 // zeros. Only regions matching DELTA_SHM_AUDIO_POISON_FILTER (default "_A", the
 // per-port sample regions) are poisoned, so the descriptor block stays clean.
-bool shmAudioPoisonQuiet(const std::string &name, uint8_t *base, size_t size) {
+bool shmAudioPoisonQuiet(const std::string &name, u8 *base, size_t size) {
   const char *pv = kShmPoison;
   if (!pv || !base || !size)
     return false;
@@ -271,13 +272,13 @@ bool shmAudioPoisonQuiet(const std::string &name, uint8_t *base, size_t size) {
   return true;
 }
 
-void shmAudioPoison(const std::string &name, uint8_t *base, size_t size) {
+void shmAudioPoison(const std::string &name, u8 *base, size_t size) {
   if (shmAudioPoisonQuiet(name, base, size))
     BASE_LOGI("shmaudio", "poisoned '{}' {:p} +{:#x}", name.c_str(), base,
               size);
 }
 
-void shmAudioRepoison(const std::string &name, uint8_t *base, size_t size) {
+void shmAudioRepoison(const std::string &name, u8 *base, size_t size) {
   if (!kShmRepoison)
     return;
   shmAudioPoisonQuiet(name, base, size);
@@ -288,10 +289,10 @@ std::atomic<bool> g_shmAudioDumper{false};
 void shmAudioDumperMain(std::string dir, unsigned periodMs, unsigned maxSnaps,
                         size_t maxBytes, bool deltaOnly) {
   std::unordered_map<std::string, FILE *> files;
-  std::unordered_map<std::string, std::vector<uint8_t>> prev;
+  std::unordered_map<std::string, std::vector<u8>> prev;
   FILE *idx = std::fopen((dir + "/index.txt").c_str(), "w");
-  struct reg { std::string n; uint8_t *b; size_t sz; };
-  std::vector<uint8_t> cur;
+  struct reg { std::string n; u8 *b; size_t sz; };
+  std::vector<u8> cur;
   for (unsigned seq = 0; seq < maxSnaps; seq++) {
     std::vector<reg> regs;
     {
@@ -301,7 +302,7 @@ void shmAudioDumperMain(std::string dir, unsigned periodMs, unsigned maxSnaps,
             shmAudioMatch(kv.first))
           regs.push_back({kv.first, kv.second->base, kv.second->size});
     }
-    const uint64_t t = shmAudioNowUs();
+    const u64 t = shmAudioNowUs();
     for (auto &r : regs) {
       FILE *&f = files[r.n];
       if (!f)
@@ -319,7 +320,7 @@ void shmAudioDumperMain(std::string dir, unsigned periodMs, unsigned maxSnaps,
       // Cheap per-tick fingerprint so a 75 s run can be judged without keeping
       // 75 s of bytes: how much of the region is non-zero, and an FNV-1a hash.
       size_t nz = 0;
-      uint64_t h = 1469598103934665603ull;
+      u64 h = 1469598103934665603ull;
       for (size_t i = 0; i < len; i++) {
         nz += cur[i] != 0;
         h = (h ^ cur[i]) * 1099511628211ull;
@@ -367,15 +368,15 @@ void shmAudioDumperMain(std::string dir, unsigned periodMs, unsigned maxSnaps,
 // (climbing from ~0.03 to ~0.4); if it is wrong, the peak is garbage or zero.
 void shmAudioProbeMain(long periodUs) {
   constexpr size_t kHdr = 0x20, kStride = 0x250, kSlots = 26;
-  uint64_t ticks = 0, blocks = 0;
+  u64 ticks = 0, blocks = 0;
   float peakMax = 0.f;
   auto last = shmAudioNowUs();
   for (;;) {
     ::usleep((useconds_t)periodUs);
     ticks++;
-    uint8_t *ctlRaw = nullptr;
+    u8 *ctlRaw = nullptr;
     size_t ctlSize = 0;
-    struct areg { int idx; uint8_t *b; size_t sz; };
+    struct areg { int idx; u8 *b; size_t sz; };
     std::vector<areg> as;
     {
       std::lock_guard<std::mutex> lk(g_shmMutex);
@@ -400,38 +401,38 @@ void shmAudioProbeMain(long periodUs) {
     if (!ctlRaw || ctlSize < kHdr + kSlots * kStride)
       continue;
     for (size_t k = 0; k < kSlots; k++) {
-      uint8_t *slot = ctlRaw + kHdr + k * kStride;
-      auto u32 = [&](size_t o) { return *reinterpret_cast<volatile uint32_t *>(slot + o); };
-      const uint32_t bpf = u32(0x08), rate = u32(0x34), grain = u32(0x60);
-      const uint32_t stype = u32(0x2c), state = u32(0x90);
+      u8 *slot = ctlRaw + kHdr + k * kStride;
+      auto u32 = [&](size_t o) { return *reinterpret_cast<volatile u32 *>(slot + o); };
+      const u32 bpf = u32(0x08), rate = u32(0x34), grain = u32(0x60);
+      const u32 stype = u32(0x2c), state = u32(0x90);
       if (!bpf || !grain)
         continue;                       // slot never opened
       if (!u32(0x00))
         continue;                       // no block pending
-      uint8_t *src = nullptr;
+      u8 *src = nullptr;
       size_t srcSz = 0;
       for (auto &a : as)
         if (a.idx == (int)k) { src = a.b; srcSz = a.sz; }
       const size_t need = (size_t)grain * bpf;
       float peak = 0.f;
       if (src && srcSz >= need) {
-        const uint32_t bps = (stype == 0) ? 2u : 4u;
-        const uint32_t n = need / bps;
+        const u32 bps = (stype == 0) ? 2u : 4u;
+        const u32 n = need / bps;
         if (stype == 1) {
           const float *p = reinterpret_cast<const float *>(src);
-          for (uint32_t i = 0; i < n; i++) {
+          for (u32 i = 0; i < n; i++) {
             float a = p[i] < 0 ? -p[i] : p[i];
             if (a > peak) peak = a;
           }
         } else if (stype == 0) {
-          const int16_t *p = reinterpret_cast<const int16_t *>(src);
-          for (uint32_t i = 0; i < n; i++) {
+          const i16 *p = reinterpret_cast<const i16 *>(src);
+          for (u32 i = 0; i < n; i++) {
             float a = (p[i] < 0 ? -p[i] : p[i]) / 32768.f;
             if (a > peak) peak = a;
           }
         } else {
-          const int32_t *p = reinterpret_cast<const int32_t *>(src);
-          for (uint32_t i = 0; i < n; i++) {
+          const i32 *p = reinterpret_cast<const i32 *>(src);
+          for (u32 i = 0; i < n; i++) {
             float a = (p[i] < 0 ? -(float)p[i] : (float)p[i]) / 2147483648.f;
             if (a > peak) peak = a;
           }
@@ -439,7 +440,7 @@ void shmAudioProbeMain(long periodUs) {
       }
       blocks++;
       if (peak > peakMax) peakMax = peak;
-      const uint64_t now = shmAudioNowUs();
+      const u64 now = shmAudioNowUs();
       if (now - last > 2000000) {
         last = now;
         BASE_LOGI("shmprobe",
@@ -449,7 +450,7 @@ void shmAudioProbeMain(long periodUs) {
                   state, (unsigned long long)blocks, peak, peakMax);
       }
       // Release the port: the guest's next submit is gated on this being 0.
-      *reinterpret_cast<volatile uint64_t *>(slot + 0x00) = 0;
+      *reinterpret_cast<volatile u64 *>(slot + 0x00) = 0;
     }
     (void)ticks;
   }
@@ -496,19 +497,19 @@ public:
 
 // Return the backing block for a shm, allocating/growing it to cover the
 // requested range. Caller must NOT hold g_shmMutex. -1 on failure.
-uint8_t *shmMap(shmObject *shm, size_t size, size_t offset) {
+u8 *shmMap(shmObject *shm, size_t size, size_t offset) {
   std::lock_guard<std::mutex> lk(g_shmMutex);
   auto &b = *shm->backing;
   size_t need = (offset + size + 0x3FFF) & ~size_t(0x3FFF);
   if (!b.base && need) {
     b.base = allocLowGuest(need);
     if (!b.base)
-      return reinterpret_cast<uint8_t *>(-1);
+      return reinterpret_cast<u8 *>(-1);
     b.size = need;
     proc::getActive()->getVma().add(b.base, need, ppt::w);
   }
   if (!b.base || offset > b.size)
-    return reinterpret_cast<uint8_t *>(-1);
+    return reinterpret_cast<u8 *>(-1);
   shmAudioTrace("mmap", shm->shmName, b.base + offset, size, offset);
   // Also announce here: a region mmap'd without a prior ftruncate gets its
   // backing allocated above, and the audio daemon must not miss that case.
@@ -517,11 +518,11 @@ uint8_t *shmMap(shmObject *shm, size_t size, size_t offset) {
 }
 }  // namespace
 
-uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
-                         uint32_t fd, size_t offset) {
+u8 *PS4ABI sys_mmap(void *addr, size_t size, u32 prot, u32 flags,
+                         u32 fd, size_t offset) {
   auto *proc = proc::getActive();
   if (!proc)
-    return reinterpret_cast<uint8_t *>(-1);
+    return reinterpret_cast<u8 *>(-1);
 
   if (flags & mFlags::stack || flags & mFlags::noextend)
     flags |= mFlags::anon;
@@ -532,10 +533,10 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // A zero-length mapping is invalid (BSD returns EINVAL). Guests hit this on an
   // error-recovery path, e.g. mmap()ing an fd from a failed physhm_open/fstat.
   // Without this it fell into allocLowGuest(0) -- 8192 failing mmap(len=0) host
-  // calls -- and returned (uint8_t*)-1, which the errno convention reports as
+  // calls -- and returned (u8*)-1, which the errno convention reports as
   // EPERM (1) rather than EINVAL (22), misleading the guest's fallback.
   if (size == 0)
-    return reinterpret_cast<uint8_t *>(-SysError::eINVAL);
+    return reinterpret_cast<u8 *>(-SysError::eINVAL);
 
   // SCOUT (DELTA_MMAP_CALLER=<minMB>): scan the guest stack for return addresses
   // in a loaded module's .text to pin which guest code requested a big map (e.g.
@@ -575,8 +576,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   //    cannot, because a guest thread runs on a HOST stack, and libkernel
   //    MAP_FIXEDs the guard page of that stack far above the 2^40 guest ceiling.
   if (flags & mFlags::stack) {
-    if (fd != static_cast<uint32_t>(-1) || (prot & 3) != 3)
-      return reinterpret_cast<uint8_t *>(-SysError::eINVAL);
+    if (fd != static_cast<u32>(-1) || (prot & 3) != 3)
+      return reinterpret_cast<u8 *>(-SysError::eINVAL);
     offset = 0;
   }
   const bool voidReserve = (flags & 0x100) != 0;
@@ -585,15 +586,15 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   if (flags & mFlags::fixed) {
     const uintptr_t a = reinterpret_cast<uintptr_t>(addr);
     if ((a & 0x3FFF) != 0)
-      return reinterpret_cast<uint8_t *>(-SysError::eINVAL);
+      return reinterpret_cast<u8 *>(-SysError::eINVAL);
     uintptr_t aEnd;
     if (__builtin_add_overflow(a, size, &aEnd))
-      return reinterpret_cast<uint8_t *>(-SysError::eINVAL);
+      return reinterpret_cast<u8 *>(-SysError::eINVAL);
   }
 
   // addr is a hint unless MAP_FIXED: relocate it rather than alias an existing map
   if (!(flags & mFlags::fixed)) {
-    if (!addr || proc->getVma().overlaps(static_cast<uint8_t *>(addr), size))
+    if (!addr || proc->getVma().overlaps(static_cast<u8 *>(addr), size))
       addr = nullptr;
   }
 
@@ -639,9 +640,9 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
       // device hands back instead of an anonymous fallback, so the guest maps
       // the device's real memory. -1 means "not device-backed"; fall through.
       auto *m = static_cast<device *>(obj)->map(addr, size, prot, flags, offset);
-      if (m != reinterpret_cast<uint8_t *>(-1)) {
+      if (m != reinterpret_cast<u8 *>(-1)) {
         proc->getVma().add(
-            m, size, static_cast<ppt>(prot & static_cast<uint32_t>(ppt::rwx)),
+            m, size, static_cast<ppt>(prot & static_cast<u32>(ppt::rwx)),
             prot);
         return m;
       }
@@ -652,7 +653,7 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // kernel must honor (FreeBSD 9 semantics; Sony titles rely on it -- SotC
   // reserves streaming arenas with MAP_ALIGNED(20) and keys its allocator
   // bookkeeping on the 1 MiB-aligned base).
-  const uint32_t alignLog = (flags >> 24) & 0x1F;
+  const u32 alignLog = (flags >> 24) & 0x1F;
   const size_t mapAlign = (alignLog >= 14 && alignLog < 40)
                               ? (size_t(1) << alignLog)
                               : 0;
@@ -681,7 +682,7 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
       // plant the block below the hint instead of on top of it.
       void *want = addr;
       if (flags & mFlags::stack)
-        want = static_cast<uint8_t *>(addr) - size;
+        want = static_cast<u8 *>(addr) - size;
       ptr = utl::allocMem(want, size, ppt::w, alt::reservecommit);
       if (!ptr)
         ptr = utl::allocMem(want, size, ppt::w, alt::commit);  // maybe pre-reserved
@@ -694,8 +695,8 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
       // Without this a guest TLS/TCB hint lands on and destroys a loaded module
       // (seen on Android, where the guest hints into the low module region).
       ptr = utl::allocMem(addr, size, ppt::w, alt::commit);
-    } else if (wasGuestReleased(static_cast<uint8_t *>(addr), size) &&
-               !proc->getVma().overlaps(static_cast<uint8_t *>(addr), size)) {
+    } else if (wasGuestReleased(static_cast<u8 *>(addr), size) &&
+               !proc->getVma().overlaps(static_cast<u8 *>(addr), size)) {
       // The probe can only fail here because we kept the host pages of a range
       // the guest ITSELF unmapped, and nothing has been mapped there since. The
       // address is free as far as the guest is concerned, so honour the hint.
@@ -707,14 +708,14 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   if (!ptr)
     ptr = allocLowGuest(size, mapAlign);
   if (!ptr)
-    return reinterpret_cast<uint8_t *>(-SysError::eNOMEM);
+    return reinterpret_cast<u8 *>(-SysError::eNOMEM);
 
   // Track the prot the guest actually asked for (BSD r=1/w=2/x=4 maps 1:1 onto
   // pageProtection) so sceKernelVirtualQuery / QueryMemoryProtection report the
   // truth instead of a blanket rwx. The host pages stay rwx: FEX reads guest
   // memory directly and we don't deliver protection faults, so restricting them
   // would only risk spurious crashes, not faithful behaviour.
-  auto gprot = static_cast<ppt>(prot & static_cast<uint32_t>(ppt::rwx));
+  auto gprot = static_cast<ppt>(prot & static_cast<u32>(ppt::rwx));
 
   // No zero-fill for anonymous maps: every ptr above comes from an anonymous
   // ::mmap (utl::allocMem or allocLowGuest), which the kernel already hands
@@ -728,15 +729,15 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // textures straight out of the mapping; an anonymous zero-fill left them black).
   // readAt is a no-op (-1) for non-file devices; the read stops at EOF so a sparse
   // over-sized mapping keeps zeros past the file's end.
-  if (fd != static_cast<uint32_t>(-1)) {
+  if (fd != static_cast<u32>(-1)) {
     if (auto *o = proc->getObjTable().get(fd))
       if (o->type() == kObject::oType::device) {
         // The kernel maps the page-aligned file range and hands back
         // base + (offset & 0x3FFF), so the guest's pointer lands on the file's
         // byte at `offset`. The fill must therefore start at the page-aligned
         // offset for that contract to hold.
-        const int64_t fileOff = static_cast<int64_t>(offset & ~size_t(0x3FFF));
-        int64_t got = static_cast<device *>(o)->readAt(ptr, size, fileOff);
+        const i64 fileOff = static_cast<i64>(offset & ~size_t(0x3FFF));
+        i64 got = static_cast<device *>(o)->readAt(ptr, size, fileOff);
         if (got > 0 && kMmapfdTrace)
           BASE_LOGI("mmapfd", "  filled {:p} from fd={} off={:#x} -> {} bytes",
                     ptr, fd, (unsigned long long)fileOff, (long long)got);
@@ -748,10 +749,10 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // Virtual query must see it as reserved, not committed memory. `prot` was
   // forced to 0 above, mirroring the kernel.
   if (dmemMap)
-    proc->getVma().addDirect(static_cast<uint8_t *>(ptr), size, gprot, prot,
+    proc->getVma().addDirect(static_cast<u8 *>(ptr), size, gprot, prot,
                              offset);
   else
-    proc->getVma().add(static_cast<uint8_t *>(ptr), size, gprot, prot,
+    proc->getVma().add(static_cast<u8 *>(ptr), size, gprot, prot,
                        voidReserve);
 
   utl::protectMem(static_cast<void *>(ptr), size, ppt::rwx);
@@ -762,7 +763,7 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // here as plain anon (fd=-1); its coherency with the guest's PM4 writes is an
   // open item (Onion/Garlic dual mapping -- see ps5-boot-progress memory).
   if (kGnmapTrace) {
-    uint64_t r = reinterpret_cast<uint64_t>(ptr);
+    u64 r = reinterpret_cast<u64>(ptr);
     if (r >= 0x8000000000ull && r < 0x8300000000ull) {
       // Walk the guest frame chain (libkernel keeps frame pointers) so we see the
       // real caller above libkernel's mmap wrapper, not just the wrapper itself.
@@ -796,12 +797,12 @@ uint8_t *PS4ABI sys_mmap(void *addr, size_t size, uint32_t prot, uint32_t flags,
   // (FreeBSD mmap semantics). Anonymous maps carry offset 0 and return the base.
   // MAP_STACK returns the top of the region, exactly like vm_map_stack.
   if (flags & mFlags::stack)
-    return &static_cast<uint8_t *>(ptr)[size];
+    return &static_cast<u8 *>(ptr)[size];
 
-  return static_cast<uint8_t *>(ptr) + (offset & 0x3FFF);
+  return static_cast<u8 *>(ptr) + (offset & 0x3FFF);
 }
 
-int PS4ABI sys_mprotect(uint8_t *addr, size_t len, int prot) {
+int PS4ABI sys_mprotect(u8 *addr, size_t len, int prot) {
   auto *proc = proc::getActive();
   if (!proc)
     return -SysError::eINVAL;
@@ -821,10 +822,10 @@ int PS4ABI sys_mprotect(uint8_t *addr, size_t len, int prot) {
   // don't fail on an untracked range: the dynamic linker mprotects its own
   // RELRO segments, which the module loader maps outside this table, and
   // vm_map_protect succeeds over gaps too. So update what we know and succeed.
-  const uint32_t sceProt = static_cast<uint32_t>(prot) & 0x37;
-  proc->getVma().protectRange(reinterpret_cast<uint8_t *>(base), span,
+  const u32 sceProt = static_cast<u32>(prot) & 0x37;
+  proc->getVma().protectRange(reinterpret_cast<u8 *>(base), span,
                               static_cast<ppt>(sceProt &
-                                               static_cast<uint32_t>(ppt::rwx)),
+                                               static_cast<u32>(ppt::rwx)),
                               sceProt);
   return 0;
 }
@@ -837,7 +838,7 @@ static bool isAbsentServiceChannel(const std::string &name) {
   return name == "/SceNpTpip";
 }
 
-int PS4ABI sys_shm_open(const char *path, uint32_t flags, uint16_t mode) {
+int PS4ABI sys_shm_open(const char *path, u32 flags, u16 mode) {
   auto *proc = proc::getActive();
   if (!proc || !path)
     return -SysError::eINVAL;
@@ -853,7 +854,7 @@ int PS4ABI sys_shm_open(const char *path, uint32_t flags, uint16_t mode) {
   if ((flags & 0xF1FC) != 0)
     return -SysError::eINVAL;
 
-  constexpr uint32_t kO_CREAT = 0x0200, kO_EXCL = 0x0800, kO_TRUNC = 0x0400;
+  constexpr u32 kO_CREAT = 0x0200, kO_EXCL = 0x0800, kO_TRUNC = 0x0400;
   std::string name(path);
   shmRef backing;
   {
@@ -944,7 +945,7 @@ int PS4ABI sys_shm_unlink(const char *path) {
 // Report a shm fd's backing size for fstat (shm objects aren't device-backed,
 // so sys_fstat's fdToDevice path can't size them). Returns SIZE_MAX if `fd`
 // isn't a shm, so the caller falls through to the normal path.
-size_t shmFstatSize(uint32_t fd) {
+size_t shmFstatSize(u32 fd) {
   auto *proc = proc::getActive();
   if (!proc)
     return SIZE_MAX;
@@ -956,7 +957,7 @@ size_t shmFstatSize(uint32_t fd) {
   return shm->backing->size;
 }
 
-int PS4ABI sys_ftruncate(uint32_t fd, int64_t length) {
+int PS4ABI sys_ftruncate(u32 fd, i64 length) {
   auto *proc = proc::getActive();
   if (!proc || length < 0)
     return -SysError::eINVAL;
@@ -984,7 +985,7 @@ int PS4ABI sys_ftruncate(uint32_t fd, int64_t length) {
   }
   if (want == b.size)
     return 0;
-  uint8_t *nb = allocLowGuest(want);
+  u8 *nb = allocLowGuest(want);
   if (!nb)
     return -SysError::eNOMEM;
   if (b.base)
@@ -1002,7 +1003,7 @@ int PS4ABI sys_ftruncate(uint32_t fd, int64_t length) {
   return 0;
 }
 
-int PS4ABI sys_mname(uint8_t *ptr, size_t len, const char *name, void *) {
+int PS4ABI sys_mname(u8 *ptr, size_t len, const char *name, void *) {
   auto *proc = proc::getActive();
   if (!proc)
     return -SysError::eINVAL;
@@ -1031,12 +1032,12 @@ int PS4ABI sys_mname(uint8_t *ptr, size_t len, const char *name, void *) {
 }
 
 struct mdbg_property {
-  int32_t unk;
-  int32_t unk2;
+  i32 unk;
+  i32 unk2;
   void *addr;
   size_t areaSize;
-  int64_t unk3;
-  int64_t unk4;
+  i64 unk3;
+  i64 unk4;
   char name[32];
 };
 
@@ -1046,26 +1047,26 @@ static_assert(sizeof(mdbg_property) == 72);
 // (mdbg_service_raise sets bit 1; sys_mdbg_service case 0 reports the whole
 // word). No debugger is attached here, so a raise is recorded and reported as
 // delivered rather than suspending the process.
-static std::atomic<uint64_t> gMdbgFlags{0};
+static std::atomic<u64> gMdbgFlags{0};
 
 // Mirrors the kernel's mdbg_service_raise: the reason (<= 0x7E) is stored, the
 // debug-raise flag set, then the process is signalled. The suspend notification
 // callback is unregistered here, so report the raise as delivered.
 static int mdbgServiceRaise(uintptr_t reason) {
   if (reason <= 0x7E)
-    gMdbgFlags.fetch_or(static_cast<uint64_t>(reason) << 32);
+    gMdbgFlags.fetch_or(static_cast<u64>(reason) << 32);
   gMdbgFlags.fetch_or(2);
   LOG_WARNING("mdbg raise: reason={} (no debugger attached, ignoring)", reason);
   return 0;
 }
 
-int PS4ABI sys_mdbg_service(uint32_t op, void *arg1, void *arg2, void *a3) {
+int PS4ABI sys_mdbg_service(u32 op, void *arg1, void *arg2, void *a3) {
   (void)arg2;
   (void)a3;
   switch (op) {
   case 0:
     // Kernel: copyout the proc's debug flags qword (proc+2600) to the caller.
-    *static_cast<uint64_t *>(arg1) = gMdbgFlags.load();
+    *static_cast<u64 *>(arg1) = gMdbgFlags.load();
     return 0;
   case 1: {
     // Kernel: copyin a 72-byte property {40 bytes of data + 32-byte name} and
@@ -1109,8 +1110,8 @@ int PS4ABI sys_mdbg_service(uint32_t op, void *arg1, void *arg2, void *a3) {
 // arg == 0 or 1: requires privilege 0x2AD; sets the proc's dmem container.
 // Any other value is EINVAL. The kernel keeps the id at proc+2020. We don't
 // enforce separate dmem pools, so just track the selected id (default 0).
-int PS4ABI sys_dmem_container(uint32_t op) {
-  static std::atomic<uint32_t> current{0};
+int PS4ABI sys_dmem_container(u32 op) {
+  static std::atomic<u32> current{0};
   if (op == 0xFFFFFFFFu)
     return static_cast<int>(current.load());
   if (op > 1)

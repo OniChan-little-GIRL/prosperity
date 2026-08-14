@@ -16,6 +16,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_decode.h"
 
@@ -30,25 +31,25 @@ using gpu::gcn::Inst;
 using gpu::gcn::Program;
 
 // Number of source fields architecturally read by a VOP3/VOP3P opcode.
-uint32_t Vop3SourceCount(Enc enc, uint32_t op);
+u32 Vop3SourceCount(Enc enc, u32 op);
 
 // Decode an RDNA2 program bounded by `max_dwords`. Without a reliable shader
 // length, stop_at_endpgm stops at the first program-ending instruction. Pass
 // false only when the caller has a real code bound and needs blocks after an
 // early-out s_endpgm.
-Program Decode(const uint32_t* code,
-               uint32_t max_dwords,
+Program Decode(const u32* code,
+               u32 max_dwords,
                bool stop_at_endpgm = true);
 
 // Recover the real code length (in dwords) from the trailing ShaderBinaryInfo
 // footer the AGC toolchain appends. The locator matches PS4: the code begins
 // with the sentinel dword 0xBEEB03FF (s_mov_b32 vcc_hi/null, #imm) whose imm
 // gives the footer dword offset. Returns 0 if no footer is found.
-uint32_t CodeLength(const uint32_t* code, uint32_t max_dwords);
+u32 CodeLength(const u32* code, u32 max_dwords);
 
 // Decode bounded by the recovered code length when a footer is present, else
 // fall back to the stop-at-first-endpgm scan.
-Program DecodeShader(const uint32_t* code, uint32_t max_dwords);
+Program DecodeShader(const u32* code, u32 max_dwords);
 
 // Remove instructions in statically unreachable basic blocks while preserving
 // original PCs for branch and resource-plan lookup.

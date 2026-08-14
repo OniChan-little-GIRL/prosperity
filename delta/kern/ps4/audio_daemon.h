@@ -19,6 +19,7 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 
 namespace krnl {
@@ -27,6 +28,6 @@ namespace krnl {
 // host backing (`base` = null means the name went away). Names that are not part
 // of the libSceAudioOut protocol are ignored; the first control region starts the
 // daemon thread.
-void audioDaemonNoticeShm(const char *name, uint8_t *base, size_t size);
+void audioDaemonNoticeShm(const char *name, u8 *base, size_t size);
 
 }  // namespace krnl

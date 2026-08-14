@@ -11,21 +11,22 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 
 int PS4ABI sceAudioOutInit();
-int PS4ABI sceAudioOutOpen(int32_t userId, int32_t type, int32_t index,
-                           uint32_t length, uint32_t freq, uint32_t param);
-int PS4ABI sceAudioOutOutput(int32_t handle, const void *ptr);
-int PS4ABI sceAudioOutClose(int32_t handle);
-int PS4ABI sceAudioOutSetVolume(int32_t handle, int32_t flag, int32_t *vol);
-int PS4ABI sceAudioOutOutputs(void *params, uint32_t num);
-int PS4ABI sceAudioOutGetPortState(int32_t handle, void *state);
-int64_t PS4ABI sceAudioOutGetLastOutputTime(int32_t handle);
-int PS4ABI sceAudioOutSetVolumeDc(int32_t handle, void *p);
-int PS4ABI sceAudioOutInitIpmiGetSession(int32_t arg);
+int PS4ABI sceAudioOutOpen(i32 userId, i32 type, i32 index,
+                           u32 length, u32 freq, u32 param);
+int PS4ABI sceAudioOutOutput(i32 handle, const void *ptr);
+int PS4ABI sceAudioOutClose(i32 handle);
+int PS4ABI sceAudioOutSetVolume(i32 handle, i32 flag, i32 *vol);
+int PS4ABI sceAudioOutOutputs(void *params, u32 num);
+int PS4ABI sceAudioOutGetPortState(i32 handle, void *state);
+i64 PS4ABI sceAudioOutGetLastOutputTime(i32 handle);
+int PS4ABI sceAudioOutSetVolumeDc(i32 handle, void *p);
+int PS4ABI sceAudioOutInitIpmiGetSession(i32 arg);
 
 }  // extern "C"

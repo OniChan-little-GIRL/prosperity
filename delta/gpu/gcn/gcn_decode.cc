@@ -5,6 +5,7 @@
  */
 
 #include "gpu/gcn/gcn_decode.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <atomic>
@@ -16,20 +17,20 @@ namespace gpu::gcn {
 namespace {
 
 // The 'OrbShdr' ShaderBinaryInfo signature at byte offset `off` in `code`?
-bool OrbShdrAt(const uint32_t* code, uint32_t off) {
+bool OrbShdrAt(const u32* code, u32 off) {
   const char* s = reinterpret_cast<const char*>(code) + off;
   return std::memcmp(s, "OrbShdr", 7) == 0;
 }
 
 // A 32-bit-encoded scalar/vector op carries a trailing 32-bit literal when a
 // source-operand field selects LITERAL_CONST (255).
-bool Sop2HasLiteral(uint32_t w) {
+bool Sop2HasLiteral(u32 w) {
   return (w & 0xFF) == 255 || ((w >> 8) & 0xFF) == 255;
 }
-bool Sop1HasLiteral(uint32_t w) {
+bool Sop1HasLiteral(u32 w) {
   return (w & 0xFF) == 255;
 }
-InstExtension VopExtension(uint32_t w, IsaMode mode) {
+InstExtension VopExtension(u32 w, IsaMode mode) {
   switch (w & 0x1ff) {
     case 249:
       return mode == IsaMode::kNeo ? InstExtension::kSdwa
@@ -45,9 +46,9 @@ InstExtension VopExtension(uint32_t w, IsaMode mode) {
 
 // Encoding classification by the fixed top bits. Returns the family and fills
 // the encoding-relative opcode.
-Enc Classify(uint32_t w, IsaMode mode, uint32_t& opcode) {
+Enc Classify(u32 w, IsaMode mode, u32& opcode) {
   if ((w >> 30) == 0x2) {  // 10b => scalar
-    const uint32_t top9 = w >> 23;
+    const u32 top9 = w >> 23;
     if (top9 == 0x17F) {
       opcode = (w >> 16) & 0x7F;
       return Enc::kSopp;
@@ -126,7 +127,7 @@ Enc Classify(uint32_t w, IsaMode mode, uint32_t& opcode) {
 }
 
 // Dwords occupied (excluding any trailing literal).
-uint32_t BaseSize(Enc e) {
+u32 BaseSize(Enc e) {
   switch (e) {
     case Enc::kVop3:
     case Enc::kVop3p:
@@ -142,7 +143,7 @@ uint32_t BaseSize(Enc e) {
   }
 }
 
-bool HasTrailingLiteral(const Inst& inst, uint32_t w) {
+bool HasTrailingLiteral(const Inst& inst, u32 w) {
   switch (inst.enc) {
     case Enc::kSop2:
     case Enc::kSopc:
@@ -169,7 +170,7 @@ bool HasTrailingLiteral(const Inst& inst, uint32_t w) {
     case Enc::kVop3p: {
       if (inst.isa != IsaMode::kNeo)
         return false;
-      const uint32_t w1 = inst.raw[1];
+      const u32 w1 = inst.raw[1];
       return (w1 & 0x1ff) == 255 || ((w1 >> 9) & 0x1ff) == 255 ||
              ((w1 >> 18) & 0x1ff) == 255;
     }
@@ -179,9 +180,9 @@ bool HasTrailingLiteral(const Inst& inst, uint32_t w) {
 }
 
 // FNV-1a over the code dwords; validates program-cache entries.
-uint64_t HashCode(const uint32_t* code, uint32_t dwords) {
-  uint64_t h = 0xcbf29ce484222325ull;
-  for (uint32_t i = 0; i < dwords; i++)
+u64 HashCode(const u32* code, u32 dwords) {
+  u64 h = 0xcbf29ce484222325ull;
+  for (u32 i = 0; i < dwords; i++)
     h = (h ^ code[i]) * 0x100000001b3ull;
   return h;
 }
@@ -201,34 +202,34 @@ void SetDefaultIsaMode(IsaMode mode) {
   NextProgramCacheGeneration();
 }
 
-uint32_t CodeLength(const uint32_t* code, uint32_t max_dwords) {
+u32 CodeLength(const u32* code, u32 max_dwords) {
   if (!code || max_dwords < 2)
     return 0;
   // Fast path: the toolchain emits "s_mov_b32 vcc_hi, #imm" (0xBEEB03FF) as the
   // first instruction, where the ShaderBinaryInfo footer sits at
   // code[(imm+1)*2].
   if (code[0] == 0xBEEB03FFu) {
-    const uint64_t d = (static_cast<uint64_t>(code[1]) + 1) * 2;
+    const u64 d = (static_cast<u64>(code[1]) + 1) * 2;
     if (d >= 2 && d + 2 <= max_dwords &&
-        OrbShdrAt(code, static_cast<uint32_t>(d) * 4))
-      return static_cast<uint32_t>(d);
+        OrbShdrAt(code, static_cast<u32>(d) * 4))
+      return static_cast<u32>(d);
   }
   // General case: scan (dword-aligned) for the footer signature. The GCN code
   // ends exactly where its footer begins, so the footer's offset is the length.
-  for (uint32_t d = 1; d + 2 <= max_dwords; d++)
+  for (u32 d = 1; d + 2 <= max_dwords; d++)
     if (OrbShdrAt(code, d * 4))
       return d;
   return 0;
 }
 
-Program Decode(const uint32_t* code,
-               uint32_t max_dwords,
+Program Decode(const u32* code,
+               u32 max_dwords,
                bool stop_at_endpgm,
                IsaMode mode) {
   Program out;
   if (!code)
     return out;
-  uint32_t i = 0;
+  u32 i = 0;
   while (i < max_dwords) {
     Inst inst;
     inst.isa = mode;
@@ -290,15 +291,15 @@ Program Decode(const uint32_t* code,
   return out;
 }
 
-Program DecodeShader(const uint32_t* code, uint32_t max_dwords, IsaMode mode) {
-  const uint32_t len = CodeLength(code, max_dwords);
+Program DecodeShader(const u32* code, u32 max_dwords, IsaMode mode) {
+  const u32 len = CodeLength(code, max_dwords);
   if (len && len <= max_dwords)
     return Decode(code, len, /*stop_at_endpgm=*/false, mode);
   return Decode(code, max_dwords, /*stop_at_endpgm=*/true, mode);
 }
 
-std::vector<uint8_t> ComputeReachability(const Program& program) {
-  std::vector<uint8_t> reachable(program.size(), 0);
+std::vector<u8> ComputeReachability(const Program& program) {
+  std::vector<u8> reachable(program.size(), 0);
   if (program.empty())
     return reachable;
 
@@ -344,28 +345,28 @@ std::vector<uint8_t> ComputeReachability(const Program& program) {
         return 0;
     }
   };
-  const uint32_t max_pc = program.back().pc + program.back().size;
-  std::vector<uint32_t> starts{0};
+  const u32 max_pc = program.back().pc + program.back().size;
+  std::vector<u32> starts{0};
   for (const Inst& inst : program) {
     const int kind = branch_kind(inst);
     if (!kind)
       continue;
     starts.push_back(inst.pc + inst.size);
     if (kind == 1 || kind == 2) {
-      const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-      starts.push_back(static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                             static_cast<int32_t>(inst.size) +
+      const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+      starts.push_back(static_cast<u32>(static_cast<i32>(inst.pc) +
+                                             static_cast<i32>(inst.size) +
                                              simm));
     }
   }
   std::sort(starts.begin(), starts.end());
   starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
   starts.erase(std::remove_if(starts.begin(), starts.end(),
-                              [max_pc](uint32_t pc) { return pc >= max_pc; }),
+                              [max_pc](u32 pc) { return pc >= max_pc; }),
                starts.end());
-  const auto block_of = [&](uint32_t pc) {
-    uint32_t block = 0;
-    for (uint32_t i = 0; i < starts.size(); i++) {
+  const auto block_of = [&](u32 pc) {
+    u32 block = 0;
+    for (u32 i = 0; i < starts.size(); i++) {
       if (starts[i] > pc)
         break;
       block = i;
@@ -373,15 +374,15 @@ std::vector<uint8_t> ComputeReachability(const Program& program) {
     return block;
   };
 
-  std::vector<uint8_t> block_reachable(starts.size(), 0);
-  std::vector<uint32_t> worklist{0};
+  std::vector<u8> block_reachable(starts.size(), 0);
+  std::vector<u32> worklist{0};
   while (!worklist.empty()) {
-    const uint32_t block = worklist.back();
+    const u32 block = worklist.back();
     worklist.pop_back();
     if (block >= starts.size() || block_reachable[block])
       continue;
     block_reachable[block] = 1;
-    const uint32_t block_end =
+    const u32 block_end =
         block + 1 < starts.size() ? starts[block + 1] : max_pc;
     bool terminated = false;
     for (const Inst& inst : program) {
@@ -400,10 +401,10 @@ std::vector<uint8_t> ComputeReachability(const Program& program) {
         worklist.clear();
         break;
       }
-      const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-      const uint32_t target =
-          static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                static_cast<int32_t>(inst.size) + simm);
+      const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+      const u32 target =
+          static_cast<u32>(static_cast<i32>(inst.pc) +
+                                static_cast<i32>(inst.size) + simm);
       if (target < max_pc)
         worklist.push_back(block_of(target));
       if (kind == 2)
@@ -414,31 +415,31 @@ std::vector<uint8_t> ComputeReachability(const Program& program) {
       worklist.push_back(block + 1);
   }
 
-  for (uint32_t i = 0; i < program.size(); i++)
+  for (u32 i = 0; i < program.size(); i++)
     reachable[i] = block_reachable[block_of(program[i].pc)];
   return reachable;
 }
 
 namespace {
-uint64_t g_prog_cache_generation = 1;
+u64 g_prog_cache_generation = 1;
 }  // namespace
 
 void NextProgramCacheGeneration() {
   g_prog_cache_generation++;
 }
 
-std::shared_ptr<const Program> CachedProgram(uint64_t addr,
-                                             uint32_t max_dwords) {
+std::shared_ptr<const Program> CachedProgram(u64 addr,
+                                             u32 max_dwords) {
   struct Entry {
-    uint64_t hash = 0;
-    uint32_t hashed_dwords = 0;
-    uint64_t generation = 0;
+    u64 hash = 0;
+    u32 hashed_dwords = 0;
+    u64 generation = 0;
     IsaMode mode = IsaMode::kBase;
     std::shared_ptr<const Program> program;
   };
-  static std::unordered_map<uint64_t, Entry> cache;
+  static std::unordered_map<u64, Entry> cache;
 
-  const auto* code = reinterpret_cast<const uint32_t*>(addr);
+  const auto* code = reinterpret_cast<const u32*>(addr);
   if (!code)
     return std::make_shared<const Program>();
   const IsaMode mode = DefaultIsaMode();
@@ -453,9 +454,9 @@ std::shared_ptr<const Program> CachedProgram(uint64_t addr,
 
   // Hash the real code span (footer-bounded when available) so an in-place
   // rewrite at the same address invalidates the entry.
-  const uint32_t len = CodeLength(code, max_dwords);
-  const uint32_t hashed = len ? len : (max_dwords < 64 ? max_dwords : 64);
-  const uint64_t hash = HashCode(code, hashed);
+  const u32 len = CodeLength(code, max_dwords);
+  const u32 hashed = len ? len : (max_dwords < 64 ? max_dwords : 64);
+  const u64 hash = HashCode(code, hashed);
 
   if (it != cache.end() && it->second.mode == mode && it->second.hash == hash &&
       it->second.hashed_dwords == hashed) {
@@ -471,21 +472,21 @@ std::shared_ptr<const Program> CachedProgram(uint64_t addr,
   return program;
 }
 
-uint64_t CachedCodeHash(uint64_t addr, uint32_t max_dwords) {
+u64 CachedCodeHash(u64 addr, u32 max_dwords) {
   if (!addr)
     return 0;
   struct Entry {
-    uint64_t hash = 0;
-    uint64_t generation = 0;
+    u64 hash = 0;
+    u64 generation = 0;
   };
-  static std::unordered_map<uint64_t, Entry> cache;
+  static std::unordered_map<u64, Entry> cache;
 
   auto it = cache.find(addr);
   if (it != cache.end() && it->second.generation == g_prog_cache_generation)
     return it->second.hash;
 
-  const auto* code = reinterpret_cast<const uint32_t*>(addr);
-  uint32_t len = CodeLength(code, max_dwords);
+  const auto* code = reinterpret_cast<const u32*>(addr);
+  u32 len = CodeLength(code, max_dwords);
   if (!len) {
     // No footer: hash up to the terminator instead of a fixed window, or the
     // bytes that happen to follow the shader make every instance of the same
@@ -503,7 +504,7 @@ uint64_t CachedCodeHash(uint64_t addr, uint32_t max_dwords) {
       }
     }
   }
-  const uint64_t hash = HashCode(code, len);
+  const u64 hash = HashCode(code, len);
   if (cache.size() > 4096)
     cache.clear();  // unbounded-growth backstop
   cache[addr] = {hash, g_prog_cache_generation};

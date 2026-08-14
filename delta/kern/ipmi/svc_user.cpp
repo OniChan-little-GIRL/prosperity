@@ -17,6 +17,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "services.h"
 
@@ -25,7 +26,7 @@ namespace {
 
 // Same id the HLE shim reports. 1 is the first real user on retail; 0 would be
 // SCE_USER_SERVICE_USER_ID_INVALID.
-constexpr int32_t kUserId = 1;
+constexpr i32 kUserId = 1;
 
 struct UserService : Service {
   const char *name() const override { return "SceUserService"; }

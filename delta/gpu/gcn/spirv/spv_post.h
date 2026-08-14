@@ -15,6 +15,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <string>
 #include <vector>
 
@@ -23,11 +24,11 @@ namespace gpu::gcn::spirv {
 // Legalize + optimize a module. Returns the optimized binary; on failure
 // returns the input unchanged (the naive SPIR-V is still valid, just
 // unoptimized).
-std::vector<uint32_t> Optimize(const std::vector<uint32_t>& spv);
+std::vector<u32> Optimize(const std::vector<u32>& spv);
 
 // Validate against the Vulkan 1.1 environment. On failure fills *err (if
 // given).
-bool Validate(const std::vector<uint32_t>& spv, std::string* err = nullptr);
+bool Validate(const std::vector<u32>& spv, std::string* err = nullptr);
 
 // Validate + optimize, with a DISK cache keyed by the content of the incoming
 // module. Optimization is ~65% of the recompiler's cost (measured on SotC:
@@ -40,8 +41,8 @@ bool Validate(const std::vector<uint32_t>& spv, std::string* err = nullptr);
 // Validate does. The cache lives in DELTA_GPU_SHADER_CACHE_DIR, or
 // $XDG_CACHE_HOME/ps4delta/spirv (~/.cache/ps4delta/spirv), and is disabled
 // entirely by DELTA_GPU_SHADER_CACHE=0.
-bool Finalize(const std::vector<uint32_t>& spv,
-              std::vector<uint32_t>* out,
+bool Finalize(const std::vector<u32>& spv,
+              std::vector<u32>* out,
               std::string* err = nullptr);
 
 }  // namespace gpu::gcn::spirv

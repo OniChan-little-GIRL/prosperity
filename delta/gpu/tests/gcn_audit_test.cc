@@ -1,4 +1,5 @@
 #include <base/option_file.h>
+#include "base/arch.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -33,7 +34,7 @@ class GcnAuditTest : public ::testing::Test {
 
 TEST_F(GcnAuditTest, ClassifiesSilentAndUnsupportedAndDeduplicates) {
   ASSERT_TRUE(gpu::gcn::ShaderDebugEnabled());
-  const uint32_t code[] = {
+  const u32 code[] = {
       0xbe800301,              // s_mov_b32 s0, s1
       0x7e020280,              // v_mov_b32 v1, 0
       0xd2820000, 0x040a0300,  // v_mad_f32 v0, v0, v1, v2
@@ -66,7 +67,7 @@ TEST_F(GcnAuditTest, ClassifiesSilentAndUnsupportedAndDeduplicates) {
 }
 
 TEST_F(GcnAuditTest, DeclinedShaderIsListedWithReason) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       0xbf8c0070,  // s_waitcnt
       0xbf810000,  // s_endpgm
   };
@@ -82,7 +83,7 @@ TEST_F(GcnAuditTest, DeclinedShaderIsListedWithReason) {
 }
 
 TEST_F(GcnAuditTest, ExpectedNoOpsAreNotSilent) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       0xbf8c0070,  // s_waitcnt: expected to emit nothing
       0xbf810000,  // s_endpgm
   };
@@ -97,7 +98,7 @@ TEST_F(GcnAuditTest, ExpectedNoOpsAreNotSilent) {
 }
 
 TEST_F(GcnAuditTest, VintrpP2IsNotHiddenAsAnExpectedNoOp) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       (0x32u << 26) | (1u << 16),  // v_interp_p2_f32
       0xbf810000,
   };

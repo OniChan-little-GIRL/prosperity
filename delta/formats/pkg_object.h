@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,8 +31,8 @@ public:
   // A regular file inside the image: its byte size and the inner-image block it
   // starts at (file data is stored contiguously from there).
   struct Node {
-    uint64_t size = 0;
-    uint32_t startBlock = 0;
+    u64 size = 0;
+    u32 startBlock = 0;
   };
 
   explicit PkgFilesystem(const base::String &pkgPath);
@@ -49,7 +50,7 @@ public:
   // Read up to len bytes of a file starting at byte offset off. Returns the
   // number of bytes read (clamped to the file size, 0 past the end), or -1 on
   // error.
-  int64_t read(const Node &node, void *buf, int64_t off, int64_t len);
+  i64 read(const Node &node, void *buf, i64 off, i64 len);
 
   // Collect every file path in the image (tooling / debugging).
   void paths(std::vector<std::string> &out) const;
@@ -59,7 +60,7 @@ public:
   // header's entry table, which sits outside the encrypted PFS, so it works
   // even when the inner image didn't decrypt (valid() == false). Returns the
   // number of bytes read into `out`, or -1 if the entry is absent.
-  int64_t readPkgEntry(uint32_t entryId, std::vector<uint8_t> &out);
+  i64 readPkgEntry(u32 entryId, std::vector<u8> &out);
 
 private:
   std::unique_ptr<PkgImpl> impl_;

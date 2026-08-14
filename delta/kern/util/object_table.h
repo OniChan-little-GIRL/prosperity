@@ -4,6 +4,7 @@
 // https://github.com/xenia-project/xenia/blob/master/src/xenia/kernel/util/object_table.h
 
 #include <logger/logger.h>
+#include "base/arch.h"
 #include <memory>
 #include <mutex>
 #include <utl/object_ref.h>
@@ -20,15 +21,15 @@ public:
 
   void reset();
   void purge();
-  bool add(kObject *, uint32_t &);
-  bool remove(uint32_t);
-  bool release(uint32_t);
-  bool keep(uint32_t);
-  kObject *get(uint32_t);
+  bool add(kObject *, u32 &);
+  bool remove(u32);
+  bool release(u32);
+  bool keep(u32);
+  kObject *get(u32);
 
 private:
-  bool resize(uint32_t newCap);
-  bool findSlot(uint32_t &out);
+  bool resize(u32 newCap);
+  bool findSlot(u32 &out);
 
   // recursive: release() holds the lock and calls remove(), which re-locks.
   std::recursive_mutex omutex;
@@ -38,10 +39,10 @@ private:
     kObject *obj = nullptr;
   };
 
-  entry *findEntry(uint32_t);
+  entry *findEntry(u32);
 
-  uint32_t tableCap = 0;
-  uint32_t lastFreeEntry = 0;
+  u32 tableCap = 0;
+  u32 lastFreeEntry = 0;
   entry *table = nullptr;
 };
 }

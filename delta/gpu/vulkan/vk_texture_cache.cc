@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_texture_cache.h"
+#include "base/arch.h"
 
 #include "gpu/gpu_check.h"
 #include "gpu/guest_memory.h"
@@ -37,20 +38,20 @@
 
 namespace {
 DELTA_OPTION(int, kForceTile, "DELTA_GPU_FORCETILE", -1);
-DELTA_OPTION(uint32_t, kDumpMin, "DELTA_GPU_TEXDUMP_MIN", 128);
-DELTA_OPTION(uint64_t, kTextureMb, "DELTA_GPU_TEX_MB", 1024);
+DELTA_OPTION(u32, kDumpMin, "DELTA_GPU_TEXDUMP_MIN", 128);
+DELTA_OPTION(u64, kTextureMb, "DELTA_GPU_TEX_MB", 1024);
 DELTA_OPTION(bool, kDefaultSampler, "DELTA_GPU_DEFSAMPLER", false);
 DELTA_OPTION(bool, kDumpUpload, "DELTA_GPU_TEXDUMP_UPLOAD", false);
 DELTA_OPTION(bool, kForceWhite, "DELTA_GPU_FORCEWHITE", false);
 DELTA_OPTION(bool, kNoDetile, "DELTA_GPU_NODETILE", false);
 DELTA_OPTION(bool, kTexDump, "DELTA_GPU_TEXDUMP", false);
-DELTA_OPTION(uint64_t, kDumpBase, "DELTA_GPU_TEXDUMP_BASE", 0);
+DELTA_OPTION(u64, kDumpBase, "DELTA_GPU_TEXDUMP_BASE", 0);
 DELTA_OPTION(bool, kForceNearest, "DELTA_GPU_FORCENEAREST", false);
 DELTA_OPTION(bool, kTexFail, "DELTA_GPU_TEXFAIL", false);
 DELTA_OPTION(bool, kTexMiss, "DELTA_GPU_TEXMISS", false);
 DELTA_OPTION(bool, kIntegerRt, "DELTA_GPU_INT_RT", true);
 DELTA_OPTION(bool, kTexRaw, "DELTA_GPU_TEXRAW", false);
-DELTA_OPTION(uint64_t, kTexWatch, "DELTA_GPU_TEXWATCH", 0);
+DELTA_OPTION(u64, kTexWatch, "DELTA_GPU_TEXWATCH", 0);
 DELTA_OPTION(int, kTexCensus, "DELTA_GPU_TEXCENSUS", 0);
 // DELTA_GPU_FORCELOD=<n>: clamp every sampler to mip n. A streamed title
 // uploads its mip chain progressively, so "this surface is fine" from a
@@ -63,10 +64,10 @@ namespace gpu::vk {
 using rhi::DrawInfo;
 
 struct TexImageKey {
-  uint64_t base = 0;
-  uint32_t w = 0, h = 0, tiling = 8, pitch = 0, layers = 1;
-  uint32_t depth = 1;
-  uint32_t mip_levels = 1;
+  u64 base = 0;
+  u32 w = 0, h = 0, tiling = 8, pitch = 0, layers = 1;
+  u32 depth = 1;
+  u32 mip_levels = 1;
   VkFormat format = VK_FORMAT_UNDEFINED;
   bool pow2_pad = false;
   // A volume and a 2D surface at the same guest address are different VkImage
@@ -82,7 +83,7 @@ struct TexImageKey {
 
 struct TexImageKeyHash {
   size_t operator()(const TexImageKey& k) const {
-    uint64_t h = 1469598103934665603ull;
+    u64 h = 1469598103934665603ull;
     h = HashWord(h, k.base);
     h = HashWord(h, k.w);
     h = HashWord(h, k.h);
@@ -99,8 +100,8 @@ struct TexImageKeyHash {
 };
 
 struct SamplerKey {
-  uint32_t raw[4] = {};
-  uint32_t image_min_lod = 0;
+  u32 raw[4] = {};
+  u32 image_min_lod = 0;
   bool valid = false;
   bool force_lod_zero = false;
   bool depth_compare = false;
@@ -116,8 +117,8 @@ struct SamplerKey {
 
 struct SamplerKeyHash {
   size_t operator()(const SamplerKey& k) const {
-    uint64_t h = HashWord(1469598103934665603ull, k.valid);
-    for (uint32_t word : k.raw)
+    u64 h = HashWord(1469598103934665603ull, k.valid);
+    for (u32 word : k.raw)
       h = HashWord(h, word);
     h = HashWord(h, k.image_min_lod);
     h = HashWord(h, k.force_lod_zero);
@@ -129,9 +130,9 @@ struct SamplerKeyHash {
 
 struct TexKey {
   TexImageKey image;
-  uint32_t base_array = 0, view_layers = 1;
-  uint32_t base_mip = 0, view_mips = 1;
-  uint32_t swizzle = 0;  // packed T# DST_SEL (0 = identity)
+  u32 base_array = 0, view_layers = 1;
+  u32 base_mip = 0, view_mips = 1;
+  u32 swizzle = 0;  // packed T# DST_SEL (0 = identity)
   SamplerKey sampler;
   bool arrayed = false;
   bool operator==(const TexKey& o) const {
@@ -144,7 +145,7 @@ struct TexKey {
 
 struct TexKeyHash {
   size_t operator()(const TexKey& k) const {
-    uint64_t h = TexImageKeyHash{}(k.image);
+    u64 h = TexImageKeyHash{}(k.image);
     h = HashWord(h, k.base_array);
     h = HashWord(h, k.view_layers);
     h = HashWord(h, k.base_mip);
@@ -157,9 +158,9 @@ struct TexKeyHash {
 
 struct TexViewKey {
   TexImageKey image;
-  uint32_t base_array = 0, view_layers = 1;
-  uint32_t base_mip = 0, view_mips = 1;
-  uint32_t swizzle = 0;  // packed T# DST_SEL_X/Y/Z/W
+  u32 base_array = 0, view_layers = 1;
+  u32 base_mip = 0, view_mips = 1;
+  u32 swizzle = 0;  // packed T# DST_SEL_X/Y/Z/W
   bool arrayed = false;
   bool operator==(const TexViewKey& o) const {
     return swizzle == o.swizzle && image == o.image &&
@@ -171,7 +172,7 @@ struct TexViewKey {
 
 struct TexViewKeyHash {
   size_t operator()(const TexViewKey& k) const {
-    uint64_t h = TexImageKeyHash{}(k.image);
+    u64 h = TexImageKeyHash{}(k.image);
     h = HashWord(h, k.base_array);
     h = HashWord(h, k.view_layers);
     h = HashWord(h, k.base_mip);
@@ -184,9 +185,9 @@ struct TexViewKeyHash {
 struct TexImageEntry {
   VkImage image = VK_NULL_HANDLE;
   ImageAllocation allocation;
-  uint64_t footprint = 0;
+  u64 footprint = 0;
   VkDeviceSize allocation_size = 0;
-  uint64_t hash = 0;
+  u64 hash = 0;
   int last_checked_frame = -1;
   int last_used_frame = -1;
 };
@@ -203,23 +204,23 @@ std::unordered_map<TexImageKey, TexImageEntry, TexImageKeyHash> g_tex_images;
 std::unordered_map<TexViewKey, TexViewEntry, TexViewKeyHash> g_tex_views;
 std::unordered_map<TexKey, TexEntry, TexKeyHash> g_tex_cache;
 std::unordered_map<SamplerKey, VkSampler, SamplerKeyHash> g_sampler_cache;
-constexpr uint32_t kTexturePageShift = 16;
-std::unordered_map<uint64_t, std::vector<TexImageKey>> g_texture_pages;
-uint64_t g_tex_image_bytes = 0;
+constexpr u32 kTexturePageShift = 16;
+std::unordered_map<u64, std::vector<TexImageKey>> g_texture_pages;
+u64 g_tex_image_bytes = 0;
 std::vector<TexImageEntry> g_retired_tex_images;
 std::vector<TexViewEntry> g_retired_tex_views;
 std::vector<TexEntry> g_retired_tex_sets;
 
-void RegisterTexturePages(const TexImageKey& key, uint64_t bytes) {
-  const uint64_t end = key.base + bytes;
-  for (uint64_t page = key.base >> kTexturePageShift;
+void RegisterTexturePages(const TexImageKey& key, u64 bytes) {
+  const u64 end = key.base + bytes;
+  for (u64 page = key.base >> kTexturePageShift;
        page <= (end - 1) >> kTexturePageShift; page++)
     g_texture_pages[page].push_back(key);
 }
 
-void UnregisterTexturePages(const TexImageKey& key, uint64_t bytes) {
-  const uint64_t end = key.base + bytes;
-  for (uint64_t page = key.base >> kTexturePageShift;
+void UnregisterTexturePages(const TexImageKey& key, u64 bytes) {
+  const u64 end = key.base + bytes;
+  for (u64 page = key.base >> kTexturePageShift;
        page <= (end - 1) >> kTexturePageShift; page++) {
     auto found = g_texture_pages.find(page);
     if (found == g_texture_pages.end())
@@ -230,28 +231,28 @@ void UnregisterTexturePages(const TexImageKey& key, uint64_t bytes) {
       g_texture_pages.erase(found);
   }
 }
-TexKey TextureKey(uint64_t base,
-                  uint32_t w,
-                  uint32_t h,
-                  uint32_t dfmt,
-                  uint32_t nfmt,
-                  uint32_t tiling,
-                  uint32_t pitch,
-                  uint32_t layers,
-                  uint32_t base_array,
-                  uint32_t view_layers,
-                  uint32_t mip_levels,
-                  uint32_t base_mip,
-                  uint32_t view_mips,
-                  uint32_t min_lod,
+TexKey TextureKey(u64 base,
+                  u32 w,
+                  u32 h,
+                  u32 dfmt,
+                  u32 nfmt,
+                  u32 tiling,
+                  u32 pitch,
+                  u32 layers,
+                  u32 base_array,
+                  u32 view_layers,
+                  u32 mip_levels,
+                  u32 base_mip,
+                  u32 view_mips,
+                  u32 min_lod,
                   bool pow2_pad,
-                  const uint32_t* sampler,
+                  const u32* sampler,
                   bool sampler_valid,
                   bool arrayed,
                   bool force_lod_zero,
                   bool depth_compare,
-                  uint32_t swizzle,
-                  uint32_t depth,
+                  u32 swizzle,
+                  u32 depth,
                   bool is_3d) {
   if (is_3d)
     layers = 1;
@@ -292,15 +293,15 @@ TexViewKey TextureViewKey(const TexKey& key) {
           key.view_mips, key.swizzle,    key.arrayed};
 }
 
-uint32_t TextureTiling(uint32_t tiling) {
-  return kForceTile >= 0 ? static_cast<uint32_t>(kForceTile.get()) : tiling;
+u32 TextureTiling(u32 tiling) {
+  return kForceTile >= 0 ? static_cast<u32>(kForceTile.get()) : tiling;
 }
 
 bool UploadTexPixelsImmediate(VkImage img,
-                              uint64_t base,
+                              u64 base,
                               const gcn::TextureLayout32& layout,
-                              uint32_t texel_w,
-                              uint32_t texel_h,
+                              u32 texel_w,
+                              u32 texel_h,
                               bool is_3d = false);  // defined below
 void ClearMultiTexCache();
 
@@ -367,8 +368,8 @@ bool CreateTextureDescriptors() {
   VKOK(vkCreateDescriptorSetLayout(g_dev.device, &dl, nullptr,
                                    &g_tex.ds_layout));
 
-  constexpr uint32_t kSinglePoolSets = 1024;
-  constexpr uint32_t kMultiPoolSets = 512;
+  constexpr u32 kSinglePoolSets = 1024;
+  constexpr u32 kMultiPoolSets = 512;
   VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                           kSinglePoolSets};
   VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -390,7 +391,7 @@ bool CreateTextureDescriptors() {
   // ds_layout/ds_pool).
   {
     VkDescriptorSetLayoutBinding mb[kMaxTex];
-    for (uint32_t i = 0; i < kMaxTex; i++)
+    for (u32 i = 0; i < kMaxTex; i++)
       mb[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT,
                nullptr};
@@ -430,11 +431,11 @@ bool CreateTextureDescriptors() {
       g_tex.white_img = VK_NULL_HANDLE;
       return false;
     }
-    uint32_t white = 0xFFFFFFFFu;
+    u32 white = 0xFFFFFFFFu;
     gcn::TextureLayout32 white_layout;
     gcn::BuildTextureLayout32(white_layout, 1, 1, 1, 1, 1, 31, false);
     if (!UploadTexPixelsImmediate(g_tex.white_img,
-                                  reinterpret_cast<uint64_t>(&white),
+                                  reinterpret_cast<u64>(&white),
                                   white_layout, 1, 1)) {
       vkDestroyImage(g_dev.device, g_tex.white_img, nullptr);
       g_image_memory.Free(g_dev, g_tex.white_allocation);
@@ -452,7 +453,7 @@ bool CreateTextureDescriptors() {
       return false;
     }
     if (!UploadTexPixelsImmediate(g_tex.white_3d_img,
-                                  reinterpret_cast<uint64_t>(&white),
+                                  reinterpret_cast<u64>(&white),
                                   white_layout, 1, 1, true)) {
       vkDestroyImage(g_dev.device, g_tex.white_3d_img, nullptr);
       g_image_memory.Free(g_dev, g_tex.white_3d_allocation);
@@ -542,7 +543,7 @@ bool CreateTextureDescriptors() {
         {g_tex.sampler, g_tex.zero_3d_view,
          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
     VkWriteDescriptorSet writes[6];
-    for (uint32_t i = 0; i < 6; i++) {
+    for (u32 i = 0; i < 6; i++) {
       writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
       writes[i].dstSet = sets[i];
       writes[i].descriptorCount = 1;
@@ -577,7 +578,7 @@ VkDescriptorSet AllocateSamplerSet(VkDescriptorSetLayout layout,
       return VK_NULL_HANDLE;
   }
 
-  const uint32_t set_capacity = multi ? 512u : 1024u;
+  const u32 set_capacity = multi ? 512u : 1024u;
   VkDescriptorPoolSize sizes[2] = {
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
        set_capacity * (multi ? kMaxTex : 1u)},
@@ -620,7 +621,7 @@ VkSampler SamplerFor(const SamplerKey& key) {
   if (g_sampler_cache.size() >= 4096)
     return g_tex.sampler;
 
-  auto address_mode = [](uint32_t mode) {
+  auto address_mode = [](u32 mode) {
     switch (mode & 7) {
       case 0:
         return VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -648,18 +649,18 @@ VkSampler SamplerFor(const SamplerKey& key) {
   // footprint straddles a neighbour". A pass that thresholds on what it samples
   // behaves completely differently under the two, and nothing else distinguishes
   // them from outside the shader.
-  uint32_t mag = kForceNearest ? 0u : (key.raw[2] >> 20) & 3;
-  uint32_t min = kForceNearest ? 0u : (key.raw[2] >> 22) & 3;
+  u32 mag = kForceNearest ? 0u : (key.raw[2] >> 20) & 3;
+  u32 min = kForceNearest ? 0u : (key.raw[2] >> 22) & 3;
   ci.magFilter = (mag & 1) && !key.integer ? VK_FILTER_LINEAR
                                            : VK_FILTER_NEAREST;
   ci.minFilter = (min & 1) && !key.integer ? VK_FILTER_LINEAR
                                            : VK_FILTER_NEAREST;
-  uint32_t mip_filter = (key.raw[2] >> 26) & 3;
+  u32 mip_filter = (key.raw[2] >> 26) & 3;
   ci.mipmapMode = mip_filter == 2 && !key.integer
                       ? VK_SAMPLER_MIPMAP_MODE_LINEAR
                       : VK_SAMPLER_MIPMAP_MODE_NEAREST;
   if (mip_filter) {
-    uint32_t min_lod = std::max(key.raw[1] & 0xFFF, key.image_min_lod);
+    u32 min_lod = std::max(key.raw[1] & 0xFFF, key.image_min_lod);
     ci.minLod = static_cast<float>(min_lod) / 256.0f;
     ci.maxLod = static_cast<float>((key.raw[1] >> 12) & 0xFFF) / 256.0f;
     ci.maxLod = std::max(ci.minLod, ci.maxLod);
@@ -668,7 +669,7 @@ VkSampler SamplerFor(const SamplerKey& key) {
     ci.minLod = ci.maxLod = 0.0f;
   if (kForceLod >= 0)
     ci.minLod = ci.maxLod = static_cast<float>(kForceLod.get());
-  int32_t bias = static_cast<int32_t>(key.raw[2] << 18) >> 18;
+  i32 bias = static_cast<i32>(key.raw[2] << 18) >> 18;
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(g_dev.phys, &props);
   ci.mipLodBias = std::clamp(static_cast<float>(bias) / 256.0f,
@@ -727,26 +728,26 @@ VkSampler SamplerFor(const SamplerKey& key) {
   return sampler;
 }
 
-uint64_t TextureLinearBytes(const gcn::TextureLayout32& layout) {
-  uint64_t bytes = 0;
-  for (uint32_t mip = 0; mip < layout.mip_levels; mip++)
-    bytes += static_cast<uint64_t>(layout.mips[mip].width) *
+u64 TextureLinearBytes(const gcn::TextureLayout32& layout) {
+  u64 bytes = 0;
+  for (u32 mip = 0; mip < layout.mip_levels; mip++)
+    bytes += static_cast<u64>(layout.mips[mip].width) *
              layout.mips[mip].height * layout.layers * layout.elem_bytes;
   return bytes;
 }
 
-void PackTexPixels(uint8_t* linear,
+void PackTexPixels(u8* linear,
                    VkDeviceSize buffer_offset,
-                   uint64_t base,
+                   u64 base,
                    const gcn::TextureLayout32& layout,
-                   uint32_t texel_w,
-                   uint32_t texel_h,
+                   u32 texel_w,
+                   u32 texel_h,
                    VkBufferImageCopy* copies,
                    bool is_3d) {
-  const uint32_t elem = layout.elem_bytes;
-  const uint8_t* src = reinterpret_cast<const uint8_t*>(base);
-  uint64_t linear_offset = 0;
-  for (uint32_t mip = 0; mip < layout.mip_levels; mip++) {
+  const u32 elem = layout.elem_bytes;
+  const u8* src = reinterpret_cast<const u8*>(base);
+  u64 linear_offset = 0;
+  for (u32 mip = 0; mip < layout.mip_levels; mip++) {
     const auto& level = layout.mips[mip];
     copies[mip].bufferOffset = buffer_offset + linear_offset;
     // A volume's slices are the layout's layers, but Vulkan takes them as one
@@ -756,17 +757,17 @@ void PackTexPixels(uint8_t* linear,
     copies[mip].imageExtent = {std::max(texel_w >> mip, 1u),
                                std::max(texel_h >> mip, 1u),
                                is_3d ? layout.layers : 1u};
-    const uint64_t layer_bytes =
-        static_cast<uint64_t>(level.width) * level.height * elem;
-    for (uint32_t layer = 0; layer < layout.layers; layer++) {
-      uint8_t* dst = linear + linear_offset + layer * layer_bytes;
+    const u64 layer_bytes =
+        static_cast<u64>(level.width) * level.height * elem;
+    for (u32 layer = 0; layer < layout.layers; layer++) {
+      u8* dst = linear + linear_offset + layer * layer_bytes;
       if (!kNoDetile) {
         gcn::DetileTextureMip32(src, dst, layout, mip, layer);
       } else {
-        const uint8_t* level_src = src + level.offset +
-                                   static_cast<uint64_t>(layer) * level.pitch *
+        const u8* level_src = src + level.offset +
+                                   static_cast<u64>(layer) * level.pitch *
                                        level.stored_height * elem;
-        for (uint32_t y = 0; y < level.height; y++)
+        for (u32 y = 0; y < level.height; y++)
           std::memcpy(dst + static_cast<size_t>(y) * level.width * elem,
                       level_src + static_cast<size_t>(y) * level.pitch * elem,
                       static_cast<size_t>(level.width) * elem);
@@ -832,10 +833,10 @@ void PackTexPixels(uint8_t* linear,
                   rf);
       std::fclose(rf);
     }
-    for (uint32_t y = 0; y < texel_h; y++) {
+    for (u32 y = 0; y < texel_h; y++) {
       base::FormatTo(line, "  ");
-      for (uint32_t x = 0; x < texel_w; x++) {
-        const uint8_t* p = linear + (static_cast<uint64_t>(y) * texel_w + x) * 4;
+      for (u32 x = 0; x < texel_w; x++) {
+        const u8* p = linear + (static_cast<u64>(y) * texel_w + x) * 4;
         base::FormatTo(line, "{:02x}{:02x}{:02x}{:02x} ", p[0], p[1], p[2],
                        p[3]);
       }
@@ -847,16 +848,16 @@ void PackTexPixels(uint8_t* linear,
   if (kDumpUpload && dump_upload_count < 32 && elem == 4 && texel_w >= 128 &&
       texel_h >= 128) {
     // Every layer, so an array/cube surface can be inspected face by face.
-    for (uint32_t l = 1; l < layout.layers && l < 8; l++) {
+    for (u32 l = 1; l < layout.layers && l < 8; l++) {
       char lp[256];
       std::snprintf(lp, sizeof(lp), "%s/tex_layer%u_%02d_%#lx_%ux%u.ppm",
                     DumpDir(), l, dump_upload_count, (unsigned long)base,
                     texel_w, texel_h);
       if (FILE* lf = std::fopen(lp, "wb")) {
         std::fprintf(lf, "P6\n%u %u\n255\n", texel_w, texel_h);
-        const uint8_t* lp8 =
-            linear + static_cast<uint64_t>(l) * texel_w * texel_h * 4;
-        for (uint64_t i = 0; i < static_cast<uint64_t>(texel_w) * texel_h; i++) {
+        const u8* lp8 =
+            linear + static_cast<u64>(l) * texel_w * texel_h * 4;
+        for (u64 i = 0; i < static_cast<u64>(texel_w) * texel_h; i++) {
           std::fputc(lp8[i * 4], lf);
           std::fputc(lp8[i * 4 + 1], lf);
           std::fputc(lp8[i * 4 + 2], lf);
@@ -864,10 +865,10 @@ void PackTexPixels(uint8_t* linear,
         std::fclose(lf);
       }
     }
-    uint64_t rgb_nonzero = 0, alpha_nonzero = 0;
-    const uint64_t pixels = static_cast<uint64_t>(texel_w) * texel_h;
-    for (uint64_t i = 0; i < pixels; i++) {
-      const uint8_t* p = linear + i * 4;
+    u64 rgb_nonzero = 0, alpha_nonzero = 0;
+    const u64 pixels = static_cast<u64>(texel_w) * texel_h;
+    for (u64 i = 0; i < pixels; i++) {
+      const u8* p = linear + i * 4;
       if (p[0] || p[1] || p[2])
         rgb_nonzero++;
       if (p[3])
@@ -880,8 +881,8 @@ void PackTexPixels(uint8_t* linear,
     FILE* file = std::fopen(path, "wb");
     if (file) {
       std::fprintf(file, "P6\n%u %u\n255\n", texel_w, texel_h);
-      for (uint64_t i = 0; i < pixels; i++) {
-        const uint8_t* p = linear + i * 4;
+      for (u64 i = 0; i < pixels; i++) {
+        const u8* p = linear + i * 4;
         std::fputc(p[0], file);
         std::fputc(p[1], file);
         std::fputc(p[2], file);
@@ -895,7 +896,7 @@ void PackTexPixels(uint8_t* linear,
                     (unsigned long)base);
       if (FILE* alpha = std::fopen(alpha_path, "wb")) {
         std::fprintf(alpha, "P5\n%u %u\n255\n", texel_w, texel_h);
-        for (uint64_t i = 0; i < pixels; i++)
+        for (u64 i = 0; i < pixels; i++)
           std::fputc(linear[i * 4 + 3], alpha);
         std::fclose(alpha);
       }
@@ -911,13 +912,13 @@ void PackTexPixels(uint8_t* linear,
 
 // One-time initialization upload used before frame recording starts.
 bool UploadTexPixelsImmediate(VkImage img,
-                              uint64_t base,
+                              u64 base,
                               const gcn::TextureLayout32& layout,
-                              uint32_t texel_w,
-                              uint32_t texel_h,
+                              u32 texel_w,
+                              u32 texel_h,
                               bool is_3d) {
   const VkDeviceSize sz = TextureLinearBytes(layout);
-  const uint32_t barrier_layers = is_3d ? 1 : layout.layers;
+  const u32 barrier_layers = is_3d ? 1 : layout.layers;
   VkBuffer stg = VK_NULL_HANDLE;
   VkDeviceMemory stg_mem = VK_NULL_HANDLE;
   VkCommandBuffer command = VK_NULL_HANDLE;
@@ -952,7 +953,7 @@ bool UploadTexPixelsImmediate(VkImage img,
   }
 
   VkBufferImageCopy copies[16]{};
-  PackTexPixels(static_cast<uint8_t*>(map), 0, base, layout, texel_w, texel_h,
+  PackTexPixels(static_cast<u8*>(map), 0, base, layout, texel_w, texel_h,
                 copies, is_3d);
   vkUnmapMemory(g_dev.device, stg_mem);
   map = nullptr;
@@ -987,7 +988,7 @@ bool UploadTexPixelsImmediate(VkImage img,
   VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   si.commandBufferCount = 1;
   si.pCommandBuffers = &command;
-  uint64_t _t0 = NowNs();
+  u64 _t0 = NowNs();
   vkResetFences(g_dev.device, 1, &g_dev.fence);
   const VkResult up_submit =
       end_result == VK_SUCCESS ? vkQueueSubmit(g_dev.queue, 1, &si, g_dev.fence)
@@ -1006,7 +1007,7 @@ bool UploadTexPixelsImmediate(VkImage img,
               layout.layers, (unsigned long long)sz);
     ReportDeviceFault(g_dev);
   }
-  uint64_t _tex_dt = NowNs() - _t0;
+  u64 _tex_dt = NowNs() - _t0;
   g_ns_tex_up += _tex_dt;
   g_fr_tex_up += _tex_dt;
   g_tex_ups++;
@@ -1017,18 +1018,18 @@ bool UploadTexPixelsImmediate(VkImage img,
 
 bool RecordTexPixels(VkImage img,
                      VkImageLayout old_layout,
-                     uint64_t base,
+                     u64 base,
                      const gcn::TextureLayout32& layout,
-                     uint32_t texel_w,
-                     uint32_t texel_h,
+                     u32 texel_w,
+                     u32 texel_h,
                      bool is_3d) {
   const VkDeviceSize bytes = TextureLinearBytes(layout);
-  const uint32_t barrier_layers = is_3d ? 1 : layout.layers;
+  const u32 barrier_layers = is_3d ? 1 : layout.layers;
   TextureUploadSlice upload;
   if (!AllocateTextureUpload(g_frame.slot_idx, bytes,
-                             std::max<uint32_t>(16, layout.elem_bytes), upload))
+                             std::max<u32>(16, layout.elem_bytes), upload))
     return false;
-  const uint64_t start = NowNs();
+  const u64 start = NowNs();
   VkBufferImageCopy copies[16]{};
   PackTexPixels(upload.map, upload.offset, base, layout, texel_w, texel_h,
                 copies, is_3d);
@@ -1048,7 +1049,7 @@ bool RecordTexPixels(VkImage img,
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                barrier_layers, layout.mip_levels);
-  const uint64_t elapsed = NowNs() - start;
+  const u64 elapsed = NowNs() - start;
   g_ns_tex_up += elapsed;
   g_fr_tex_up += elapsed;
   g_tex_ups++;
@@ -1111,46 +1112,46 @@ bool EvictOldestTexture() {
 // to it. Cached by guest base; re-uploaded when the guest pixels change (the
 // room art is composed/loaded into the same buffer after the first sample, so a
 // once-only cache would serve a stale black frame).
-VkDescriptorSet GetTexture(uint64_t base,
-                           uint32_t w,
-                           uint32_t h,
-                           uint32_t dfmt,
-                           uint32_t nfmt,
-                           uint32_t tiling,
-                           uint32_t pitch,
-                           uint32_t layers,
-                           uint32_t base_array,
-                           uint32_t view_layers,
-                           uint32_t mip_levels,
-                           uint32_t base_mip,
-                           uint32_t view_mips,
-                           uint32_t min_lod,
+VkDescriptorSet GetTexture(u64 base,
+                           u32 w,
+                           u32 h,
+                           u32 dfmt,
+                           u32 nfmt,
+                           u32 tiling,
+                           u32 pitch,
+                           u32 layers,
+                           u32 base_array,
+                           u32 view_layers,
+                           u32 mip_levels,
+                           u32 base_mip,
+                           u32 view_mips,
+                           u32 min_lod,
                            bool pow2_pad,
-                           const uint32_t* sampler,
+                           const u32* sampler,
                            bool sampler_valid,
                            bool arrayed,
                            bool force_lod_zero,
                            bool depth_compare,
-                           uint32_t swizzle,
-                           uint32_t depth,
+                           u32 swizzle,
+                           u32 depth,
                            bool is_3d) {
-  constexpr uint64_t kMaxTextureBytes = 256ull * 1024 * 1024;
+  constexpr u64 kMaxTextureBytes = 256ull * 1024 * 1024;
   // DELTA_GPU_TEXWATCH=<base>: the head of one texture's guest memory, once per
   // frame it is bound. A surface the guest fills after our first upload reads
   // as its initial contents forever, and no other trace distinguishes that from
   // memory the guest never wrote.
-  if (kTexWatch && base == (uint64_t)kTexWatch) {
+  if (kTexWatch && base == (u64)kTexWatch) {
     static int watched = -1;
     if (watched != g_frame.num && gpu::IsReadableRange(base, 32)) {
       watched = g_frame.num;
-      const uint8_t* p = reinterpret_cast<const uint8_t*>(base);
+      const u8* p = reinterpret_cast<const u8*>(base);
       // Scan the whole surface, not just its head: a grading LUT legitimately
       // starts at black, so a zero prefix says nothing about whether the guest
       // filled it.
-      const uint64_t span = uint64_t(w) * h * depth * 4;
-      uint64_t first_nz = span;
+      const u64 span = u64(w) * h * depth * 4;
+      u64 first_nz = span;
       if (gpu::IsReadableRange(base, span))
-        for (uint64_t i = 0; i < span; i++)
+        for (u64 i = 0; i < span; i++)
           if (p[i]) {
             first_nz = i;
             break;
@@ -1160,7 +1161,7 @@ VkDescriptorSet GetTexture(uint64_t base,
                      g_frame.num, (unsigned long)base, w, h, depth,
                      (unsigned long)span,
                      first_nz == span ? -1L : (long)first_nz);
-      for (uint32_t i = 0; i < 32; i++)
+      for (u32 i = 0; i < 32; i++)
         base::FormatTo(line, " {:02x}", p[i]);
       BASE_LOGI("texwatch", "{}", line.c_str());
     }
@@ -1173,7 +1174,7 @@ VkDescriptorSet GetTexture(uint64_t base,
   if (is_3d) {
     // maxImageDimension3D (commonly 2048) applies to every axis of a volume,
     // well below the 2D limits checked above.
-    static uint32_t max_3d = 0;
+    static u32 max_3d = 0;
     if (!max_3d) {
       VkPhysicalDeviceProperties props;
       vkGetPhysicalDeviceProperties(g_dev.phys, &props);
@@ -1217,16 +1218,16 @@ VkDescriptorSet GetTexture(uint64_t base,
   // space. Mip chains only halve cleanly in block space for power-of-two
   // texel dimensions; decline others (rare) rather than mis-address them.
   const bool bc = GuestFormatBlockCompressed(dfmt);
-  const uint32_t elem_bytes = GuestFormatElemBytes(dfmt);
+  const u32 elem_bytes = GuestFormatElemBytes(dfmt);
   if (bc && mip_levels > 1 && ((w & (w - 1)) || (h & (h - 1))))
     return VK_NULL_HANDLE;
   // BCn volume images are an optional Vulkan feature; decline rather than
   // create an image the driver need not support.
   if (bc && is_3d)
     return VK_NULL_HANDLE;
-  const uint32_t lw = bc ? (w + 3) / 4 : w;
-  const uint32_t lh = bc ? (h + 3) / 4 : h;
-  const uint32_t lpitch =
+  const u32 lw = bc ? (w + 3) / 4 : w;
+  const u32 lh = bc ? (h + 3) / 4 : h;
+  const u32 lpitch =
       bc ? ((pitch ? pitch : w) + 3) / 4 : (pitch ? pitch : w);
   gcn::TextureLayout32 layout;
   // DELTA_GPU_TEXFAIL: why a guest texture declines to upload. Skyrim's font
@@ -1245,7 +1246,7 @@ VkDescriptorSet GetTexture(uint64_t base,
     }
     return VK_NULL_HANDLE;
   }
-  uint64_t footprint = layout.size;
+  u64 footprint = layout.size;
   if (footprint > kMaxTextureBytes) {
     if (kTexFail) {
       static int n = 0;
@@ -1263,11 +1264,11 @@ VkDescriptorSet GetTexture(uint64_t base,
   // not", which is what separates a broken upload from a broken descriptor.
   if (kTexCensus && gpu::IsReadableRange(base, footprint)) {
     struct Cell {
-      uint32_t w, h, dfmt, nfmt, tiling, mips;
-      uint64_t footprint, binds;
+      u32 w, h, dfmt, nfmt, tiling, mips;
+      u64 footprint, binds;
     };
     static std::mutex m;
-    static std::map<uint64_t, Cell> tbl;
+    static std::map<u64, Cell> tbl;
     static auto last = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(m);
     Cell& c = tbl[base];
@@ -1278,10 +1279,10 @@ VkDescriptorSet GetTexture(uint64_t base,
       last = now;
       BASE_LOGI("texcensus", "{} surfaces", tbl.size());
       for (const auto& kv : tbl) {
-        const auto* p = reinterpret_cast<const uint64_t*>(kv.first);
-        uint64_t nz = 0;
+        const auto* p = reinterpret_cast<const u64*>(kv.first);
+        u64 nz = 0;
         if (gpu::IsReadableRange(kv.first, kv.second.footprint))
-          for (uint64_t i = 0; i < kv.second.footprint / 8; i++)
+          for (u64 i = 0; i < kv.second.footprint / 8; i++)
             if (p[i])
               nz++;
         BASE_LOGI("texcensus",
@@ -1304,8 +1305,8 @@ VkDescriptorSet GetTexture(uint64_t base,
   // layout in the name, so a swizzle can be worked out offline.
   if (kTexRaw && w >= 256 && h >= 128 && gpu::IsReadableRange(base, footprint)) {
     static int rawn = 0;
-    static std::unordered_set<uint64_t> raw_seen;
-    if (rawn < 12 && raw_seen.insert(static_cast<uint64_t>(w) << 32 | h).second) {
+    static std::unordered_set<u64> raw_seen;
+    if (rawn < 12 && raw_seen.insert(static_cast<u64>(w) << 32 | h).second) {
       char p[320];
       std::snprintf(p, sizeof(p), "%s/raw_%02d_%ux%u_pitch%u_sh%u_tile%u_e%u.bin",
                     DumpDir(), rawn++, w, h, layout.mips[0].pitch,
@@ -1326,10 +1327,10 @@ VkDescriptorSet GetTexture(uint64_t base,
       return VK_NULL_HANDLE;
     static int tdn = 0;
     if (tdn < 16) {
-      const uint32_t* px = reinterpret_cast<const uint32_t*>(base);
-      uint64_t cnt = (uint64_t)w * h, nz = 0,
+      const u32* px = reinterpret_cast<const u32*>(base);
+      u64 cnt = (u64)w * h, nz = 0,
                step = cnt > 8192 ? cnt / 8192 : 1;
-      for (uint64_t i = 0; i < cnt; i += step)
+      for (u64 i = 0; i < cnt; i += step)
         if (px[i] & 0x00FFFFFFu)
           nz++;
       char p[256];
@@ -1338,8 +1339,8 @@ VkDescriptorSet GetTexture(uint64_t base,
       FILE* f = std::fopen(p, "wb");
       if (f) {
         std::fprintf(f, "P6\n%u %u\n255\n", w, h);
-        const uint8_t* b = reinterpret_cast<const uint8_t*>(base);
-        for (uint64_t i = 0; i < cnt; i++) {
+        const u8* b = reinterpret_cast<const u8*>(base);
+        for (u64 i = 0; i < cnt; i++) {
           std::fputc(b[i * 4], f);
           std::fputc(b[i * 4 + 1], f);
           std::fputc(b[i * 4 + 2], f);
@@ -1354,7 +1355,7 @@ VkDescriptorSet GetTexture(uint64_t base,
   if (!rhi::FlushCsWritesRange(rhi::DefaultRenderer(), base, footprint))
     return VK_NULL_HANDLE;
   auto image_it = g_tex_images.find(key.image);
-  uint64_t hsh = 0;
+  u64 hsh = 0;
   if (image_it == g_tex_images.end() ||
       image_it->second.last_checked_frame != g_frame.num) {
     // Mapping probes are syscall-heavy. Perform one alongside the
@@ -1420,8 +1421,8 @@ VkDescriptorSet GetTexture(uint64_t base,
     // can transiently exceed the budget by up to two frames of retirements;
     // capping allocated bytes instead would make creation fail outright at
     // the budget edge, since eviction cannot free memory mid-frame.
-    static const uint64_t kTextureBudget =
-        std::max<uint64_t>(kTextureMb, 64) * 1024 * 1024;
+    static const u64 kTextureBudget =
+        std::max<u64>(kTextureMb, 64) * 1024 * 1024;
     while (g_tex_image_bytes + mr.size > kTextureBudget)
       if (!EvictOldestTexture()) {
         vkDestroyImage(g_dev.device, image_entry.image, nullptr);
@@ -1446,7 +1447,7 @@ VkDescriptorSet GetTexture(uint64_t base,
       return VK_NULL_HANDLE;
     }
     image_entry.allocation_size = mr.size;
-    NameObject(VK_OBJECT_TYPE_IMAGE, (uint64_t)image_entry.image,
+    NameObject(VK_OBJECT_TYPE_IMAGE, (u64)image_entry.image,
                "tex %#llx %ux%u mips=%u layers=%u", (unsigned long long)base, w,
                h, mip_levels, layers);
     image_it = g_tex_images.emplace(key.image, image_entry).first;
@@ -1513,7 +1514,7 @@ VkDescriptorSet GetTexture(uint64_t base,
 
 // Image view for a guest texture (ensures it is cached/uploaded via
 // GetTexture).
-bool GuestTextureUploadSupported(uint32_t dfmt, uint32_t nfmt) {
+bool GuestTextureUploadSupported(u32 dfmt, u32 nfmt) {
   // The detiler preserves packed 32-bpp texels; Vulkan applies the descriptor's
   // numeric interpretation when sampling.
   return GuestTextureFormat(dfmt, nfmt) != VK_FORMAT_UNDEFINED;
@@ -1568,7 +1569,7 @@ struct MultiTexSet {
 };
 
 struct MultiTexKey {
-  uint32_t num_texs = 0;
+  u32 num_texs = 0;
   TexKey tex[kMaxTex];
   VkImageView view[kMaxTex] = {};
   VkImageLayout layout[kMaxTex] = {};
@@ -1576,7 +1577,7 @@ struct MultiTexKey {
   bool operator==(const MultiTexKey& o) const {
     if (num_texs != o.num_texs)
       return false;
-    for (uint32_t i = 0; i < num_texs; i++)
+    for (u32 i = 0; i < num_texs; i++)
       if (!(tex[i] == o.tex[i]) || view[i] != o.view[i] ||
           layout[i] != o.layout[i] || storage[i] != o.storage[i])
         return false;
@@ -1586,8 +1587,8 @@ struct MultiTexKey {
 
 struct MultiTexKeyHash {
   size_t operator()(const MultiTexKey& k) const {
-    uint64_t h = HashWord(1469598103934665603ull, k.num_texs);
-    for (uint32_t i = 0; i < k.num_texs; i++) {
+    u64 h = HashWord(1469598103934665603ull, k.num_texs);
+    for (u32 i = 0; i < k.num_texs; i++) {
       h = HashWord(h, TexKeyHash{}(k.tex[i]));
       h = HashWord(h, std::hash<VkImageView>{}(k.view[i]));
       h = HashWord(h, k.layout[i]);
@@ -1646,10 +1647,10 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
                                VkDescriptorSetLayout set_layout,
                                const VkImageView* resolved_views,
                                const VkImageLayout* resolved_layouts,
-                               const uint64_t* depth_src) {
+                               const u64* depth_src) {
   MultiTexKey key;
   key.num_texs = std::min(d.num_texs, kMaxTex);
-  for (uint32_t i = 0; i < key.num_texs; i++) {
+  for (u32 i = 0; i < key.num_texs; i++) {
     const auto& t = d.texs[i];
     key.tex[i] = TextureKey(
         t.base, t.w, t.h, t.dfmt, t.nfmt, TextureTiling(t.tiling), t.pitch,
@@ -1678,7 +1679,7 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
   // white default (the source of "everything renders white" chains) with the
   // descriptor state that failed to resolve.
   static int tex_miss_logged = 0;
-  for (uint32_t i = 0; i < key.num_texs; i++) {
+  for (u32 i = 0; i < key.num_texs; i++) {
     VkImageView v =
         (i < key.num_texs && !kForceWhite) ? resolved_views[i] : VK_NULL_HANDLE;
     bool arrayed = i < key.num_texs && d.texs[i].arrayed;
@@ -1692,7 +1693,7 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
       // took it from inline user data.
       char mem[96] = "";
       if (t.src && gpu::IsReadableRange(t.src, 32)) {
-        const auto* w = reinterpret_cast<const uint32_t*>(t.src);
+        const auto* w = reinterpret_cast<const u32*>(t.src);
         std::snprintf(mem, sizeof(mem), " [%08x %08x %08x %08x]", w[0], w[1],
                       w[2], w[3]);
       }
@@ -1719,7 +1720,7 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
     return VK_NULL_HANDLE;
   VkDescriptorImageInfo dii[kMaxTex];
   VkWriteDescriptorSet wr[kMaxTex];
-  for (uint32_t i = 0; i < key.num_texs; i++) {
+  for (u32 i = 0; i < key.num_texs; i++) {
     SamplerKey sampler;
     if (i < key.num_texs) {
       sampler.valid = d.texs[i].sampler_valid;
@@ -1767,12 +1768,12 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
 
 // Mark cached textures overlapping a written range for validation. Their next
 // use refreshes the existing compatible image in place.
-void InvalidateTexRange(uint64_t base, uint64_t size) {
+void InvalidateTexRange(u64 base, u64 size) {
   if (!size || base > UINT64_MAX - size)
     return;
-  uint64_t end = base + size;
+  u64 end = base + size;
   std::vector<TexImageKey> overlap;
-  for (uint64_t page = base >> kTexturePageShift;
+  for (u64 page = base >> kTexturePageShift;
        page <= (end - 1) >> kTexturePageShift; page++) {
     auto found = g_texture_pages.find(page);
     if (found == g_texture_pages.end())

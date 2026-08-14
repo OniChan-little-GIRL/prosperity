@@ -1,4 +1,5 @@
 #include <cstdint>
+#include "base/arch.h"
 #include <cstring>
 
 #include <gtest/gtest.h>
@@ -32,7 +33,7 @@ TEST_F(ConsoleDevice, ReadsReportEndOfFile) {
 TEST_F(ConsoleDevice, WriteReportsEveryByteConsumed) {
   const char msg[] = "guest console output\n";
   EXPECT_EQ(dev_.write(msg, sizeof(msg) - 1),
-            static_cast<int64_t>(sizeof(msg) - 1));
+            static_cast<i64>(sizeof(msg) - 1));
   // An empty write is not an error, and a null buffer must not be dereferenced.
   EXPECT_EQ(dev_.write(msg, 0), 0);
   EXPECT_EQ(dev_.write(nullptr, 4), 0);
@@ -52,8 +53,8 @@ TEST_F(ConsoleDevice, ReportsItselfAsACharacterDevice) {
 // back, and stack garbage there reads as a configured line.
 TEST_F(ConsoleDevice, GettersZeroTheirOutputBuffer) {
   struct Case {
-    uint32_t cmd;
-    uint32_t bytes;
+    u32 cmd;
+    u32 bytes;
   };
   const Case cases[] = {
       {0x402c7413, 0x2c},  // TIOCGETA
@@ -62,10 +63,10 @@ TEST_F(ConsoleDevice, GettersZeroTheirOutputBuffer) {
       {0x4004667f, 4},     // FIONREAD
   };
   for (const auto &c : cases) {
-    uint8_t buf[0x40];
+    u8 buf[0x40];
     std::memset(buf, 0xAA, sizeof(buf));
     EXPECT_EQ(dev_.ioctl(c.cmd, buf), 0) << std::hex << c.cmd;
-    for (uint32_t i = 0; i < c.bytes; i++)
+    for (u32 i = 0; i < c.bytes; i++)
       EXPECT_EQ(buf[i], 0) << std::hex << c.cmd << " byte " << i;
     // Only the payload is touched.
     EXPECT_EQ(buf[c.bytes], 0xAA) << std::hex << c.cmd;
@@ -73,29 +74,29 @@ TEST_F(ConsoleDevice, GettersZeroTheirOutputBuffer) {
 }
 
 TEST_F(ConsoleDevice, SettersAreAcceptedAndIgnored) {
-  uint8_t buf[0x2c];
+  u8 buf[0x2c];
   std::memset(buf, 0x5A, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x802c7414, buf), 0);  // TIOCSETA
   EXPECT_EQ(dev_.ioctl(0x80087467, buf), 0);  // TIOCSWINSZ
   EXPECT_EQ(dev_.ioctl(0x2000745e, nullptr), 0);  // TIOCDRAIN, no argument
-  for (uint8_t b : buf)
+  for (u8 b : buf)
     EXPECT_EQ(b, 0x5A);  // a setter reads its argument, it does not rewrite it
 }
 
 // An unknown ioctl soft-succeeds, but an IOC_OUT one still owes the caller a
 // defined buffer.
 TEST_F(ConsoleDevice, UnknownIoctlZeroesAnOutBuffer) {
-  uint8_t buf[0x20];
+  u8 buf[0x20];
   std::memset(buf, 0xAA, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x40107499, buf), 0);  // IOC_OUT, 0x10 bytes
-  for (uint32_t i = 0; i < 0x10; i++)
+  for (u32 i = 0; i < 0x10; i++)
     EXPECT_EQ(buf[i], 0) << "byte " << i;
   EXPECT_EQ(buf[0x10], 0xAA);
 
   // IOC_VOID carries no payload, so nothing may be written through the pointer.
   std::memset(buf, 0xAA, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x20007499, buf), 0);
-  for (uint8_t b : buf)
+  for (u8 b : buf)
     EXPECT_EQ(b, 0xAA);
 }
 

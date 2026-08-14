@@ -15,13 +15,14 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <cstdint>
 
 namespace {
 constexpr int kImeNoKeyboard = 0x80bc0004;
 
-int PS4ABI imeKeyboardOpen(int32_t, const void *) { return kImeNoKeyboard; }
+int PS4ABI imeKeyboardOpen(i32, const void *) { return kImeNoKeyboard; }
 }  // namespace
 
 static const runtime::funcInfo functions[] = {

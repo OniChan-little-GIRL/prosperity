@@ -8,6 +8,7 @@
 // surface -- guest frames render offscreen and are read back (see vk_frame).
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <base/logging.h>
 
@@ -32,16 +33,16 @@ struct DeviceState {
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice phys = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
-  uint32_t qfam = 0;
+  u32 qfam = 0;
   VkQueue queue = VK_NULL_HANDLE;
   VkCommandPool pool = VK_NULL_HANDLE;
   VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
   // Dedicated to one-time initialization and diagnostic aux submits.
   VkFence fence = VK_NULL_HANDLE;
-  uint32_t max_cs_resources = 0;
+  u32 max_cs_resources = 0;
   VkDeviceSize max_storage_buffer_range = 0;
   float timestamp_period = 0.0f;
-  uint32_t timestamp_valid_bits = 0;
+  u32 timestamp_valid_bits = 0;
   bool sampler_anisotropy = false;
   // Per-attachment blend state is only legal with this enabled.
   bool independent_blend = false;
@@ -67,8 +68,8 @@ extern PFN_vkCmdEndRenderingKHR& g_cmd_end_rendering;
 
 bool CreateDevice();
 
-uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags props);
-uint32_t FindMemoryTypePref(uint32_t type_bits,
+u32 FindMemoryType(u32 type_bits, VkMemoryPropertyFlags props);
+u32 FindMemoryTypePref(u32 type_bits,
                             VkMemoryPropertyFlags pref,
                             VkMemoryPropertyFlags req);
 VkAccessFlags ColorImageAccess(VkImageLayout layout);
@@ -79,8 +80,8 @@ void ImageBarrier(VkCommandBuffer c,
                   VkImageLayout to,
                   VkAccessFlags src_a,
                   VkAccessFlags dst_a,
-                  uint32_t layers = 1,
-                  uint32_t mip_levels = 1);
+                  u32 layers = 1,
+                  u32 mip_levels = 1);
 void DepthBarrier(VkCommandBuffer c,
                   VkImage img,
                   VkImageLayout from,
@@ -94,8 +95,8 @@ void StencilBarrier(VkCommandBuffer c,
                     VkAccessFlags src_a,
                     VkAccessFlags dst_a);
 
-VkShaderModule MakeModule(const uint32_t* spv, size_t bytes);
-VkShaderModule MakeModuleVec(const std::vector<uint32_t>& spv);
+VkShaderModule MakeModule(const u32* spv, size_t bytes);
+VkShaderModule MakeModuleVec(const std::vector<u32>& spv);
 
 // Ask the driver what the GPU actually faulted on (VK_EXT_device_fault).
 void ReportDeviceFault(DeviceState& device);

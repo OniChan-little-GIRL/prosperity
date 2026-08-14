@@ -9,6 +9,7 @@
 // based off https://github.com/Zer0xFF/ps4-pup-unpacker/blob/master/PUP.cpp
 
 #include "pup_object.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -19,7 +20,7 @@
 namespace vfs {
 namespace {
 struct fileNode {
-  uint32_t id;
+  u32 id;
   const char *name;
 };
 
@@ -33,7 +34,7 @@ const fileNode knownFileNames[] = {
     {257, "eula.xml"},        {512, "orbis_swu.self"},
     {514, "orbis_swu.self"},  {3337, "cp_firmware.bin"}};
 
-const char *knownName(uint32_t id) {
+const char *knownName(u32 id) {
   for (const auto &n : knownFileNames)
     if (n.id == id)
       return n.name;
@@ -50,33 +51,33 @@ void appendLine(base::String &s, const char *fmt, ...) {
 }
 
 // PS5 entry flag bits (decrypted PUP).
-bool ps5Compressed(uint32_t flags) { return (flags & 0x8u) != 0; }
-bool ps5Blocked(uint32_t flags) { return (flags & 0x800u) != 0; }
-bool ps5IsTable(uint32_t flags) { return (flags & 0x1u) != 0; }
-bool ps5IsSpecial(uint32_t flags) {
-  uint32_t s = flags & 0xF0000000u;
+bool ps5Compressed(u32 flags) { return (flags & 0x8u) != 0; }
+bool ps5Blocked(u32 flags) { return (flags & 0x800u) != 0; }
+bool ps5IsTable(u32 flags) { return (flags & 0x1u) != 0; }
+bool ps5IsSpecial(u32 flags) {
+  u32 s = flags & 0xF0000000u;
   return s == 0xE0000000u || s == 0xF0000000u;
 }
 // Uncompressed block size = 1 << (((flags >> 12) & 0xF) + 12).
-uint32_t ps5BlockSize(uint32_t flags) {
+u32 ps5BlockSize(u32 flags) {
   return 1u << (((flags >> 12) & 0xFu) + 12u);
 }
 
 // One (offset,size) extent record from a block table.
 struct blockExtent {
-  uint32_t offset;
-  uint32_t size;
+  u32 offset;
+  u32 size;
 };
 
 // Inflate exactly one zlib stream into a buffer of the known output size.
-bool inflateBlock(const uint8_t *in, size_t inLen, uint8_t *out, size_t outLen) {
+bool inflateBlock(const u8 *in, size_t inLen, u8 *out, size_t outLen) {
   uLongf dst = static_cast<uLongf>(outLen);
   int r = uncompress(out, &dst, in, static_cast<uLong>(inLen));
   return r == Z_OK && dst == outLen;
 }
 
 // Pick a file extension from the leading bytes of a segment's plaintext.
-const char *sniffExt(const uint8_t *p, size_t n) {
+const char *sniffExt(const u8 *p, size_t n) {
   auto has = [&](const char *sig, size_t len, size_t at = 0) {
     return n >= at + len && std::memcmp(p + at, sig, len) == 0;
   };
@@ -123,8 +124,8 @@ bool pupReader::load() {
   return entries.size() == static_cast<size_t>(header.numSegments);
 }
 
-bool pupReader::inflateEntry(const pup_entry &e, base::Vector<uint8_t> &in,
-                             base::Vector<uint8_t> &out) {
+bool pupReader::inflateEntry(const pup_entry &e, base::Vector<u8> &in,
+                             base::Vector<u8> &out) {
   if (e.sizeUncompressed == 0 || e.sizeUncompressed > (1ull << 32))
     return false;
   out.resize(static_cast<size_t>(e.sizeUncompressed));
@@ -157,13 +158,13 @@ base::String pupReader::extractAll(const base::String &outDir,
   int written = 0, failed = 0;
   for (size_t i = 0; i < entries.size(); i++) {
     const auto &e = entries[i];
-    uint32_t special = e.flags & 0xF0000000u;
+    u32 special = e.flags & 0xF0000000u;
     if (special == 0xE0000000u || special == 0xF0000000u)
       continue; // signature / table blocks, not file segments
-    uint32_t id = e.flags >> 20;
+    u32 id = e.flags >> 20;
     bool compressed = (e.flags & 0x8u) != 0;
 
-    base::Vector<uint8_t> raw;
+    base::Vector<u8> raw;
     file.Seek(e.offset, utl::seekMode::seek_set);
     if (!file.Read(raw, static_cast<size_t>(e.sizeCompressed))) {
       failed++;
@@ -171,9 +172,9 @@ base::String pupReader::extractAll(const base::String &outDir,
       continue;
     }
 
-    const uint8_t *payload = raw.data();
+    const u8 *payload = raw.data();
     size_t payloadLen = raw.size();
-    base::Vector<uint8_t> inflated;
+    base::Vector<u8> inflated;
     if (compressed) {
       if (inflateEntry(e, raw, inflated)) {
         payload = inflated.data();
@@ -223,7 +224,7 @@ base::String pupReader::extractAll(const base::String &outDir,
 // (bit 0) whose id (flags >> 20) equals N. It always precedes the data entry.
 int pupReader::tableForData(size_t dataIdx) const {
   for (size_t j = 0; j < entries.size(); j++) {
-    uint32_t f = entries[j].flags;
+    u32 f = entries[j].flags;
     if (ps5IsTable(f) && (f >> 20) == dataIdx)
       return static_cast<int>(j);
   }
@@ -233,30 +234,30 @@ int pupReader::tableForData(size_t dataIdx) const {
 bool pupReader::extractPS5Segment(const pup_entry &e, size_t idx,
                                   const base::String &outDir,
                                   base::String &summary) {
-  uint32_t id = e.flags >> 20;
+  u32 id = e.flags >> 20;
 
   // Read the first plaintext chunk so we can sniff a file extension, then keep
   // streaming the rest. Everything below writes at most one block at a time.
-  base::Vector<uint8_t> first; // decoded bytes of the first block/chunk
+  base::Vector<u8> first; // decoded bytes of the first block/chunk
   base::Vector<blockExtent> exts;
-  uint32_t blockSize = 0;
+  u32 blockSize = 0;
   bool blocked = ps5Compressed(e.flags) && ps5Blocked(e.flags);
 
-  auto readAt = [&](uint64_t off, base::Vector<uint8_t> &buf, size_t n) {
+  auto readAt = [&](u64 off, base::Vector<u8> &buf, size_t n) {
     file.Seek(off, utl::seekMode::seek_set);
     return file.Read(buf, n);
   };
 
   if (blocked) {
     blockSize = ps5BlockSize(e.flags);
-    uint64_t blockCount = (e.sizeUncompressed + blockSize - 1) / blockSize;
+    u64 blockCount = (e.sizeUncompressed + blockSize - 1) / blockSize;
     int ti = tableForData(idx);
     if (ti < 0) {
       appendLine(summary, "  [%u] no block table\n", id);
       return false;
     }
     const auto &t = entries[ti];
-    base::Vector<uint8_t> tbl;
+    base::Vector<u8> tbl;
     if (!readAt(t.offset, tbl, static_cast<size_t>(t.sizeCompressed)) ||
         tbl.size() < blockCount * 40) {
       appendLine(summary, "  [%u] bad block table\n", id);
@@ -265,16 +266,16 @@ bool pupReader::extractPS5Segment(const pup_entry &e, size_t idx,
     // Layout: blockCount digests (32 bytes) followed by blockCount extents.
     size_t extBase = static_cast<size_t>(blockCount) * 32;
     exts.resize(static_cast<size_t>(blockCount));
-    for (uint64_t b = 0; b < blockCount; b++)
+    for (u64 b = 0; b < blockCount; b++)
       std::memcpy(&exts[static_cast<size_t>(b)], tbl.data() + extBase + b * 8, 8);
   }
 
   // Produce the first chunk's plaintext to sniff the type.
-  base::Vector<uint8_t> raw;
+  base::Vector<u8> raw;
   if (!ps5Compressed(e.flags)) {
     // Stored plain (possibly block-hashed): the payload is the file itself.
     size_t peek = static_cast<size_t>(
-        std::min<uint64_t>(e.sizeCompressed, 0x1000ull));
+        std::min<u64>(e.sizeCompressed, 0x1000ull));
     if (!readAt(e.offset, first, peek))
       return false;
   } else if (!blocked) {
@@ -286,8 +287,8 @@ bool pupReader::extractPS5Segment(const pup_entry &e, size_t idx,
       return false;
     }
   } else {
-    uint32_t ublk = static_cast<uint32_t>(
-        std::min<uint64_t>(blockSize, e.sizeUncompressed));
+    u32 ublk = static_cast<u32>(
+        std::min<u64>(blockSize, e.sizeUncompressed));
     size_t stored = exts.size() > 1
                         ? exts[1].offset - exts[0].offset
                         : static_cast<size_t>(e.sizeCompressed) - exts[0].offset;
@@ -315,16 +316,16 @@ bool pupReader::extractPS5Segment(const pup_entry &e, size_t idx,
     return false;
   }
   out.Write(first.data(), first.size());
-  uint64_t written = first.size();
+  u64 written = first.size();
 
   // Stream the remaining data.
   if (!ps5Compressed(e.flags)) {
     // Copy the rest of the stored payload in chunks.
-    uint64_t remaining = e.sizeCompressed - first.size();
-    uint64_t pos = e.offset + first.size();
-    base::Vector<uint8_t> buf;
+    u64 remaining = e.sizeCompressed - first.size();
+    u64 pos = e.offset + first.size();
+    base::Vector<u8> buf;
     while (remaining) {
-      size_t n = static_cast<size_t>(std::min<uint64_t>(remaining, 1u << 20));
+      size_t n = static_cast<size_t>(std::min<u64>(remaining, 1u << 20));
       if (!readAt(pos, buf, n))
         break;
       out.Write(buf.data(), n);
@@ -334,15 +335,15 @@ bool pupReader::extractPS5Segment(const pup_entry &e, size_t idx,
     }
   } else if (blocked) {
     for (size_t b = 1; b < exts.size(); b++) {
-      uint32_t ublk = static_cast<uint32_t>(std::min<uint64_t>(
-          blockSize, e.sizeUncompressed - static_cast<uint64_t>(b) * blockSize));
+      u32 ublk = static_cast<u32>(std::min<u64>(
+          blockSize, e.sizeUncompressed - static_cast<u64>(b) * blockSize));
       size_t stored = b + 1 < exts.size()
                           ? exts[b + 1].offset - exts[b].offset
                           : static_cast<size_t>(e.sizeCompressed) -
                                 exts[b].offset;
       if (!readAt(e.offset + exts[b].offset, raw, stored))
         break;
-      base::Vector<uint8_t> dec(ublk);
+      base::Vector<u8> dec(ublk);
       if (exts[b].size >= ublk)
         std::memcpy(dec.data(), raw.data(), ublk);
       else if (!inflateBlock(raw.data(), raw.size(), dec.data(), ublk)) {

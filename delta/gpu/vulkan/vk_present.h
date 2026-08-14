@@ -8,6 +8,7 @@
 // dedicated thread owns the window and always shows the newest complete frame.
 
 #include <condition_variable>
+#include "base/arch.h"
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -23,8 +24,8 @@ class LatestFramePresenter {
   LatestFramePresenter(const LatestFramePresenter&) = delete;
   LatestFramePresenter& operator=(const LatestFramePresenter&) = delete;
 
-  void Present(const uint8_t* pixels, uint32_t w, uint32_t h);
-  void Present(std::vector<uint8_t>&& pixels, uint32_t w, uint32_t h);
+  void Present(const u8* pixels, u32 w, u32 h);
+  void Present(std::vector<u8>&& pixels, u32 w, u32 h);
   void Stop();
 
  private:
@@ -34,9 +35,9 @@ class LatestFramePresenter {
   std::thread thread_;
   std::mutex mutex_;
   std::condition_variable ready_;
-  std::vector<uint8_t> pending_pixels_;  // BGRA, tight pitch; latest wins
-  uint32_t width_ = 0;
-  uint32_t height_ = 0;
+  std::vector<u8> pending_pixels_;  // BGRA, tight pitch; latest wins
+  u32 width_ = 0;
+  u32 height_ = 0;
   bool pending_ = false;
   bool stopping_ = false;
 };

@@ -15,20 +15,21 @@
 #if defined(__ANDROID__) && !defined(DELTA_ANDROID_APP)
 
 #include "gfx.h"
+#include "base/arch.h"
 
 namespace gfx {
 
-bool init(const char *, uint32_t, uint32_t) { return false; }
-bool ensure(const char *, uint32_t, uint32_t) { return false; }
+bool init(const char *, u32, u32) { return false; }
+bool ensure(const char *, u32, u32) { return false; }
 bool available() { return false; }
 bool canPresent() { return false; }
 void requestPresentStop() {}
-void present(const void *, uint32_t, uint32_t, uint32_t, PixelFormat) {}
+void present(const void *, u32, u32, u32, PixelFormat) {}
 bool pumpEvents() { return true; }
 bool pollKeyboardPad(PadKeys &) { return false; }
-void setRumble(uint8_t, uint8_t) {}
+void setRumble(u8, u8) {}
 void shutdown() {}
-void queryVram(uint64_t &used, uint64_t &total) { used = total = 0; }
+void queryVram(u64 &used, u64 &total) { used = total = 0; }
 
 } // namespace gfx
 

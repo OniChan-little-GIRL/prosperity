@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_present.h"
+#include "base/arch.h"
 
 #include "gfx/gfx.h"
 
@@ -30,15 +31,15 @@ void LatestFramePresenter::StartLocked() {
 
 void LatestFramePresenter::Run() {
   std::unique_lock<std::mutex> lock(mutex_);
-  std::vector<uint8_t> local;
+  std::vector<u8> local;
   while (true) {
     ready_.wait(lock, [this] { return pending_ || stopping_; });
     if (stopping_)
       return;
     // Steal the pending buffer (the allocations ping-pong, no per-frame alloc).
     local.swap(pending_pixels_);
-    const uint32_t w = width_;
-    const uint32_t h = height_;
+    const u32 w = width_;
+    const u32 h = height_;
     pending_ = false;
     lock.unlock();
     if (gfx::ensure("prosperity", w, h) && gfx::pumpEvents())
@@ -47,9 +48,9 @@ void LatestFramePresenter::Run() {
   }
 }
 
-void LatestFramePresenter::Present(const uint8_t* pixels,
-                                   uint32_t w,
-                                   uint32_t h) {
+void LatestFramePresenter::Present(const u8* pixels,
+                                   u32 w,
+                                   u32 h) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_)
     return;
@@ -61,9 +62,9 @@ void LatestFramePresenter::Present(const uint8_t* pixels,
   ready_.notify_one();
 }
 
-void LatestFramePresenter::Present(std::vector<uint8_t>&& pixels,
-                                   uint32_t w,
-                                   uint32_t h) {
+void LatestFramePresenter::Present(std::vector<u8>&& pixels,
+                                   u32 w,
+                                   u32 h) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (stopping_)
     return;

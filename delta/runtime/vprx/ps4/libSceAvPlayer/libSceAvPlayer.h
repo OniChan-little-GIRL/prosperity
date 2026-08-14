@@ -11,27 +11,28 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 
-int64_t PS4ABI sceAvPlayerInit(void *initData);
-int64_t PS4ABI sceAvPlayerInitEx(const void *initData, int64_t *handleOut);
-int PS4ABI sceAvPlayerPostInit(int64_t handle, void *postInitData);
-int PS4ABI sceAvPlayerAddSource(int64_t handle, const char *filename);
-int PS4ABI sceAvPlayerAddSourceEx(int64_t handle, uint32_t type, void *source);
-int PS4ABI sceAvPlayerStart(int64_t handle);
-int PS4ABI sceAvPlayerStop(int64_t handle);
-int PS4ABI sceAvPlayerClose(int64_t handle);
-bool PS4ABI sceAvPlayerIsActive(int64_t handle);
-bool PS4ABI sceAvPlayerGetVideoData(int64_t handle, void *frameInfo);
-bool PS4ABI sceAvPlayerGetVideoDataEx(int64_t handle, void *frameInfo);
-bool PS4ABI sceAvPlayerGetAudioData(int64_t handle, void *frameInfo);
-uint64_t PS4ABI sceAvPlayerCurrentTime(int64_t handle);
-int PS4ABI sceAvPlayerSetLooping(int64_t handle, bool loop);
-int PS4ABI sceAvPlayerStreamCount(int64_t handle);
-int PS4ABI sceAvPlayerGetStreamInfo(int64_t handle, uint32_t streamId,
+i64 PS4ABI sceAvPlayerInit(void *initData);
+i64 PS4ABI sceAvPlayerInitEx(const void *initData, i64 *handleOut);
+int PS4ABI sceAvPlayerPostInit(i64 handle, void *postInitData);
+int PS4ABI sceAvPlayerAddSource(i64 handle, const char *filename);
+int PS4ABI sceAvPlayerAddSourceEx(i64 handle, u32 type, void *source);
+int PS4ABI sceAvPlayerStart(i64 handle);
+int PS4ABI sceAvPlayerStop(i64 handle);
+int PS4ABI sceAvPlayerClose(i64 handle);
+bool PS4ABI sceAvPlayerIsActive(i64 handle);
+bool PS4ABI sceAvPlayerGetVideoData(i64 handle, void *frameInfo);
+bool PS4ABI sceAvPlayerGetVideoDataEx(i64 handle, void *frameInfo);
+bool PS4ABI sceAvPlayerGetAudioData(i64 handle, void *frameInfo);
+u64 PS4ABI sceAvPlayerCurrentTime(i64 handle);
+int PS4ABI sceAvPlayerSetLooping(i64 handle, bool loop);
+int PS4ABI sceAvPlayerStreamCount(i64 handle);
+int PS4ABI sceAvPlayerGetStreamInfo(i64 handle, u32 streamId,
                                     void *info);
 
 // The remaining entry points a title reaches (stream enable/disable, seek,

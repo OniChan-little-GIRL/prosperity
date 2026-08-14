@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 // libSceNetCtl HLE: report a fully configured wired network (state IP_OBTAINED
 // with a static LAN config). The LLE libSceNetCtl.sprx asks the system's net
@@ -10,10 +11,10 @@
 // this.
 int PS4ABI sceNetCtlInit();
 int PS4ABI sceNetCtlTerm();
-int PS4ABI sceNetCtlGetState(int32_t *state);
-int PS4ABI sceNetCtlGetInfo(int32_t code, void *info);
-int PS4ABI sceNetCtlRegisterCallback(void *func, void *arg, int32_t *cid);
-int PS4ABI sceNetCtlUnregisterCallback(int32_t cid);
+int PS4ABI sceNetCtlGetState(i32 *state);
+int PS4ABI sceNetCtlGetInfo(i32 code, void *info);
+int PS4ABI sceNetCtlRegisterCallback(void *func, void *arg, i32 *cid);
+int PS4ABI sceNetCtlUnregisterCallback(i32 cid);
 int PS4ABI sceNetCtlCheckCallback();
 
 // libSceNetCtlForNpToolkit is a second entry-point set into the same .sprx, so
@@ -22,6 +23,6 @@ int PS4ABI sceNetCtlCheckCallback();
 // during initialize() and treats NOT_INITIALIZED as fatal, which is what takes
 // GTA:SA down. Answer it here rather than leaving half the library LLE.
 int PS4ABI sceNetCtlRegisterCallbackForNpToolkit(void *func, void *arg,
-                                                 int32_t *cid);
-int PS4ABI sceNetCtlUnregisterCallbackForNpToolkit(int32_t cid);
+                                                 i32 *cid);
+int PS4ABI sceNetCtlUnregisterCallbackForNpToolkit(i32 cid);
 int PS4ABI sceNetCtlCheckCallbackForNpToolkit();

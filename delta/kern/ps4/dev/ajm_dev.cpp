@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/xstring.h>
@@ -27,15 +28,15 @@ ajmDevice::ajmDevice(proc *p) : device(p) {}
 // libSceAjm's init handshake to report success. Return 0 (success) and hand back
 // a benign non-zero context/instance id where the caller reads one back, so the
 // register/create steps don't look like failures.
-int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
+i32 ajmDevice::ioctl(u32 cmd, void *data) {
   if (kAjmTrace) {
     // ioctl size is encoded in bits [29:16] of the command.
-    uint32_t sz = (cmd >> 16) & 0x3FFF;
+    u32 sz = (cmd >> 16) & 0x3FFF;
     base::String bytes;
     base::FormatTo(bytes, "ioctl({:#x}) sz={} data={:p} in:", cmd, sz, data);
     if (data && sz && sz <= 256) {
-      const uint8_t *b = static_cast<const uint8_t *>(data);
-      for (uint32_t i = 0; i < sz; i++) base::FormatTo(bytes, " {:02x}", b[i]);
+      const u8 *b = static_cast<const u8 *>(data);
+      for (u32 i = 0; i < sz; i++) base::FormatTo(bytes, " {:02x}", b[i]);
     }
     BASE_LOGI("ajm", "{}", bytes.c_str());
   }
@@ -49,8 +50,8 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
     //   +8  command count           +0xc output buffer size
     //   +0x18 input batch ptr       +0x20 output buffer ptr
     struct AjmBatch {
-      uint32_t ctx, inSize, count, outSize, r0, r1;
-      uint64_t inPtr, outPtr;
+      u32 ctx, inSize, count, outSize, r0, r1;
+      u64 inPtr, outPtr;
     };
     auto *b = static_cast<AjmBatch *>(data);
     if (kAjmTrace) {
@@ -58,12 +59,12 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
                 "batch ctx={:#x} inSize={} count={} outSize={} in={:#x} out={:#x}",
                 b->ctx, b->inSize, b->count, b->outSize,
                 (unsigned long)b->inPtr, (unsigned long)b->outPtr);
-      auto hexdump = [](const char *tag, uint64_t p, uint32_t n) {
+      auto hexdump = [](const char *tag, u64 p, u32 n) {
         if (!p) return;
         base::String bytes;
         base::FormatTo(bytes, "  {}:", tag);
-        const uint8_t *q = reinterpret_cast<const uint8_t *>(p);
-        for (uint32_t i = 0; i < n; i++) base::FormatTo(bytes, " {:02x}", q[i]);
+        const u8 *q = reinterpret_cast<const u8 *>(p);
+        for (u32 i = 0; i < n; i++) base::FormatTo(bytes, " {:02x}", q[i]);
         BASE_LOGI("ajm", "{}", bytes.c_str());
       };
       hexdump("inbatch", b->inPtr, 64);
@@ -80,7 +81,7 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
     if (const char *e = kAjmResult;
         e && b->outPtr && b->outSize && b->outSize <= 0x1000) {
       int n = std::atoi(e);
-      auto *o32 = reinterpret_cast<uint32_t *>(b->outPtr);
+      auto *o32 = reinterpret_cast<u32 *>(b->outPtr);
       // Minimal writes (no full-buffer memset; 0x40 over-runs the guest frame).
       if (n == 1) { o32[0] = 0; }                  // only result code = OK
       else if (n == 2) { o32[0] = 0; o32[1] = 1; } // result OK + handle 1
@@ -94,7 +95,7 @@ int32_t ajmDevice::ioctl(uint32_t cmd, void *data) {
   }
   if (cmd == 0xC0288001 || cmd == 0xC0208016) {
     if (data)
-      *static_cast<uint32_t *>(data) = 1; // a valid (non-zero) id
+      *static_cast<u32 *>(data) = 1; // a valid (non-zero) id
   }
   return 0;
 }

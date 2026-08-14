@@ -8,6 +8,7 @@
  */
 
 #include "slb2_object.h"
+#include "base/arch.h"
 
 namespace formats {
 /*
@@ -31,7 +32,7 @@ if (file.IsOpen()) {
         for (auto& e : entries) {
                 file.Seek(e.offset, utl::seekMode::seek_set);
 
-                std::vector<uint8_t> data(e.fileSize);
+                std::vector<u8> data(e.fileSize);
                 file.Read(data);
 
                 utl::File out(converter.from_bytes(e.fileName),

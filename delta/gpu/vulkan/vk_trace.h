@@ -18,6 +18,7 @@
 // recording, so the disarmed cost is one predictable branch on a global bool.
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -36,18 +37,18 @@ inline bool Recording() {
 // opens its file; FrameEnd closes it, after reading back and writing every
 // requested resource dump.
 void FrameBegin(int frame_num);
-void FrameEnd(uint64_t scanout_base);
+void FrameEnd(u64 scanout_base);
 
 // The colour/depth attachments of one dynamic-rendering region, as
 // vk_render_target binds them.
 struct RegionInfo {
-  const uint64_t* mrt_base = nullptr;
-  const uint32_t* mrt_info = nullptr;
-  uint32_t mrt_count = 0;
-  uint32_t width = 0, height = 0;
-  uint64_t depth_base = 0;
-  uint64_t stencil_base = 0;
-  uint32_t color_clear_mask = 0;  // bit i: attachment i opens with loadOp CLEAR
+  const u64* mrt_base = nullptr;
+  const u32* mrt_info = nullptr;
+  u32 mrt_count = 0;
+  u32 width = 0, height = 0;
+  u64 depth_base = 0;
+  u64 stencil_base = 0;
+  u32 color_clear_mask = 0;  // bit i: attachment i opens with loadOp CLEAR
   bool depth_clear = false;
   float depth_clear_value = 1.0f;
 };
@@ -59,14 +60,14 @@ void RegionEnd();
 // to guest memory reads what no draw ever wrote -- and only the draw path
 // knows it, so it is passed in rather than recomputed.
 struct DrawBindings {
-  const uint64_t* tex_color = nullptr;     // resolved to a live colour RT
-  const uint64_t* tex_feedback = nullptr;  // resolved to a feedback copy
-  const uint64_t* tex_depth = nullptr;     // resolved to a depth target
-  const uint64_t* tex_storage = nullptr;   // bound as a storage image
+  const u64* tex_color = nullptr;     // resolved to a live colour RT
+  const u64* tex_feedback = nullptr;  // resolved to a feedback copy
+  const u64* tex_depth = nullptr;     // resolved to a depth target
+  const u64* tex_storage = nullptr;   // bound as a storage image
   const void* const* tex_guest = nullptr;  // VkImageView of a guest upload
-  uint32_t tex_count = 0;
-  uint32_t cbuf_mask = 0;    // bit i: cbuffer binding i staged real memory
-  uint32_t rawbuf_mask = 0;  // bit i: set-2 binding i staged real memory
+  u32 tex_count = 0;
+  u32 cbuf_mask = 0;    // bit i: cbuffer binding i staged real memory
+  u32 rawbuf_mask = 0;  // bit i: set-2 binding i staged real memory
 };
 
 // A draw the recompiled path issued (`path` = "recomp"), or the heuristic quad
@@ -91,7 +92,7 @@ void RecordBarrier(const char* aspect,
                    VkAccessFlags dst_access);
 
 // A CP DMA fill over guest memory (this hardware's clear).
-void RecordMemoryFill(uint64_t base, uint64_t bytes, uint32_t value);
+void RecordMemoryFill(u64 base, u64 bytes, u32 value);
 
 // --- Vulkan-level visibility -----------------------------------------------
 
@@ -111,8 +112,8 @@ void DestroyValidationMessenger(VkInstance instance);
 // with no capture tool attached. Populated only when a capture is armed or
 // validation is on.
 bool NamesWanted();
-void RegisterObjectName(VkObjectType type, uint64_t handle, const char* name);
+void RegisterObjectName(VkObjectType type, u64 handle, const char* name);
 // "" when the handle was never named.
-const char* ObjectName(uint64_t handle);
+const char* ObjectName(u64 handle);
 
 }  // namespace gpu::vk::trace

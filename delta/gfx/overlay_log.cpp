@@ -6,6 +6,7 @@
 #ifndef __ANDROID__
 
 #include <algorithm>
+#include "base/arch.h"
 #include <cstring>
 #include <mutex>
 
@@ -21,20 +22,20 @@ namespace {
 // The ring holds exactly what the panel shows. Lines are truncated at capture,
 // so neither the copy in nor the text drawn out depends on the line a title
 // decided to log.
-constexpr uint32_t kLines = 14;
-constexpr uint32_t kLineChars = 200;
+constexpr u32 kLines = 14;
+constexpr u32 kLineChars = 200;
 
 struct Line {
   char text[kLineChars];
-  uint8_t level;
+  u8 level;
 };
 
 // Held by the logger's backend thread for one memcpy per line, and by the
 // render thread for one snapshot per frame.
 std::mutex g_mutex;
 Line g_lines[kLines];
-uint32_t g_next = 0;  // slot the next line goes in
-uint32_t g_count = 0; // filled slots, saturating at kLines
+u32 g_next = 0;  // slot the next line goes in
+u32 g_count = 0; // filled slots, saturating at kLines
 bool g_visible = true;
 bool g_attached = false;
 
@@ -50,14 +51,14 @@ public:
     Line &line = g_lines[g_next];
     std::memcpy(line.text, text, length);
     line.text[length] = '\0';
-    line.level = static_cast<uint8_t>(entry.log_level);
+    line.level = static_cast<u8>(entry.log_level);
     g_next = (g_next + 1) % kLines;
     if (g_count < kLines)
       g_count++;
   }
 };
 
-ImU32 LevelColour(uint8_t level) {
+ImU32 LevelColour(u8 level) {
   switch (static_cast<utl::logLevel>(level)) {
   case utl::logLevel::Trace:
     return IM_COL32(140, 140, 140, 255);
@@ -83,18 +84,18 @@ void overlayLogAttach() {
   utl::addLogSink(base::MakeUnique<LogPanelSink>());
 }
 
-void overlayLogBuild(uint32_t w, uint32_t h) {
+void overlayLogBuild(u32 w, u32 h) {
   if (!g_visible)
     return;
 
   Line lines[kLines];
-  uint32_t count = 0;
+  u32 count = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     count = g_count;
     // Oldest first: the newest line ends up at the bottom, nearest the corner.
-    const uint32_t oldest = g_count == kLines ? g_next : 0;
-    for (uint32_t i = 0; i < count; i++)
+    const u32 oldest = g_count == kLines ? g_next : 0;
+    for (u32 i = 0; i < count; i++)
       lines[i] = g_lines[(oldest + i) % kLines];
   }
   if (!count)
@@ -115,7 +116,7 @@ void overlayLogBuild(uint32_t w, uint32_t h) {
   // and no line can spill out of the dimmed area.
   dl->PushClipRect(ImVec2(tl.x + pad, tl.y), ImVec2(br.x - pad, br.y), true);
   float y = tl.y + pad;
-  for (uint32_t i = 0; i < count; i++) {
+  for (u32 i = 0; i < count; i++) {
     dl->AddText(ImVec2(tl.x + pad, y), LevelColour(lines[i].level),
                 lines[i].text);
     y += lh;

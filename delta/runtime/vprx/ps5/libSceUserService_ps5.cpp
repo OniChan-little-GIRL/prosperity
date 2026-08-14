@@ -10,24 +10,25 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <cstdint>
 #include <cstring>
 
 namespace {
-constexpr int32_t kUserId = 1;
-constexpr int32_t kInvalidUserId = -1;
+constexpr i32 kUserId = 1;
+constexpr i32 kInvalidUserId = -1;
 constexpr int kNoEvent = 0x80960007;  // SCE_USER_SERVICE_ERROR_NO_EVENT
 bool g_loginDelivered = false;
 
 int PS4ABI userServiceInitialize(const void *) { return 0; }
-int PS4ABI userServiceInitialize2(uint32_t, int64_t, const void *) { return 0; }
+int PS4ABI userServiceInitialize2(u32, i64, const void *) { return 0; }
 int PS4ABI userServiceTerminate() { return 0; }
 
 int PS4ABI userServiceGetEvent(void *eventOut) {
   struct Event {
-    int32_t eventType;  // 0 = LOGIN, 1 = LOGOUT
-    int32_t userId;
+    i32 eventType;  // 0 = LOGIN, 1 = LOGOUT
+    i32 userId;
   };
   auto *e = static_cast<Event *>(eventOut);
   if (!e)
@@ -43,7 +44,7 @@ int PS4ABI userServiceGetEvent(void *eventOut) {
 
 int PS4ABI userServiceGetLoginUserIdList(void *listOut) {
   struct List {
-    int32_t userId[4];
+    i32 userId[4];
   };
   auto *l = static_cast<List *>(listOut);
   if (!l)
@@ -53,19 +54,19 @@ int PS4ABI userServiceGetLoginUserIdList(void *listOut) {
   return 0;
 }
 
-int PS4ABI userServiceGetInitialUser(int32_t *userId) {
+int PS4ABI userServiceGetInitialUser(i32 *userId) {
   if (userId)
     *userId = kUserId;
   return 0;
 }
 
-int PS4ABI userServiceGetForegroundUser(int32_t *userId) {
+int PS4ABI userServiceGetForegroundUser(i32 *userId) {
   if (userId)
     *userId = kUserId;
   return 0;
 }
 
-int PS4ABI userServiceGetUserName(int32_t, char *name, uint64_t size) {
+int PS4ABI userServiceGetUserName(i32, char *name, u64 size) {
   if (name && size) {
     std::strncpy(name, "Player", size - 1);
     name[size - 1] = '\0';

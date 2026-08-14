@@ -7,6 +7,7 @@
 // this for /dev/gc when the active process is a PS5 title.
 
 #include "kern/ps4/dev/device.h"  // shared abstract device base
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -15,8 +16,8 @@ class gcDevicePs5 : public device {
 public:
   gcDevicePs5(proc *);
 
-  bool init(const char *, uint32_t, uint32_t) override;
-  int32_t ioctl(uint32_t command, void *args) override;
-  uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) override;
+  bool init(const char *, u32, u32) override;
+  i32 ioctl(u32 command, void *args) override;
+  u8 *map(void *, size_t, u32, u32, size_t) override;
 };
 }  // namespace krnl

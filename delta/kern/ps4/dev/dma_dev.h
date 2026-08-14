@@ -9,6 +9,7 @@
  */
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -17,12 +18,12 @@ class dmaDevice : public device {
 public:
   dmaDevice(proc *);
 
-  int32_t ioctl(uint32_t command, void *args) override;
-  uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) override;
+  i32 ioctl(u32 command, void *args) override;
+  u8 *map(void *, size_t, u32, u32, size_t) override;
   bool isDirectMemory() const override { return true; }
 
 private:
-  int32_t ioctlImpl(uint32_t command, void *args);
+  i32 ioctlImpl(u32 command, void *args);
 };
 
 // Shared physical-dmem backing store (a memfd) so that every virtual address
@@ -36,6 +37,6 @@ int dmemBackingFd();
 
 // Memory type (SCE_KERNEL_WB_ONION / WC_GARLIC / ...) of the direct-memory
 // reservation covering a physical offset, or -1 when none does.
-int dmemTypeForOffset(uint64_t off);
-uint64_t dmemBackingSize();
+int dmemTypeForOffset(u64 off);
+u64 dmemBackingSize();
 }

@@ -1,4 +1,5 @@
 #include <base.h>
+#include "base/arch.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -26,94 +27,94 @@ DELTA_OPTION(bool, kHidPassthrough, "DELTA_HID_PASSTHROUGH", false);
 // the stable Linux input ABI.
 // ---------------------------------------------------------------------------
 
-constexpr uint32_t kIocRead = 2, kIocWrite = 1;
-constexpr uint32_t ioc(uint32_t dir, uint32_t type, uint32_t nr,
-                       uint32_t size) {
+constexpr u32 kIocRead = 2, kIocWrite = 1;
+constexpr u32 ioc(u32 dir, u32 type, u32 nr,
+                       u32 size) {
   return (dir << 30) | (type << 8) | (nr) | (size << 16);
 }
-constexpr uint32_t ior(uint32_t type, uint32_t nr, uint32_t size) {
+constexpr u32 ior(u32 type, u32 nr, u32 size) {
   return ioc(kIocRead, type, nr, size);
 }
-constexpr uint32_t iow(uint32_t type, uint32_t nr, uint32_t size) {
+constexpr u32 iow(u32 type, u32 nr, u32 size) {
   return ioc(kIocWrite, type, nr, size);
 }
 
-constexpr uint32_t kEvKey = 0x01, kEvRel = 0x02, kEvAbs = 0x03, kEvLed = 0x11,
+constexpr u32 kEvKey = 0x01, kEvRel = 0x02, kEvAbs = 0x03, kEvLed = 0x11,
                    kEvFf = 0x15;
-constexpr uint32_t kKeyMax = 0x2ff, kRelMax = 0x0b, kAbsMax = 0x3f;
+constexpr u32 kKeyMax = 0x2ff, kRelMax = 0x0b, kAbsMax = 0x3f;
 // EVIOCGBIT(ev, len)
-constexpr uint32_t eviocgbit(uint32_t ev, uint32_t len) {
+constexpr u32 eviocgbit(u32 ev, u32 len) {
   return ior('E', 0x20 + ev, len);
 }
-constexpr uint32_t kEviocGKey = eviocgbit(kEvKey, (kKeyMax + 8) / 8);
-constexpr uint32_t kEviocGRel = eviocgbit(kEvRel, (kRelMax + 8) / 8);
-constexpr uint32_t kEviocGAbs = eviocgbit(kEvAbs, (kAbsMax + 8) / 8);
+constexpr u32 kEviocGKey = eviocgbit(kEvKey, (kKeyMax + 8) / 8);
+constexpr u32 kEviocGRel = eviocgbit(kEvRel, (kRelMax + 8) / 8);
+constexpr u32 kEviocGAbs = eviocgbit(kEvAbs, (kAbsMax + 8) / 8);
 
 struct inputEvent {
-  uint64_t sec, usec;
-  uint16_t type, code;
-  int32_t value;
+  u64 sec, usec;
+  u16 type, code;
+  i32 value;
 };
 static_assert(sizeof(inputEvent) == 24, "input_event layout");
 
-constexpr uint32_t kUiSetEvbit = iow('U', 100, 4);
-constexpr uint32_t kUiSetKeybit = iow('U', 101, 4);
-constexpr uint32_t kUiSetAbsbit = iow('U', 103, 4);
-constexpr uint32_t kUiSetLedbit = iow('U', 105, 4);
-constexpr uint32_t kUiSetFfbit = iow('U', 107, 4);
-constexpr uint32_t kUiDevCreate = ioc(0, 'U', 1, 0);   // 0x5501
-constexpr uint32_t kUiDevDestroy = ioc(0, 'U', 2, 0);  // 0x5502
+constexpr u32 kUiSetEvbit = iow('U', 100, 4);
+constexpr u32 kUiSetKeybit = iow('U', 101, 4);
+constexpr u32 kUiSetAbsbit = iow('U', 103, 4);
+constexpr u32 kUiSetLedbit = iow('U', 105, 4);
+constexpr u32 kUiSetFfbit = iow('U', 107, 4);
+constexpr u32 kUiDevCreate = ioc(0, 'U', 1, 0);   // 0x5501
+constexpr u32 kUiDevDestroy = ioc(0, 'U', 2, 0);  // 0x5502
 
 struct uinputUserDev {
   char name[80];
   struct {
-    uint16_t bustype, vendor, product, version;
+    u16 bustype, vendor, product, version;
   } id;
-  uint32_t ffEffectsMax;
-  int32_t absmax[kAbsMax + 1];
-  int32_t absmin[kAbsMax + 1];
-  int32_t absfuzz[kAbsMax + 1];
-  int32_t absflat[kAbsMax + 1];
+  u32 ffEffectsMax;
+  i32 absmax[kAbsMax + 1];
+  i32 absmin[kAbsMax + 1];
+  i32 absfuzz[kAbsMax + 1];
+  i32 absflat[kAbsMax + 1];
 };
 
-constexpr uint32_t kFfRumble = 0x50;
+constexpr u32 kFfRumble = 0x50;
 // UI_BEGIN_FF_UPLOAD/UI_END_FF_UPLOAD carry two ff_effect (48 B each) plus an
 // id + retval pair.
 struct ffEnvelope {
-  uint16_t attackLength, attackLevel, fadeLength, fadeLevel;
+  u16 attackLength, attackLevel, fadeLength, fadeLevel;
 };
 struct ffTrigger {
-  uint16_t button, interval;
+  u16 button, interval;
 };
 struct ffReplay {
-  uint16_t length, delay;
+  u16 length, delay;
 };
 struct ffRumble {
-  uint16_t strongMagnitude, weakMagnitude;
+  u16 strongMagnitude, weakMagnitude;
 };
 struct ffEffect {
-  uint16_t type;
-  int16_t id;
-  uint16_t direction;
+  u16 type;
+  i16 id;
+  u16 direction;
   ffTrigger trigger;
   ffReplay replay;
   union {
     ffRumble rumble;
     // The real union holds a pointer member (custom_data), forcing 8-byte
     // alignment and a 48-byte struct.
-    alignas(8) uint8_t pad[32];
+    alignas(8) u8 pad[32];
   } u;
 };
 static_assert(sizeof(ffEffect) == 48, "ff_effect layout");
 struct uinputFfUpload {
-  uint32_t requestId;
-  int32_t retval;
+  u32 requestId;
+  i32 retval;
   ffEffect effect;
   ffEffect old;
 };
-constexpr uint32_t kUiBeginFfUpload =
+constexpr u32 kUiBeginFfUpload =
     ioc(kIocWrite | kIocRead, 'U', 200, sizeof(uinputFfUpload));
-constexpr uint32_t kUiEndFfUpload =
+constexpr u32 kUiEndFfUpload =
     iow('U', 201, sizeof(uinputFfUpload));
 
 // ---------------------------------------------------------------------------
@@ -124,37 +125,37 @@ constexpr uint32_t kUiEndFfUpload =
 //   +0x00 device handle, +0x08 output buffer, +0x10 requested report count,
 //   +0x18 guest pointer that receives the produced count.
 struct guestArgs {
-  uint32_t handle;
-  uint32_t pad0;
+  u32 handle;
+  u32 pad0;
   void *buffer;
-  uint32_t count;
-  uint32_t pad1;
+  u32 count;
+  u32 pad1;
   void *outCount;
 };
 
 // Keyboard report (32 B, size verified). Layout follows the standard HID boot
 // keyboard report plus a report id and padding.
 struct KeyReport {
-  uint8_t reportId;    // 0x01
-  uint8_t modifier1;   // left ctrl/shift/alt/meta
-  uint8_t modifier2;   // right ctrl/shift/alt/meta
-  uint8_t reserved;
-  uint8_t keycode[6];
-  uint8_t pad[22];
+  u8 reportId;    // 0x01
+  u8 modifier1;   // left ctrl/shift/alt/meta
+  u8 modifier2;   // right ctrl/shift/alt/meta
+  u8 reserved;
+  u8 keycode[6];
+  u8 pad[22];
 };
 static_assert(sizeof(KeyReport) == 32, "keyboard report size");
 
 // Mouse report (16 B, size and layout verified against the SDK).
 struct MouseReport {
-  uint8_t buttons;
-  uint8_t reserved0[3];
-  int16_t relX;
-  int16_t relY;
-  int16_t wheel;
-  int16_t tilt;
-  uint8_t reserved1[2];
-  uint8_t timestamp;
-  uint8_t padding;
+  u8 buttons;
+  u8 reserved0[3];
+  i16 relX;
+  i16 relY;
+  i16 wheel;
+  i16 tilt;
+  u8 reserved1[2];
+  u8 timestamp;
+  u8 padding;
 };
 static_assert(sizeof(MouseReport) == 16, "mouse report size");
 
@@ -162,17 +163,17 @@ static_assert(sizeof(MouseReport) == 16, "mouse report size");
 // DS4 HID report the kernel forwards). Sticks/triggers are the 0..255 DS4
 // range; buttons follow the DS4 button bytes.
 struct CtrlReport {
-  uint8_t reportId;  // 0x01
-  uint8_t reserved;
-  uint8_t buttons[8];
-  uint8_t pad[6];
-  int16_t leftStickX;
-  int16_t leftStickY;
-  int16_t rightStickX;
-  int16_t rightStickY;
-  int16_t leftTrigger;
-  int16_t rightTrigger;
-  uint8_t rest[0x98 - 0x1C];
+  u8 reportId;  // 0x01
+  u8 reserved;
+  u8 buttons[8];
+  u8 pad[6];
+  i16 leftStickX;
+  i16 leftStickY;
+  i16 rightStickX;
+  i16 rightStickY;
+  i16 leftTrigger;
+  i16 rightTrigger;
+  u8 rest[0x98 - 0x1C];
 };
 static_assert(sizeof(CtrlReport) == 0x98, "controller report size");
 
@@ -183,14 +184,14 @@ struct evdevDevice {
   bool isMouse = false;
   bool isPad = false;
   // Current state, updated from the event stream.
-  uint8_t keyState[(kKeyMax + 8) / 8] = {};
+  u8 keyState[(kKeyMax + 8) / 8] = {};
   bool mouseButtons[5] = {};
-  int16_t mouseRel[3] = {};      // x, y, wheel
-  int32_t absState[kAbsMax + 1] = {};
+  i16 mouseRel[3] = {};      // x, y, wheel
+  i32 absState[kAbsMax + 1] = {};
   bool padButtons[16] = {};
   // Absolute-axis ranges for normalizing raw values to 0..255.
   struct {
-    int32_t min, max;
+    i32 min, max;
   } absRange[kAbsMax + 1];
   bool haveAbs[kAbsMax + 1] = {};
   // Tracks whether a report was produced since the last read.
@@ -206,12 +207,12 @@ struct hidSource {
 
   void scan();
   void drain(evdevDevice &dev);
-  int64_t nowUs();
+  i64 nowUs();
 };
 
 // ---------------------------------------------------------------- evdev glue
 
-static bool testBit(const uint8_t *bits, uint32_t code) {
+static bool testBit(const u8 *bits, u32 code) {
   return (bits[code >> 3] >> (code & 7)) & 1;
 }
 
@@ -230,9 +231,9 @@ void hidSource::scan() {
     if (fd < 0)
       continue;
 
-    uint8_t keyBits[(kKeyMax + 8) / 8] = {};
-    uint8_t relBits[(kRelMax + 8) / 8] = {};
-    uint8_t absBits[(kAbsMax + 8) / 8] = {};
+    u8 keyBits[(kKeyMax + 8) / 8] = {};
+    u8 relBits[(kRelMax + 8) / 8] = {};
+    u8 absBits[(kAbsMax + 8) / 8] = {};
     const bool haveKeys =
         ::ioctl(fd, kEviocGKey, keyBits) >= 0 &&
         ::ioctl(fd, kEviocGRel, relBits) >= 0 &&
@@ -262,11 +263,11 @@ void hidSource::scan() {
       slot->isPad = (slot == &pad);
       if (slot->isPad) {
         // Cache axis ranges for the axes a pad reports.
-        for (uint32_t ax = 0; ax <= kAbsMax; ax++) {
+        for (u32 ax = 0; ax <= kAbsMax; ax++) {
           if (!testBit(absBits, ax))
             continue;
           struct absInfo {
-            int32_t value, minimum, maximum, fuzz, flat, resolution;
+            i32 value, minimum, maximum, fuzz, flat, resolution;
           } info = {};
           if (::ioctl(fd, ior('E', 0x40 + ax, sizeof(info)), &info) >= 0) {
             slot->absRange[ax] = {info.minimum, info.maximum};
@@ -301,13 +302,13 @@ void hidSource::drain(evdevDevice &dev) {
       if (ev.code < (kKeyMax + 1) / 8 * 8 && ev.value >= 0 && ev.value <= 2) {
         const bool down = ev.value != 0;
         if (dev.isKeyboard) {
-          const uint8_t bit = static_cast<uint8_t>(1u << (ev.code & 7));
+          const u8 bit = static_cast<u8>(1u << (ev.code & 7));
           if ((dev.keyState[ev.code >> 3] & bit) != (down ? bit : 0))
             dev.dirty = true;
           if (down)
             dev.keyState[ev.code >> 3] |= bit;
           else
-            dev.keyState[ev.code >> 3] &= static_cast<uint8_t>(~bit);
+            dev.keyState[ev.code >> 3] &= static_cast<u8>(~bit);
         } else if (dev.isMouse) {
           if (ev.code >= 0x110 && ev.code <= 0x114) {
             const int idx = ev.code - 0x110;
@@ -318,7 +319,7 @@ void hidSource::drain(evdevDevice &dev) {
           }
         } else if (dev.isPad) {
           // DS4-mapped pad buttons (BTN_SOUTH..BTN_THUMBR, d-pad, PS).
-          static const uint16_t kPadCodes[] = {
+          static const u16 kPadCodes[] = {
               0x130, 0x131, 0x132, 0x133, 0x134, 0x135, 0x136, 0x137,
               0x138, 0x139, 0x13a, 0x13b, 0x13c, 0x13d, 0x13e, 0x220};
           for (int i = 0; i < 16; i++) {
@@ -342,7 +343,7 @@ void hidSource::drain(evdevDevice &dev) {
         idx = 2;  // REL_WHEEL
       if (idx >= 0) {
         dev.mouseRel[idx] =
-            static_cast<int16_t>(dev.mouseRel[idx] + ev.value);
+            static_cast<i16>(dev.mouseRel[idx] + ev.value);
         dev.dirty = true;
       }
     } else if (ev.type == kEvAbs && dev.isPad && ev.code <= kAbsMax) {
@@ -352,32 +353,32 @@ void hidSource::drain(evdevDevice &dev) {
   }
 }
 
-int64_t hidSource::nowUs() {
+i64 hidSource::nowUs() {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
-  return static_cast<int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+  return static_cast<i64>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
 }
 
 // Normalize a raw absolute value into the DS4 0..255 range.
-static int16_t toAxis(const evdevDevice &dev, uint32_t code) {
+static i16 toAxis(const evdevDevice &dev, u32 code) {
   if (!dev.haveAbs[code])
     return 128;
-  const int32_t min = dev.absRange[code].min, max = dev.absRange[code].max;
+  const i32 min = dev.absRange[code].min, max = dev.absRange[code].max;
   if (max <= min)
     return 128;
-  const int32_t v = dev.absState[code];
-  const int32_t scaled = (v - min) * 255 / (max - min);
-  return static_cast<int16_t>(scaled < 0 ? 0 : scaled > 255 ? 255 : scaled);
+  const i32 v = dev.absState[code];
+  const i32 scaled = (v - min) * 255 / (max - min);
+  return static_cast<i16>(scaled < 0 ? 0 : scaled > 255 ? 255 : scaled);
 }
 
 // ---------------------------------------------------------- report synthesis
 
-int fillKeyboard(hidSource &src, void *buffer, uint32_t count) {
+int fillKeyboard(hidSource &src, void *buffer, u32 count) {
   evdevDevice &dev = src.keyboard;
   src.drain(dev);
   if (dev.fd < 0)
     return 0;
-  const uint32_t produced = dev.dirty ? 1u : 0u;
+  const u32 produced = dev.dirty ? 1u : 0u;
   if (!produced)
     return 0;
   dev.dirty = false;
@@ -386,8 +387,8 @@ int fillKeyboard(hidSource &src, void *buffer, uint32_t count) {
   rep.reportId = 0x01;
   // Modifier bits (HID order: L ctrl/shift/alt/meta, R ctrl/shift/alt/meta).
   const struct {
-    uint32_t code;
-    uint8_t bit;
+    u32 code;
+    u8 bit;
     bool right;
   } kMods[] = {{0x1d, 0x01, false}, {0x2a, 0x02, false}, {0x38, 0x04, false},
                {0x7d, 0x08, false}, {0x61, 0x01, true},  {0x36, 0x02, true},
@@ -402,13 +403,13 @@ int fillKeyboard(hidSource &src, void *buffer, uint32_t count) {
   }
   // Up to six pressed non-modifier keys, in HID usage order.
   // evdev KEY_* -> HID keyboard usage for the common keys.
-  uint8_t hid[(kKeyMax + 1) / 8 * 8] = {};
-  const auto map = [&](uint32_t code, uint8_t usage) {
+  u8 hid[(kKeyMax + 1) / 8 * 8] = {};
+  const auto map = [&](u32 code, u8 usage) {
     if (code < sizeof(hid) * 8 && testBit(dev.keyState, code))
-      hid[usage >> 3] |= static_cast<uint8_t>(1u << (usage & 7));
+      hid[usage >> 3] |= static_cast<u8>(1u << (usage & 7));
   };
-  for (uint32_t i = 0; i < 10; i++)  // digits: usage 0x1e..0x27
-    map(2 + i, static_cast<uint8_t>(0x1e + i));
+  for (u32 i = 0; i < 10; i++)  // digits: usage 0x1e..0x27
+    map(2 + i, static_cast<u8>(0x1e + i));
   map(0x1d, 0xe0); map(0x2a, 0xe1); map(0x38, 0xe2); map(0x7d, 0xe3);
   map(0x61, 0xe4); map(0x36, 0xe5); map(0x64, 0xe6); map(0x7e, 0xe7);
   map(0x1e, 0x04); map(0x30, 0x05); map(0x2e, 0x06); map(0x20, 0x07);
@@ -423,52 +424,52 @@ int fillKeyboard(hidSource &src, void *buffer, uint32_t count) {
   map(0x1b, 0x30); map(0x2b, 0x31); map(0x27, 0x33); map(0x28, 0x34);
   map(0x29, 0x35); map(0x33, 0x36); map(0x34, 0x37); map(0x35, 0x38);
   map(0x3a, 0x39);  // CapsLock
-  for (uint32_t i = 0; i < 10; i++)  // F1..F10: usage 0x3a..0x43
-    map(0x3b + i, static_cast<uint8_t>(0x3a + i));
+  for (u32 i = 0; i < 10; i++)  // F1..F10: usage 0x3a..0x43
+    map(0x3b + i, static_cast<u8>(0x3a + i));
   map(0x57, 0x44);  // F11
   map(0x58, 0x45);  // F12
-  uint8_t n = 0;
-  for (uint32_t usage = 4; usage < 0xe8 && n < 6; usage++) {
+  u8 n = 0;
+  for (u32 usage = 4; usage < 0xe8 && n < 6; usage++) {
     if (hid[usage >> 3] >> (usage & 7) & 1)
-      rep.keycode[n++] = static_cast<uint8_t>(usage);
+      rep.keycode[n++] = static_cast<u8>(usage);
   }
 
-  auto *out = static_cast<uint8_t *>(buffer);
+  auto *out = static_cast<u8 *>(buffer);
   std::memcpy(out, &rep, sizeof(rep));
   return produced;
 }
 
-int fillMouse(hidSource &src, void *buffer, uint32_t count) {
+int fillMouse(hidSource &src, void *buffer, u32 count) {
   evdevDevice &dev = src.mouse;
   src.drain(dev);
   if (dev.fd < 0)
     return 0;
-  const uint32_t produced = dev.dirty ? 1u : 0u;
+  const u32 produced = dev.dirty ? 1u : 0u;
   if (!produced)
     return 0;
   dev.dirty = false;
 
   MouseReport rep = {};
-  rep.buttons = static_cast<uint8_t>(
+  rep.buttons = static_cast<u8>(
       (dev.mouseButtons[0] ? 1u : 0u) | (dev.mouseButtons[1] ? 2u : 0u) |
       (dev.mouseButtons[2] ? 4u : 0u) | (dev.mouseButtons[3] ? 8u : 0u) |
       (dev.mouseButtons[4] ? 0x10u : 0u));
   rep.relX = dev.mouseRel[0];
   rep.relY = dev.mouseRel[1];
   rep.wheel = dev.mouseRel[2];
-  rep.timestamp = static_cast<uint8_t>(src.nowUs() & 0xff);
+  rep.timestamp = static_cast<u8>(src.nowUs() & 0xff);
   dev.mouseRel[0] = dev.mouseRel[1] = dev.mouseRel[2] = 0;
 
   std::memcpy(buffer, &rep, sizeof(rep));
   return produced;
 }
 
-int fillController(hidSource &src, void *buffer, uint32_t count) {
+int fillController(hidSource &src, void *buffer, u32 count) {
   evdevDevice &dev = src.pad;
   src.drain(dev);
   if (dev.fd < 0)
     return 0;
-  const uint32_t produced = dev.dirty ? 1u : 0u;
+  const u32 produced = dev.dirty ? 1u : 0u;
   if (!produced)
     return 0;
   dev.dirty = false;
@@ -477,7 +478,7 @@ int fillController(hidSource &src, void *buffer, uint32_t count) {
   rep.reportId = 0x01;
   for (int i = 0; i < 16; i++) {
     if (dev.padButtons[i])
-      rep.buttons[i / 8] |= static_cast<uint8_t>(1u << (i % 8));
+      rep.buttons[i / 8] |= static_cast<u8>(1u << (i % 8));
   }
   rep.leftStickX = toAxis(dev, 0x00);
   rep.leftStickY = toAxis(dev, 0x01);
@@ -499,7 +500,7 @@ void openUinput(hidSource &src) {
   if (fd < 0)
     return;
   // A virtual gamepad: sticks + DS4-style buttons + rumble + a light.
-  auto ok = [&](uint32_t ioctl, void *arg) { return ::ioctl(fd, ioctl, arg) >= 0; };
+  auto ok = [&](u32 ioctl, void *arg) { return ::ioctl(fd, ioctl, arg) >= 0; };
   int v = kEvAbs;
   if (!ok(kUiSetEvbit, &v))
     goto fail;
@@ -512,12 +513,12 @@ void openUinput(hidSource &src) {
   v = kEvLed;
   if (!ok(kUiSetEvbit, &v))
     goto fail;
-  for (uint32_t ax = 0; ax <= kAbsMax; ax++) {
+  for (u32 ax = 0; ax <= kAbsMax; ax++) {
     v = static_cast<int>(ax);
     if (!ok(kUiSetAbsbit, &v))
       goto fail;
   }
-  for (const uint32_t code : {0x130u, 0x131u, 0x133u, 0x134u, 0x136u, 0x137u,
+  for (const u32 code : {0x130u, 0x131u, 0x133u, 0x134u, 0x136u, 0x137u,
                               0x138u, 0x139u, 0x13au, 0x13bu, 0x13cu, 0x13du,
                               0x13eu, 0x220u, 0x221u, 0x222u, 0x223u}) {
     v = static_cast<int>(code);
@@ -538,7 +539,7 @@ void openUinput(hidSource &src) {
     dev.id.vendor = 0x054c;
     dev.id.product = 0x09cc;
     dev.ffEffectsMax = 1;
-    for (uint32_t ax = 0; ax <= kAbsMax; ax++) {
+    for (u32 ax = 0; ax <= kAbsMax; ax++) {
       dev.absmin[ax] = 0;
       dev.absmax[ax] = 255;
     }
@@ -555,13 +556,13 @@ fail:
 }
 
 // Set rumble. `large`/`small` are the DS4 motor intensities (0..255).
-void setRumble(hidSource &src, uint8_t large, uint8_t small) {
+void setRumble(hidSource &src, u8 large, u8 small) {
   if (src.uinputFd < 0)
     return;
   if (large == 0 && small == 0 && src.ffId >= 0) {
     inputEvent ev = {};
     ev.type = kEvFf;
-    ev.code = static_cast<uint16_t>(src.ffId);
+    ev.code = static_cast<u16>(src.ffId);
     ev.value = 0;  // stop
     ::write(src.uinputFd, &ev, sizeof(ev));
     return;
@@ -572,20 +573,20 @@ void setRumble(hidSource &src, uint8_t large, uint8_t small) {
   up.effect.type = kFfRumble;
   up.effect.id = -1;
   up.effect.u.rumble.strongMagnitude =
-      static_cast<uint16_t>(large * 0xffff / 255);
+      static_cast<u16>(large * 0xffff / 255);
   up.effect.u.rumble.weakMagnitude =
-      static_cast<uint16_t>(small * 0xffff / 255);
+      static_cast<u16>(small * 0xffff / 255);
   if (::ioctl(src.uinputFd, kUiEndFfUpload, &up) < 0)
     return;
   src.ffId = up.effect.id;
   inputEvent ev = {};
   ev.type = kEvFf;
-  ev.code = static_cast<uint16_t>(src.ffId);
+  ev.code = static_cast<u16>(src.ffId);
   ev.value = 1;  // play
   ::write(src.uinputFd, &ev, sizeof(ev));
 }
 
-void setLight(hidSource &src, uint8_t r, uint8_t g, uint8_t b) {
+void setLight(hidSource &src, u8 r, u8 g, u8 b) {
   if (src.uinputFd < 0)
     return;
   inputEvent ev = {};
@@ -602,19 +603,19 @@ struct guestArgsAt {
   // how many they produced. data points at the guest arg block, which is
   // identity-mapped so its pointers are usable directly.
   static bool valid(void *data) { return data != nullptr; }
-  static uint32_t handle(void *data) {
+  static u32 handle(void *data) {
     return static_cast<guestArgs *>(data)->handle;
   }
   static void *buffer(void *data) {
     return static_cast<guestArgs *>(data)->buffer;
   }
-  static uint32_t count(void *data) {
+  static u32 count(void *data) {
     return static_cast<guestArgs *>(data)->count;
   }
   static void *outCount(void *data) {
     return static_cast<guestArgs *>(data)->outCount;
   }
-  static void writeCount(void *data, uint32_t produced) {
+  static void writeCount(void *data, u32 produced) {
     void *out = outCount(data);
     if (out)
       std::memcpy(out, &produced, 4);
@@ -622,16 +623,16 @@ struct guestArgsAt {
 };
 
 int runRead(hidSource &src, void *data, int (*fill)(hidSource &, void *,
-                                                    uint32_t)) {
+                                                    u32)) {
   if (!guestArgsAt::valid(data))
     return 0;
-  const uint32_t count = guestArgsAt::count(data);
+  const u32 count = guestArgsAt::count(data);
   void *buffer = guestArgsAt::buffer(data);
   if (!buffer || count == 0)
     return 0;
-  const uint32_t cap = (count > 16) ? 16 : count;
+  const u32 cap = (count > 16) ? 16 : count;
   const int produced = fill(src, buffer, cap);
-  guestArgsAt::writeCount(data, produced > 0 ? static_cast<uint32_t>(produced) : 0);
+  guestArgsAt::writeCount(data, produced > 0 ? static_cast<u32>(produced) : 0);
   return produced > 0 ? produced : 0;
 }
 
@@ -639,7 +640,7 @@ int runRead(hidSource &src, void *data, int (*fill)(hidSource &, void *,
 int runVibration(hidSource &src, void *data) {
   if (!guestArgsAt::valid(data))
     return 0;
-  const uint8_t *p = static_cast<const uint8_t *>(guestArgsAt::buffer(data));
+  const u8 *p = static_cast<const u8 *>(guestArgsAt::buffer(data));
   if (!p)
     return 0;
   openUinput(src);
@@ -651,7 +652,7 @@ int runVibration(hidSource &src, void *data) {
 int runLight(hidSource &src, void *data, bool reset) {
   if (!guestArgsAt::valid(data))
     return 0;
-  const uint8_t *p = static_cast<const uint8_t *>(guestArgsAt::buffer(data));
+  const u8 *p = static_cast<const u8 *>(guestArgsAt::buffer(data));
   openUinput(src);
   if (p)
     setLight(src, reset ? 0 : p[0], reset ? 0 : p[1], reset ? 0 : p[2]);
@@ -665,11 +666,11 @@ int runLight(hidSource &src, void *data, bool reset) {
 namespace krnl {
 hidDevice::hidDevice(proc *p) : device(p) {}
 
-int32_t hidDevice::ioctl(uint32_t cmd, void *data) {
+i32 hidDevice::ioctl(u32 cmd, void *data) {
   // Passthrough off: mirror the real device's system-only soft-fail.
   if (!kHidPassthrough) {
     if (data && (cmd & 0x40000000u)) {
-      const uint32_t len = (cmd >> 16) & 0x1fff;
+      const u32 len = (cmd >> 16) & 0x1fff;
       if (len)
         std::memset(data, 0, len);
     }
@@ -700,7 +701,7 @@ int32_t hidDevice::ioctl(uint32_t cmd, void *data) {
       // The system-only and informational commands the kernel gates on
       // system credentials: soft-succeed with a zeroed out-buffer.
       if (data && (cmd & 0x40000000u)) {
-        const uint32_t len = (cmd >> 16) & 0x1fff;
+        const u32 len = (cmd >> 16) & 0x1fff;
         if (len)
           std::memset(data, 0, len);
       }
@@ -708,7 +709,7 @@ int32_t hidDevice::ioctl(uint32_t cmd, void *data) {
   }
 }
 
-int64_t hidDevice::lseek(int64_t, int) { return 0; }
+i64 hidDevice::lseek(i64, int) { return 0; }
 
 int hidDevice::fstat(void *stat) {
   if (!stat)

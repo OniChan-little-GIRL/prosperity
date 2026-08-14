@@ -9,6 +9,7 @@
  */
 
 #include "proc.h"
+#include "base/arch.h"
 #include <elf_types.h>
 #include <sce_types.h>
 
@@ -22,47 +23,47 @@ class File;
 
 namespace krnl {
 struct moduleSeg {
-  uint8_t *addr;
-  uint32_t size;
+  u8 *addr;
+  u32 size;
 };
 
 struct moduleInfo {
   base::String name;
-  uint32_t handle;
-  uint8_t *base;
-  uint8_t *entry;
-  uint16_t tlsSlot;
-  uint32_t codeSize;
+  u32 handle;
+  u8 *base;
+  u8 *entry;
+  u16 tlsSlot;
+  u32 codeSize;
 
-  uint8_t *ripZone;
+  u8 *ripZone;
   size_t ripZoneSize;
 
-  uint8_t *procParam;
-  uint32_t procParamSize;
+  u8 *procParam;
+  u32 procParamSize;
 
   // per-library SCE module param (PT_SCE_MODULEPARAM); queried via
   // sys_dynlib_get_obj_member index 8 to validate the module's SDK version.
-  uint8_t *moduleParam;
-  uint32_t moduleParamSize;
+  u8 *moduleParam;
+  u32 moduleParamSize;
 
-  uint8_t *initAddr;
-  uint8_t *finiAddr;
+  u8 *initAddr;
+  u8 *finiAddr;
   bool initRan = false;  // DT_INIT already executed (loader runs it for some PRX)
 
   moduleSeg textSeg;
   moduleSeg dataSeg;
 
-  uint8_t *tlsAddr;
+  u8 *tlsAddr;
   size_t tlsSizeMem;
   size_t tlsSizeFile;
-  uint32_t tlsalign;
+  u32 tlsalign;
 
-  uint8_t *ehFrameheaderAddr;
-  uint8_t *ehFrameAddr;
-  uint32_t ehFrameheaderSize;
-  uint32_t ehFrameSize;
+  u8 *ehFrameheaderAddr;
+  u8 *ehFrameAddr;
+  u32 ehFrameheaderSize;
+  u32 ehFrameSize;
 
-  uint8_t fingerprint[20];
+  u8 fingerprint[20];
 };
 
 class smodule {
@@ -75,12 +76,12 @@ public:
   // Load a module from a guest VFS path (host or virtual mount). Converts a
   // fake SELF to an ELF on the fly, so it works for a pkg's eboot.bin.
   bool fromVfs(const base::String &);
-  bool fromMem(base::UniquePointer<uint8_t[]>);
+  bool fromMem(base::UniquePointer<u8[]>);
 
-  uintptr_t getSymbol(uint64_t);
+  uintptr_t getSymbol(u64);
   // LLE-only export lookup by NID (getSymbol without the HLE/vprx override), for
   // the PS5 global-NID resolver.
-  uintptr_t getExport(uint64_t nid);
+  uintptr_t getExport(u64 nid);
   uintptr_t getSymbolFullName(const char *name);
   uintptr_t getSymbol2(const char *name);
   // Resolve an exported symbol by its 11-char NID prefix (export strtab names
@@ -134,7 +135,7 @@ private:
   }
 
   template <typename Type = ELFPgHeader> Type *getSegment(ElfSegType type) {
-    for (uint16_t i = 0; i < elf->phnum; i++) {
+    for (u16 i = 0; i < elf->phnum; i++) {
       auto s = &segments[i];
       if (s->type == type)
         return reinterpret_cast<Type *>(s);
@@ -144,7 +145,7 @@ private:
   }
 
 private:
-  base::UniquePointer<uint8_t[]> data;
+  base::UniquePointer<u8[]> data;
 
 private:
   proc *process;
@@ -153,15 +154,15 @@ private:
 
   struct libInfo {
     const char *name;
-    int32_t id;
-    uint16_t attr;
+    i32 id;
+    u16 attr;
     bool exported;
   };
 
   struct modInfo {
     const char *name;
-    int32_t id;
-    uint16_t attr;
+    i32 id;
+    u16 attr;
   };
 
   base::Vector<modInfo> impModules;
@@ -177,7 +178,7 @@ private:
   ElfRel *jmpslots = nullptr;
   ElfRel *rela = nullptr;
   ElfSym *symbols = nullptr;
-  uint8_t *hashes = nullptr;
+  u8 *hashes = nullptr;
 
   struct table {
     char *ptr = nullptr;
@@ -187,9 +188,9 @@ private:
   table strtab;
   table symtab;
 
-  uint32_t numJmpSlots = 0;
-  uint32_t numSymbols = 0;
-  uint32_t numRela = 0;
+  u32 numJmpSlots = 0;
+  u32 numSymbols = 0;
+  u32 numRela = 0;
 
   // applyRelocations must run at most once: the TLS relocs (DTPMOD64/DTPOFF)
   // are additive (+=), so a second pass (the harness relocates, then the guest

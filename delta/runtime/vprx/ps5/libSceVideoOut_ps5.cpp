@@ -12,6 +12,7 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <atomic>
 #include <chrono>
@@ -38,14 +39,14 @@ DELTA_OPTION(bool, kVoNostomp, "DELTA_VO_NOSTOMP", false);
 
 // PS5 present bridge: forwards the flip to the AGC command processor's
 // vk::endFrame (gpu/ps5/cmd_processor.cpp).
-extern "C" void prosperity_agc_flip(uint64_t scanoutBase);
+extern "C" void prosperity_agc_flip(u64 scanoutBase);
 
 // The guest address of the display buffer the game most recently flipped
 // (sceVideoOutSubmitFlip*'s bufferIndex resolved through the registered-buffer
 // table). The PS5 /dev/gc AGC flip ioctls carry no buffer field, so they read
 // the scanout target here instead of presenting whichever RT was drawn last.
-static std::atomic<uint64_t> g_currentScanout{0};
-extern "C" uint64_t prosperity_ps5_scanout_base() {
+static std::atomic<u64> g_currentScanout{0};
+extern "C" u64 prosperity_ps5_scanout_base() {
   return g_currentScanout.load(std::memory_order_relaxed);
 }
 
@@ -53,39 +54,39 @@ using namespace krnl;
 
 namespace {
 
-constexpr uint32_t kFmtA8R8G8B8_SRGB = 0x80000000u;
-constexpr int16_t kFilterFlip = -10;
-constexpr int16_t kFilterVblank = -13;
+constexpr u32 kFmtA8R8G8B8_SRGB = 0x80000000u;
+constexpr i16 kFilterFlip = -10;
+constexpr i16 kFilterVblank = -13;
 constexpr int kEventFlip = 0;
 constexpr int kEventVblank = 1;
 
 struct ResolutionStatus {
-  int32_t width, height, paneWidth, paneHeight;
-  uint64_t refreshRate;
+  i32 width, height, paneWidth, paneHeight;
+  u64 refreshRate;
   float screenSizeInInch;
-  uint16_t flags, reserved0;
-  uint32_t reserved1[3];
+  u16 flags, reserved0;
+  u32 reserved1[3];
 };
 
 struct FlipStatus {
-  uint64_t count, processTime, tsc;
-  int64_t flipArg;
-  uint64_t submitTsc, reserved0;
-  int32_t gcQueueNum, flipPendingNum, currentBuffer;
-  uint32_t reserved1;
+  u64 count, processTime, tsc;
+  i64 flipArg;
+  u64 submitTsc, reserved0;
+  i32 gcQueueNum, flipPendingNum, currentBuffer;
+  u32 reserved1;
 };
 
 struct VblankStatus {
-  uint64_t count, processTime, tsc, reserved[1];
-  uint8_t flags, pad[7];
+  u64 count, processTime, tsc, reserved[1];
+  u8 flags, pad[7];
 };
 
 // SceVideoOutBufferAttribute, 0x28 bytes (shared layout with PS4).
 struct BufferAttribute {
-  uint32_t pixelFormat;
-  int32_t tilingMode, aspectRatio;
-  uint32_t width, height, pitchInPixel, option, reserved0;
-  uint64_t reserved1;
+  u32 pixelFormat;
+  i32 tilingMode, aspectRatio;
+  u32 width, height, pitchInPixel, option, reserved0;
+  u64 reserved1;
 };
 
 constexpr int kMaxBuffers = 16;
@@ -94,13 +95,13 @@ constexpr int kHandleBase = 1;
 struct VideoPort {
   bool open = false;
   int flipRate = 0;
-  uint32_t width = 1920, height = 1080, pitch = 1920;
-  uint32_t pixelFormat = kFmtA8R8G8B8_SRGB;
+  u32 width = 1920, height = 1080, pitch = 1920;
+  u32 pixelFormat = kFmtA8R8G8B8_SRGB;
   void *buffers[kMaxBuffers] = {};
   int bufferCount = 0;
-  std::atomic<uint64_t> flipCount{0};
-  std::atomic<uint64_t> submitCount{0};
-  int64_t lastFlipArg = -1;
+  std::atomic<u64> flipCount{0};
+  std::atomic<u64> submitCount{0};
+  i64 lastFlipArg = -1;
   int currentBuffer = -1;
   int flipEqueue = -1;
   void *flipUdata = nullptr;
@@ -115,15 +116,15 @@ VideoPort g_port;  // dedicated PS5 port state
 // must live in GUEST-addressable memory: the title embeds the address in the PM4
 // it builds, and the command processor's label range check rightly refuses to
 // write host .bss.
-uint64_t *videoLabels() {
-  static uint64_t *labels =
-      reinterpret_cast<uint64_t *>(krnl::allocLowGuest(16 * sizeof(uint64_t)));
+u64 *videoLabels() {
+  static u64 *labels =
+      reinterpret_cast<u64 *>(krnl::allocLowGuest(16 * sizeof(u64)));
   return labels;
 }
 
 std::atomic<int> g_gfxState{0};  // 0=untried, 1=up, 2=failed
 
-bool ensureGfx(uint32_t w, uint32_t h) {
+bool ensureGfx(u32 w, u32 h) {
   int st = g_gfxState.load();
   if (st == 1) return true;
   if (st == 2) return false;
@@ -143,7 +144,7 @@ bool ensureGfx(uint32_t w, uint32_t h) {
 equeue *findEqueue(int handle) {
   auto *p = proc::getActive();
   if (!p) return nullptr;
-  auto *obj = p->getObjTable().get(static_cast<uint32_t>(handle));
+  auto *obj = p->getObjTable().get(static_cast<u32>(handle));
   if (!obj || obj->type() != kObject::oType::equeue) return nullptr;
   return static_cast<equeue *>(obj);
 }
@@ -160,17 +161,17 @@ void startFlipPump() {
   std::thread([] {
     for (;;) {
       std::this_thread::sleep_for(std::chrono::microseconds(16667));
-      uint64_t c = g_port.flipCount.fetch_add(1) + 1;
+      u64 c = g_port.flipCount.fetch_add(1) + 1;
       // The label is a flip-completion flag, not a counter: the title leaves it
       // at 0 when it queues a flip and waits for the display controller to write
       // 1, then clears it again. bgfx's AGC backend spins on `*label == 1`
       // exactly, so an incrementing value satisfies it once and never again.
       // DELTA_VO_NOSTOMP leaves the labels to the title's own GPU fence writes.
       if (!kVoNostomp) {
-        uint64_t *labels = videoLabels();
+        u64 *labels = videoLabels();
         for (int i = 0; i < 16; i++) labels[i] = 1;
       }
-      triggerAllEqueues(kEventFlip, kFilterFlip, static_cast<int64_t>(c));
+      triggerAllEqueues(kEventFlip, kFilterFlip, static_cast<i64>(c));
     }
   }).detach();
 }
@@ -192,8 +193,8 @@ int PS4ABI vGetResolutionStatus(int, void *status) {
   if (!status) return -1;
   auto *s = static_cast<ResolutionStatus *>(status);
   std::memset(s, 0, sizeof(*s));
-  s->width = static_cast<int32_t>(g_port.width);
-  s->height = static_cast<int32_t>(g_port.height);
+  s->width = static_cast<i32>(g_port.width);
+  s->height = static_cast<i32>(g_port.height);
   s->paneWidth = s->width;
   s->paneHeight = s->height;
   s->refreshRate = 1;
@@ -204,14 +205,14 @@ int PS4ABI vGetResolutionStatus(int, void *status) {
 // Prospero drops PS4's aspectRatio argument, so width/height/pitch each sit one
 // register earlier. Read as the PS4 shape, Skyrim's 3840x2160 attribute decoded
 // as "2160x0 pitch 0" and every buffer registered at the wrong size.
-int PS4ABI vSetBufferAttribute(void *attribute, uint32_t pixelFormat,
-                               uint32_t tilingMode, uint32_t width,
-                               uint32_t height, uint32_t pitchInPixel) {
+int PS4ABI vSetBufferAttribute(void *attribute, u32 pixelFormat,
+                               u32 tilingMode, u32 width,
+                               u32 height, u32 pitchInPixel) {
   if (!attribute) return -1;
   auto *a = static_cast<BufferAttribute *>(attribute);
   std::memset(a, 0, sizeof(*a));
   a->pixelFormat = pixelFormat;
-  a->tilingMode = static_cast<int32_t>(tilingMode);
+  a->tilingMode = static_cast<i32>(tilingMode);
   a->width = width;
   a->height = height;
   a->pitchInPixel = pitchInPixel;
@@ -229,7 +230,7 @@ constexpr int kBufDescStride = 4;  // u64s per descriptor (0x20 bytes)
 int PS4ABI vRegisterBuffers(int, int startIndex, int option, void *const *buffers,
                             int bufferNum, const void *attribute) {
   (void)option;
-  uint32_t w, h;
+  u32 w, h;
   {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (attribute) {
@@ -239,7 +240,7 @@ int PS4ABI vRegisterBuffers(int, int startIndex, int option, void *const *buffer
       g_port.pitch = a->pitchInPixel ? a->pitchInPixel : g_port.width;
       g_port.pixelFormat = a->pixelFormat;
     }
-    const uint64_t *desc = reinterpret_cast<const uint64_t *>(buffers);
+    const u64 *desc = reinterpret_cast<const u64 *>(buffers);
     int n = 0;
     for (int i = 0; i < bufferNum && (startIndex + i) < kMaxBuffers; i++) {
       g_port.buffers[startIndex + i] =
@@ -260,7 +261,7 @@ int PS4ABI vRegisterBuffers(int, int startIndex, int option, void *const *buffer
     // registered, or the AGC flip ioctls present a null address.
     if (!g_currentScanout.load(std::memory_order_relaxed))
       g_currentScanout.store(
-          reinterpret_cast<uint64_t>(g_port.buffers[startIndex]),
+          reinterpret_cast<u64>(g_port.buffers[startIndex]),
           std::memory_order_relaxed);
   }
   // Registering display buffers is the title committing to present, whichever
@@ -282,14 +283,14 @@ int PS4ABI vAddFlipEvent(int eqHandle, int, void *udata) {
   if (!eq) return -1;
   g_port.flipEqueue = eqHandle;
   g_port.flipUdata = udata;
-  eq->addEvent(static_cast<uint64_t>(kEventFlip), kFilterFlip, udata);
+  eq->addEvent(static_cast<u64>(kEventFlip), kFilterFlip, udata);
   startFlipPump();
   return 0;
 }
 
 int PS4ABI vDeleteFlipEvent(int eqHandle, int) {
   auto *eq = findEqueue(eqHandle);
-  if (eq) eq->removeEvent(static_cast<uint64_t>(kEventFlip), kFilterFlip);
+  if (eq) eq->removeEvent(static_cast<u64>(kEventFlip), kFilterFlip);
   g_port.flipEqueue = -1;
   return 0;
 }
@@ -299,7 +300,7 @@ int PS4ABI vAddVblankEvent(int eqHandle, int, void *udata) {
   if (!eq) return -1;
   g_port.vblankEqueue = eqHandle;
   g_port.vblankUdata = udata;
-  eq->addEvent(static_cast<uint64_t>(kEventVblank), kFilterVblank, udata);
+  eq->addEvent(static_cast<u64>(kEventVblank), kFilterVblank, udata);
   return 0;
 }
 
@@ -311,15 +312,15 @@ int PS4ABI vGetEventId(const void *event) {
   return ev->filter == kFilterVblank ? kEventVblank : kEventFlip;
 }
 
-int PS4ABI vGetEventData(const void *event, int64_t *data) {
+int PS4ABI vGetEventData(const void *event, i64 *data) {
   if (!event || !data) return -1;
   *data = static_cast<const kevent_t *>(event)->data;
   return 0;
 }
 
-int PS4ABI vSubmitFlip(int, int bufferIndex, int, int64_t flipArg) {
+int PS4ABI vSubmitFlip(int, int bufferIndex, int, i64 flipArg) {
   void *fb = nullptr;
-  uint32_t w, h, pitch, fmt;
+  u32 w, h, pitch, fmt;
   int eqHandle;
   {
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -327,7 +328,7 @@ int PS4ABI vSubmitFlip(int, int bufferIndex, int, int64_t flipArg) {
       fb = g_port.buffers[bufferIndex];
     w = g_port.width; h = g_port.height; pitch = g_port.pitch; fmt = g_port.pixelFormat;
     g_port.currentBuffer = bufferIndex;
-    g_currentScanout.store(reinterpret_cast<uint64_t>(fb),
+    g_currentScanout.store(reinterpret_cast<u64>(fb),
                            std::memory_order_relaxed);
     g_port.lastFlipArg = flipArg;
     g_port.submitCount.fetch_add(1);
@@ -345,7 +346,7 @@ int PS4ABI vSubmitFlip(int, int bufferIndex, int, int64_t flipArg) {
   if (eqHandle >= 0)
     if (auto *eq = findEqueue(eqHandle))
       eq->trigger(kEventFlip, kFilterFlip,
-                  static_cast<int64_t>(g_port.flipCount.load()));
+                  static_cast<i64>(g_port.flipCount.load()));
   return 0;
 }
 
@@ -354,14 +355,14 @@ int PS4ABI vSubmitFlip(int, int bufferIndex, int, int64_t flipArg) {
 // writes 1 there. Our present is synchronous, so the flip is already done by the
 // time we return -- write the label or the title waits on it forever (bgfx's
 // RendererContextAGC parks on `*label == 1` and never submits another frame).
-int PS4ABI vSubmitFlipEop(int, int bufferIndex, int, int64_t flipArg,
+int PS4ABI vSubmitFlipEop(int, int bufferIndex, int, i64 flipArg,
                           void *eopLabel) {
-  uint64_t scanout = 0;
+  u64 scanout = 0;
   int eqHandle;
   {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (bufferIndex >= 0 && bufferIndex < kMaxBuffers) {
-      scanout = reinterpret_cast<uint64_t>(g_port.buffers[bufferIndex]);
+      scanout = reinterpret_cast<u64>(g_port.buffers[bufferIndex]);
       g_port.currentBuffer = bufferIndex;
     }
     g_currentScanout.store(scanout, std::memory_order_relaxed);
@@ -371,13 +372,13 @@ int PS4ABI vSubmitFlipEop(int, int bufferIndex, int, int64_t flipArg,
   }
   // PS5 always presents through the AGC command processor's render target.
   prosperity_agc_flip(scanout);
-  if (utl::isMemoryRangeMapped(eopLabel, sizeof(uint64_t)))
-    *static_cast<volatile uint64_t *>(eopLabel) = 1;
+  if (utl::isMemoryRangeMapped(eopLabel, sizeof(u64)))
+    *static_cast<volatile u64 *>(eopLabel) = 1;
   g_port.flipCount.fetch_add(1);
   if (eqHandle >= 0)
     if (auto *eq = findEqueue(eqHandle))
       eq->trigger(kEventFlip, kFilterFlip,
-                  static_cast<int64_t>(g_port.flipCount.load()));
+                  static_cast<i64>(g_port.flipCount.load()));
   return 0;
 }
 
@@ -423,12 +424,12 @@ int PS4ABI vModeSetAny(int, void *) { return 0; }
 // frame end uses it to tell "this frame rendered straight into a display
 // buffer" (present that one) from "it rendered an offscreen pass" (present
 // whatever the last flip named).
-extern "C" bool prosperity_ps5_is_display_buffer(uint64_t addr) {
+extern "C" bool prosperity_ps5_is_display_buffer(u64 addr) {
   if (!addr)
     return false;
   std::lock_guard<std::mutex> lk(g_mtx);
   for (int i = 0; i < g_port.bufferCount && i < kMaxBuffers; i++)
-    if (reinterpret_cast<uint64_t>(g_port.buffers[i]) == addr)
+    if (reinterpret_cast<u64>(g_port.buffers[i]) == addr)
       return true;
   return false;
 }

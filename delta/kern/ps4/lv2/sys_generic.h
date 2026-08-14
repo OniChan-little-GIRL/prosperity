@@ -3,7 +3,8 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
-int PS4ABI sys_ioctl(uint32_t fd, uint32_t cmd, void *data);
+int PS4ABI sys_ioctl(u32 fd, u32 cmd, void *data);
 }

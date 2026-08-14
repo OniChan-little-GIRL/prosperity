@@ -7,6 +7,7 @@
  */
 
 #include <base/environment_variables.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstdlib>
@@ -46,27 +47,27 @@ bool deltaCore::init() {
 }
 
 namespace {
-constexpr uint64_t kMaxSfoSize = 1u << 20;
-constexpr uint64_t kMaxIconSize = 16u << 20;
+constexpr u64 kMaxSfoSize = 1u << 20;
+constexpr u64 kMaxIconSize = 16u << 20;
 
 // Minimal param.sfo reader: return the string value of `key` (e.g. "TITLE_ID"),
 // or "" if absent. The SFO is a small flat table; all offsets are bounds-checked.
-std::string sfoGet(const uint8_t *d, size_t n, const char *key) {
+std::string sfoGet(const u8 *d, size_t n, const char *key) {
   if (n < 20)
     return {};
-  auto rd16 = [&](size_t o) -> uint16_t {
-    return o + 2 <= n ? uint16_t(d[o] | (d[o + 1] << 8)) : 0;
+  auto rd16 = [&](size_t o) -> u16 {
+    return o + 2 <= n ? u16(d[o] | (d[o + 1] << 8)) : 0;
   };
-  auto rd32 = [&](size_t o) -> uint32_t {
-    return o + 4 <= n ? uint32_t(d[o]) | (uint32_t(d[o + 1]) << 8) |
-                            (uint32_t(d[o + 2]) << 16) | (uint32_t(d[o + 3]) << 24)
+  auto rd32 = [&](size_t o) -> u32 {
+    return o + 4 <= n ? u32(d[o]) | (u32(d[o + 1]) << 8) |
+                            (u32(d[o + 2]) << 16) | (u32(d[o + 3]) << 24)
                       : 0;
   };
   if (rd32(0) != 0x46535000u) // "\0PSF"
     return {};
-  uint32_t keyStart = rd32(8), dataStart = rd32(12), count = rd32(16);
+  u32 keyStart = rd32(8), dataStart = rd32(12), count = rd32(16);
   size_t klen = std::strlen(key);
-  for (uint32_t i = 0, idx = 20; i < count; i++, idx += 16) {
+  for (u32 i = 0, idx = 20; i < count; i++, idx += 16) {
     if (idx + 16 > n)
       break;
     size_t kpos = size_t(keyStart) + rd16(idx);
@@ -87,23 +88,23 @@ std::string sfoGet(const uint8_t *d, size_t n, const char *key) {
   return {};
 }
 
-uint32_t sfoGetU32(const uint8_t *d, size_t n, const char *key) {
+u32 sfoGetU32(const u8 *d, size_t n, const char *key) {
   if (n < 20)
     return 0;
-  auto rd16 = [&](size_t o) -> uint16_t {
-    return o + 2 <= n ? uint16_t(d[o] | (d[o + 1] << 8)) : 0;
+  auto rd16 = [&](size_t o) -> u16 {
+    return o + 2 <= n ? u16(d[o] | (d[o + 1] << 8)) : 0;
   };
-  auto rd32 = [&](size_t o) -> uint32_t {
-    return o + 4 <= n ? uint32_t(d[o]) | (uint32_t(d[o + 1]) << 8) |
-                             (uint32_t(d[o + 2]) << 16) |
-                             (uint32_t(d[o + 3]) << 24)
+  auto rd32 = [&](size_t o) -> u32 {
+    return o + 4 <= n ? u32(d[o]) | (u32(d[o + 1]) << 8) |
+                             (u32(d[o + 2]) << 16) |
+                             (u32(d[o + 3]) << 24)
                        : 0;
   };
   if (rd32(0) != 0x46535000u)
     return 0;
-  const uint32_t keyStart = rd32(8), dataStart = rd32(12), count = rd32(16);
+  const u32 keyStart = rd32(8), dataStart = rd32(12), count = rd32(16);
   const size_t keyLength = std::strlen(key);
-  for (uint32_t i = 0, index = 20; i < count; i++, index += 16) {
+  for (u32 i = 0, index = 20; i < count; i++, index += 16) {
     if (index + 16 > n)
       break;
     const size_t keyPosition = size_t(keyStart) + rd16(index);
@@ -112,7 +113,7 @@ uint32_t sfoGetU32(const uint8_t *d, size_t n, const char *key) {
         d[keyPosition + keyLength] != '\0')
       continue;
     const size_t dataPosition = size_t(dataStart) + rd32(index + 12);
-    return dataPosition + sizeof(uint32_t) <= n ? rd32(dataPosition) : 0;
+    return dataPosition + sizeof(u32) <= n ? rd32(dataPosition) : 0;
   }
   return 0;
 }
@@ -150,12 +151,12 @@ std::string jsonGetTitleName(const std::string &js) {
   return jsonGetString(js, "titleName");
 }
 
-bool readHostFile(const std::string &path, uint64_t maxSize,
-                  std::vector<uint8_t> &out) {
+bool readHostFile(const std::string &path, u64 maxSize,
+                  std::vector<u8> &out) {
   utl::File file(base::String(path.c_str()), utl::fileMode::read);
   if (!file.IsOpen())
     return false;
-  const uint64_t size = file.GetSize();
+  const u64 size = file.GetSize();
   if (size == 0 || size > maxSize)
     return false;
   out.resize(static_cast<size_t>(size));
@@ -174,10 +175,10 @@ std::string parentPath(const base::String &path) {
 
 // param.json stores sdkVersion as "0xMMmmpppp00000000"; libkernel wants the top
 // half (0x03000000 for a 3.00 title). Empty/unparsable -> 0.
-uint32_t parseSdkVersion(const std::string &s) {
+u32 parseSdkVersion(const std::string &s) {
   if (s.empty())
     return 0;
-  return static_cast<uint32_t>(std::strtoull(s.c_str(), nullptr, 0) >> 32);
+  return static_cast<u32>(std::strtoull(s.c_str(), nullptr, 0) >> 32);
 }
 
 // Bridges a PkgFilesystem into the kernel VFS as an on-demand virtual mount.
@@ -206,8 +207,8 @@ public:
         if (want.empty())
           continue;
         if (const auto *node = fs_.find(want.c_str())) {
-          std::vector<uint8_t> buf(node->size);
-          int64_t n = fs_.read(*node, buf.data(), 0, node->size);
+          std::vector<u8> buf(node->size);
+          i64 n = fs_.read(*node, buf.data(), 0, node->size);
           const char *base = std::strrchr(want.c_str(), '/');
           std::string out =
               std::string("/tmp/") + (base ? base + 1 : want.c_str());
@@ -230,28 +231,28 @@ public:
   // titles (e.g. Isaac) whose only param.sfo copy is there and never appears at
   // /app0/sce_sys. Returns "" when unavailable.
   std::string titleId() {
-    std::vector<uint8_t> sfo;
+    std::vector<u8> sfo;
     if (fs_.readPkgEntry(0x1000, sfo) > 0)
       return sfoGet(sfo.data(), sfo.size(), "TITLE_ID");
     return {};
   }
 
   std::string title() {
-    std::vector<uint8_t> sfo;
+    std::vector<u8> sfo;
     if (fs_.readPkgEntry(0x1000, sfo) > 0)
       return sfoGet(sfo.data(), sfo.size(), "TITLE");
     return {};
   }
 
-  uint32_t attributes() {
-    std::vector<uint8_t> sfo;
+  u32 attributes() {
+    std::vector<u8> sfo;
     if (fs_.readPkgEntry(0x1000, sfo) > 0)
       return sfoGetU32(sfo.data(), sfo.size(), "ATTRIBUTE");
     return 0;
   }
 
-  std::vector<uint8_t> icon() {
-    std::vector<uint8_t> png;
+  std::vector<u8> icon() {
+    std::vector<u8> png;
     fs_.readPkgEntry(0x1200, png);
     return png;
   }
@@ -272,8 +273,8 @@ public:
       const auto *node = fs_.find(p.c_str());
       if (!node)
         continue;
-      std::vector<uint8_t> buf(node->size);
-      int64_t n = fs_.read(*node, buf.data(), 0, node->size);
+      std::vector<u8> buf(node->size);
+      i64 n = fs_.read(*node, buf.data(), 0, node->size);
       if (n <= 0)
         continue;
       buf.resize(static_cast<size_t>(n));
@@ -297,8 +298,8 @@ public:
       return;
     done = true;
     if (const auto *node = fs_.find(want)) {
-      std::vector<uint8_t> buf(node->size);
-      int64_t n = fs_.read(*node, buf.data(), 0, node->size);
+      std::vector<u8> buf(node->size);
+      i64 n = fs_.read(*node, buf.data(), 0, node->size);
       const char *base = std::strrchr(want, '/');
       std::string out = std::string("/tmp/") + (base ? base + 1 : want);
       if (FILE *f = std::fopen(out.c_str(), "wb")) {
@@ -309,11 +310,11 @@ public:
       }
     }
   }
-  bool stat(const char *rel, int64_t &size) override {
+  bool stat(const char *rel, i64 &size) override {
     const auto *node = fs_.find(rel);
     if (!node)
       return false;
-    size = static_cast<int64_t>(node->size);
+    size = static_cast<i64>(node->size);
     return true;
   }
   bool list(const char *rel, std::vector<krnl::vfs::DirEntry> &out) override {
@@ -348,10 +349,10 @@ private:
     vfs::PkgFilesystem::Node node;
     PkgFile(vfs::PkgFilesystem *f, const vfs::PkgFilesystem::Node &n)
         : fs(f), node(n) {}
-    int64_t read(void *buf, int64_t off, int64_t len) override {
+    i64 read(void *buf, i64 off, i64 len) override {
       return fs->read(node, buf, off, len);
     }
-    int64_t size() override { return static_cast<int64_t>(node.size); }
+    i64 size() override { return static_cast<i64>(node.size); }
   };
 
   vfs::PkgFilesystem fs_;
@@ -370,11 +371,11 @@ public:
       return nullptr;
     return std::make_unique<Ufs2File>(&fs_, *node);
   }
-  bool stat(const char *rel, int64_t &size) override {
+  bool stat(const char *rel, i64 &size) override {
     const auto *node = fs_.find(rel);
     if (!node)
       return false;
-    size = static_cast<int64_t>(node->size);
+    size = static_cast<i64>(node->size);
     return true;
   }
   bool list(const char *rel, std::vector<krnl::vfs::DirEntry> &out) override {
@@ -409,12 +410,12 @@ public:
 
   std::string title() { return jsonGetTitleName(paramJson()); }
 
-  std::vector<uint8_t> icon() {
+  std::vector<u8> icon() {
     const auto *node = fs_.find("/sce_sys/icon0.png");
     if (!node || node->size > kMaxIconSize)
       return {};
-    std::vector<uint8_t> png(node->size);
-    const int64_t read = fs_.read(*node, png.data(), 0, node->size);
+    std::vector<u8> png(node->size);
+    const i64 read = fs_.read(*node, png.data(), 0, node->size);
     if (read <= 0)
       return {};
     png.resize(static_cast<size_t>(read));
@@ -423,7 +424,7 @@ public:
 
   // param.json spells the SDK version as a 64-bit hex string ("0x0300...")
   // whose top half is the 0xMMmmpppp form libkernel compares against.
-  uint32_t sdkVersion() { return parseSdkVersion(paramJsonField("sdkVersion")); }
+  u32 sdkVersion() { return parseSdkVersion(paramJsonField("sdkVersion")); }
 
 private:
   std::string paramJson() {
@@ -431,7 +432,7 @@ private:
     if (!node || node->size > (1u << 20))
       return {};
     std::string js(node->size, '\0');
-    if (fs_.read(*node, js.data(), 0, static_cast<int64_t>(js.size())) <= 0)
+    if (fs_.read(*node, js.data(), 0, static_cast<i64>(js.size())) <= 0)
       return {};
     return js;
   }
@@ -445,10 +446,10 @@ private:
     vfs::Ufs2Filesystem::Node node;
     Ufs2File(vfs::Ufs2Filesystem *f, const vfs::Ufs2Filesystem::Node &n)
         : fs(f), node(n) {}
-    int64_t read(void *buf, int64_t off, int64_t len) override {
+    i64 read(void *buf, i64 off, i64 len) override {
       return fs->read(node, buf, off, len);
     }
-    int64_t size() override { return static_cast<int64_t>(node.size); }
+    i64 size() override { return static_cast<i64>(node.size); }
   };
 
   vfs::Ufs2Filesystem fs_;
@@ -497,11 +498,11 @@ void deltaCore::boot(const base::String &xdir) {
       utl::File(base::String(appJson.c_str()), utl::fileMode::read).IsOpen();
   const bool isAppDir = isPs4AppDir || isPs5AppDir;
   base::String mainModule = path;
-  uint32_t sdkVersion = 0;
-  uint32_t ps4Attributes = 0;
+  u32 sdkVersion = 0;
+  u32 ps4Attributes = 0;
   std::string gameTitle;
 #if defined(__linux__) && !defined(__ANDROID__)
-  std::vector<uint8_t> gameIcon;
+  std::vector<u8> gameIcon;
 #endif
 
   if (isPkg) {
@@ -545,7 +546,7 @@ void deltaCore::boot(const base::String &xdir) {
   } else if (isAppDir) {
     krnl::vfs::mount("/app0", path.c_str());
     if (isPs4AppDir) {
-      std::vector<uint8_t> sfo;
+      std::vector<u8> sfo;
       if (readHostFile(appSfo, kMaxSfoSize, sfo)) {
         krnl::vfs::setTitleId(sfoGet(sfo.data(), sfo.size(), "TITLE_ID"));
         gameTitle = sfoGet(sfo.data(), sfo.size(), "TITLE");
@@ -556,7 +557,7 @@ void deltaCore::boot(const base::String &xdir) {
         readHostFile(appRoot + "/icon0.png", kMaxIconSize, gameIcon);
 #endif
     } else {
-      std::vector<uint8_t> json;
+      std::vector<u8> json;
       readHostFile(appJson, kMaxSfoSize, json);
       const std::string js(json.begin(), json.end());
       krnl::vfs::setTitleId(jsonGetString(js, "titleId"));
@@ -572,7 +573,7 @@ void deltaCore::boot(const base::String &xdir) {
              krnl::vfs::titleId().c_str(), mainModule.c_str());
   } else {
     const std::string root = parentPath(path);
-    std::vector<uint8_t> sfo;
+    std::vector<u8> sfo;
     if (!readHostFile(root + "/sce_sys/param.sfo", kMaxSfoSize, sfo))
       readHostFile(root + "/param.sfo", kMaxSfoSize, sfo);
     if (!sfo.empty()) {

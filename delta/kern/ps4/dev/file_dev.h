@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include <utl/file.h>
 
@@ -21,30 +22,30 @@ namespace krnl {
 // st_gen, st_lspare and st_birthtim. We zero the whole struct first, so every
 // non-filled field is always 0.
 struct SceKernelStat {
-  uint32_t st_dev;          // +0x00
-  uint32_t st_ino;          // +0x04
-  uint16_t st_mode;         // +0x08
-  uint16_t st_nlink;        // +0x0A
-  uint32_t st_uid;          // +0x0C
-  uint32_t st_gid;          // +0x10
-  uint32_t st_rdev;         // +0x14
-  int64_t st_atim[2];       // +0x18 atime sec/nsec
-  int64_t st_mtim[2];       // +0x28 mtime sec/nsec
-  int64_t st_ctim[2];       // +0x38 ctime sec/nsec
-  int64_t st_size;          // +0x48
-  int64_t st_blocks;        // +0x50
-  uint32_t st_blksize;      // +0x58
-  uint32_t st_flags;        // +0x5C
-  uint32_t st_gen;          // +0x60
-  int32_t st_lspare;        // +0x64
-  int64_t st_birthtim[2];   // +0x68 btime sec/nsec
+  u32 st_dev;          // +0x00
+  u32 st_ino;          // +0x04
+  u16 st_mode;         // +0x08
+  u16 st_nlink;        // +0x0A
+  u32 st_uid;          // +0x0C
+  u32 st_gid;          // +0x10
+  u32 st_rdev;         // +0x14
+  i64 st_atim[2];       // +0x18 atime sec/nsec
+  i64 st_mtim[2];       // +0x28 mtime sec/nsec
+  i64 st_ctim[2];       // +0x38 ctime sec/nsec
+  i64 st_size;          // +0x48
+  i64 st_blocks;        // +0x50
+  u32 st_blksize;      // +0x58
+  u32 st_flags;        // +0x5C
+  u32 st_gen;          // +0x60
+  i32 st_lspare;        // +0x64
+  i64 st_birthtim[2];   // +0x68 btime sec/nsec
 };
 static_assert(sizeof(SceKernelStat) == 0x78, "SceKernelStat layout");
 
-constexpr uint16_t kSceFileModeReg = 0x8000;  // S_IFREG
-constexpr uint16_t kSceFileModeDir = 0x4000;  // S_IFDIR
+constexpr u16 kSceFileModeReg = 0x8000;  // S_IFREG
+constexpr u16 kSceFileModeDir = 0x4000;  // S_IFDIR
 
-void fillStat(SceKernelStat &out, uint16_t mode, int64_t size);
+void fillStat(SceKernelStat &out, u16 mode, i64 size);
 
 // A regular host-backed file exposed to the guest through the object table.
 class fileDevice : public device {
@@ -52,7 +53,7 @@ public:
   explicit fileDevice(proc *p);
 
   // Open the resolved host path. Returns false if it doesn't exist.
-  bool open(const base::String &hostPath, uint32_t flags);
+  bool open(const base::String &hostPath, u32 flags);
 
   // Open a resolved host path for writing (savedata). `create` creates the file
   // if absent; `truncate` discards existing contents. The file is opened
@@ -75,13 +76,13 @@ public:
 
   // A file mmap is satisfied by sys_mmap's anonymous-alloc + file-content fill
   // (via readAt), not a device-owned region; return -1 silently to take that path.
-  uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) override {
-    return reinterpret_cast<uint8_t *>(-1);
+  u8 *map(void *, size_t, u32, u32, size_t) override {
+    return reinterpret_cast<u8 *>(-1);
   }
-  int64_t read(void *buf, size_t n) override;
-  int64_t write(const void *buf, size_t n) override;
-  int64_t lseek(int64_t off, int whence) override;
-  int64_t readAt(void *buf, size_t n, int64_t off) override;
+  i64 read(void *buf, size_t n) override;
+  i64 write(const void *buf, size_t n) override;
+  i64 lseek(i64 off, int whence) override;
+  i64 readAt(void *buf, size_t n, i64 off) override;
   int fstat(void *stat) override;
 
 private:
@@ -89,6 +90,6 @@ private:
   bool open_ = false;
   bool writable_ = false;  // opened for writing (savedata)
   bool seq_ = false;       // manifest sequential-read mode
-  uint64_t seqPos_ = 0;    // internal read cursor for seq_ mode
+  u64 seqPos_ = 0;    // internal read cursor for seq_ mode
 };
 } // namespace krnl

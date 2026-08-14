@@ -27,6 +27,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -43,13 +44,13 @@ bool ShaderDumpEnabled();
 // Begin collecting for one stage translation ("vs" / "ps" / "cs").
 // `program` must stay alive until AuditEnd.
 void AuditBegin(const char* stage,
-                const uint32_t* code,
+                const u32* code,
                 const Program& program);
 
 // Bracket the emission of one instruction; `spirv_words` is how many function
 // body words it produced.
-void AuditInstBegin(uint32_t index, uint32_t pc);
-void AuditInstEnd(uint32_t index, uint32_t spirv_words);
+void AuditInstBegin(u32 index, u32 pc);
+void AuditInstEnd(u32 index, u32 spirv_words);
 
 // Tag the current instruction as intentionally emitting nothing (e.g. a
 // vertex fetch seeded through the vertex-input state) so it is not reported
@@ -58,7 +59,7 @@ void AuditInstTag(const char* tag);
 
 // Record an unsupported/approximated-op event (fed by WarnUnsupported), and
 // attribute it to the instruction currently being emitted, if any.
-void AuditNote(const char* what, uint32_t op);
+void AuditNote(const char* what, u32 op);
 
 // One header line for the dump (binding plan etc.).
 void AuditPlan(const std::string& line);
@@ -69,7 +70,7 @@ void AuditDecline(const char* reason);
 // Finish: fold into the run-wide registry and (first time a shader is seen)
 // write the dump files. `spirv` is the assembled unoptimized module, null if
 // translation failed.
-void AuditEnd(const std::vector<uint32_t>* spirv);
+void AuditEnd(const std::vector<u32>* spirv);
 
 // Write the aggregate report (what the atexit hook prints to stderr).
 void WriteAuditReport(std::FILE* f);

@@ -2,51 +2,52 @@
 // Copyright (C) 2019 Force67
 
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdio>
 #include <memory>
 
 struct SELFHeader {
-  uint32_t magic;
-  uint32_t unk;
-  uint8_t contentType;
-  uint8_t productType;
-  uint16_t pad;
-  uint16_t headerSize;
-  uint16_t signatureSize;
-  uint32_t sizeSELF; // < unrounded img size
-  uint32_t pad1;
-  uint16_t numSegments;
-  uint16_t unk1; //< always 0x22
-  uint32_t pad2;
+  u32 magic;
+  u32 unk;
+  u8 contentType;
+  u8 productType;
+  u16 pad;
+  u16 headerSize;
+  u16 signatureSize;
+  u32 sizeSELF; // < unrounded img size
+  u32 pad1;
+  u16 numSegments;
+  u16 unk1; //< always 0x22
+  u32 pad2;
 };
 
 struct ELFHeader {
-  uint8_t ident[16];
-  uint16_t type;
-  uint16_t machine;
-  uint32_t version;
-  uint64_t entry;
-  uint64_t phoff;
-  uint64_t shoff; //< null
-  uint32_t flags;
-  uint16_t ehsize;
-  uint16_t phentsize;
-  uint16_t phnum;
-  uint16_t shentsize;
-  uint16_t shnum;
-  uint16_t shstrndx;
+  u8 ident[16];
+  u16 type;
+  u16 machine;
+  u32 version;
+  u64 entry;
+  u64 phoff;
+  u64 shoff; //< null
+  u32 flags;
+  u16 ehsize;
+  u16 phentsize;
+  u16 phnum;
+  u16 shentsize;
+  u16 shnum;
+  u16 shstrndx;
 };
 
 struct ELFPgHeader {
-  uint32_t type;
-  uint32_t flags;
-  uint64_t offset;
-  uint64_t vaddr;
-  uint64_t paddr;
-  uint64_t filesz;
-  uint64_t memsz;
-  uint32_t flags1;
-  uint16_t align;
+  u32 type;
+  u32 flags;
+  u64 offset;
+  u64 vaddr;
+  u64 paddr;
+  u64 filesz;
+  u64 memsz;
+  u32 flags1;
+  u16 align;
 };
 
 int main(int argc, char **argv) {
@@ -64,8 +65,8 @@ int main(int argc, char **argv) {
 
     // determine the size
     fseek(file, 0, SEEK_END);
-    uint32_t len = ftell(file);
-    auto data = std::make_unique<uint8_t[]>(len);
+    u32 len = ftell(file);
+    auto data = std::make_unique<u8[]>(len);
 
     // read file in buffer
     fseek(file, 0, SEEK_SET);
@@ -90,7 +91,7 @@ int main(int argc, char **argv) {
                                      (self->numSegments * 32));
       fwrite(elf, 64, 1, file);
 
-      auto *segments = (ELFPgHeader *)((uint8_t *)elf + elf->phoff);
+      auto *segments = (ELFPgHeader *)((u8 *)elf + elf->phoff);
       fwrite(segments, sizeof(ELFPgHeader) * elf->phnum, 1, file);
       fclose(file);
     }

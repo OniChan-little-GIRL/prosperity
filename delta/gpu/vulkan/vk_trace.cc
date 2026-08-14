@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_trace.h"
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_detile.h"
 #include "gpu/gcn/gcn_translate.h"
@@ -76,14 +77,14 @@ std::FILE* g_file = nullptr;
 std::string g_dir;
 std::string g_prefix;  // "<dir>/frame_<n>"
 int g_frame_num = 0;
-uint64_t g_seq = 0;
-uint32_t g_draw_seq = 0;
+u64 g_seq = 0;
+u32 g_draw_seq = 0;
 int g_frames_left = 0;
 int g_armed_frame = 0;  // resolved frame number once a trigger fires
 bool g_finished = false;
-uint64_t g_start_ns = 0;
+u64 g_start_ns = 0;
 VkDebugUtilsMessengerEXT g_messenger = VK_NULL_HANDLE;
-uint32_t g_validation_messages = 0;
+u32 g_validation_messages = 0;
 
 // Mid-frame readbacks recorded into the frame's own command buffer; drained
 // once the queue is idle at FrameEnd.
@@ -91,44 +92,44 @@ struct Snapshot {
   VkBuffer buffer = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
   void* map = nullptr;
-  uint64_t bytes = 0;
-  uint32_t w = 0, h = 0;
+  u64 bytes = 0;
+  u32 w = 0, h = 0;
   VkFormat fmt = VK_FORMAT_UNDEFINED;
-  uint64_t base = 0;
+  u64 base = 0;
   bool depth = false;
-  uint32_t at_draw = 0;
+  u32 at_draw = 0;
 };
 std::vector<Snapshot> g_snapshots;
 
 // Every distinct guest texture descriptor the frame bound, for the end-of-
 // frame dump.
 struct TexKey {
-  uint64_t base = 0;
-  uint32_t w = 0, h = 0, dfmt = 0, nfmt = 0, tiling = 0, pitch = 0;
-  uint32_t layers = 0, mips = 0;
+  u64 base = 0;
+  u32 w = 0, h = 0, dfmt = 0, nfmt = 0, tiling = 0, pitch = 0;
+  u32 layers = 0, mips = 0;
   bool pow2_pad = false;
   bool operator==(const TexKey&) const = default;
 };
 struct TexKeyHash {
   size_t operator()(const TexKey& k) const {
-    uint64_t h = 1469598103934665603ull;
-    auto mix = [&h](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+    u64 h = 1469598103934665603ull;
+    auto mix = [&h](u64 v) { h = (h ^ v) * 1099511628211ull; };
     mix(k.base);
-    mix((uint64_t(k.w) << 32) | k.h);
-    mix((uint64_t(k.dfmt) << 32) | k.nfmt);
-    mix((uint64_t(k.tiling) << 32) | k.pitch);
-    mix((uint64_t(k.layers) << 32) | k.mips);
+    mix((u64(k.w) << 32) | k.h);
+    mix((u64(k.dfmt) << 32) | k.nfmt);
+    mix((u64(k.tiling) << 32) | k.pitch);
+    mix((u64(k.layers) << 32) | k.mips);
     return size_t(h);
   }
 };
 std::unordered_set<TexKey, TexKeyHash> g_frame_texs;
 
-std::unordered_map<uint64_t, std::string>& NameTable() {
-  static std::unordered_map<uint64_t, std::string> table;
+std::unordered_map<u64, std::string>& NameTable() {
+  static std::unordered_map<u64, std::string> table;
   return table;
 }
 
-uint64_t NowNs() {
+u64 NowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
@@ -145,8 +146,8 @@ bool Armed() {
 // A comma list of draw indices, "every:N", or "all".
 struct SnapshotPlan {
   bool all = false;
-  uint32_t every = 0;
-  std::vector<uint32_t> at;
+  u32 every = 0;
+  std::vector<u32> at;
 };
 const SnapshotPlan& Plan() {
   static const SnapshotPlan plan = [] {
@@ -159,7 +160,7 @@ const SnapshotPlan& Plan() {
       return p;
     }
     if (!std::strncmp(spec, "every:", 6)) {
-      p.every = static_cast<uint32_t>(std::strtoul(spec + 6, nullptr, 0));
+      p.every = static_cast<u32>(std::strtoul(spec + 6, nullptr, 0));
       return p;
     }
     for (const char* c = spec; *c;) {
@@ -167,7 +168,7 @@ const SnapshotPlan& Plan() {
       const unsigned long v = std::strtoul(c, &end, 0);
       if (end == c)
         break;
-      p.at.push_back(static_cast<uint32_t>(v));
+      p.at.push_back(static_cast<u32>(v));
       c = *end ? end + 1 : end;
     }
     return p;
@@ -175,7 +176,7 @@ const SnapshotPlan& Plan() {
   return plan;
 }
 
-bool SnapshotWanted(uint32_t draw_index) {
+bool SnapshotWanted(u32 draw_index) {
   const SnapshotPlan& p = Plan();
   if (p.all)
     return true;
@@ -217,7 +218,7 @@ class Line {
   // Guest addresses and register words are hex STRINGS: they survive every
   // JSON reader unchanged, and they grep against the rest of the module's
   // logs by eye.
-  Line& Hex(const char* key, uint64_t v) {
+  Line& Hex(const char* key, u64 v) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "\"0x%llx\"", (unsigned long long)v);
     return Raw(key, buf);
@@ -259,7 +260,7 @@ class Line {
     std::snprintf(buf, sizeof buf, "%.9g", v);
     return buf;
   }
-  static std::string HexText(uint64_t v) {
+  static std::string HexText(u64 v) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "\"0x%llx\"", (unsigned long long)v);
     return buf;
@@ -286,7 +287,7 @@ class Obj {
     std::snprintf(buf, sizeof buf, "%llu", v);
     return Raw(key, buf);
   }
-  Obj& Hex(const char* key, uint64_t v) { return Raw(key, Line::HexText(v)); }
+  Obj& Hex(const char* key, u64 v) { return Raw(key, Line::HexText(v)); }
   Obj& Num(const char* key, double v) { return Raw(key, Line::NumText(v)); }
   Obj& Bool(const char* key, bool v) { return Raw(key, v ? "true" : "false"); }
   Obj& Str(const char* key, const char* v) {
@@ -341,23 +342,23 @@ void Line::Emit() {
 
 struct MemStat {
   bool readable = false;
-  uint64_t hash = 0;
-  uint64_t nonzero = 0;
-  uint64_t sampled = 0;
+  u64 hash = 0;
+  u64 nonzero = 0;
+  u64 sampled = 0;
 };
 
-MemStat StatGuest(uint64_t base, uint64_t bytes) {
+MemStat StatGuest(u64 base, u64 bytes) {
   MemStat s;
   if (!base || !bytes)
     return s;
-  const uint64_t probe = std::min<uint64_t>(bytes, 1u << 20);
+  const u64 probe = std::min<u64>(bytes, 1u << 20);
   if (!gpu::IsReadableRange(base, probe))
     return s;
   s.readable = true;
-  const auto* p = reinterpret_cast<const uint8_t*>(base);
-  uint64_t h = 1469598103934665603ull;
-  const uint64_t step = probe > 65536 ? probe / 65536 : 1;
-  for (uint64_t i = 0; i < probe; i += step) {
+  const auto* p = reinterpret_cast<const u8*>(base);
+  u64 h = 1469598103934665603ull;
+  const u64 step = probe > 65536 ? probe / 65536 : 1;
+  for (u64 i = 0; i < probe; i += step) {
     h = (h ^ p[i]) * 1099511628211ull;
     s.nonzero += p[i] != 0;
     s.sampled++;
@@ -366,7 +367,7 @@ MemStat StatGuest(uint64_t base, uint64_t bytes) {
   return s;
 }
 
-std::string GuestObj(uint64_t base, uint64_t bytes) {
+std::string GuestObj(u64 base, u64 bytes) {
   const MemStat s = StatGuest(base, bytes);
   Obj o;
   o.Bool("readable", s.readable);
@@ -378,14 +379,14 @@ std::string GuestObj(uint64_t base, uint64_t bytes) {
   return o.Done();
 }
 
-std::string HexBytes(uint64_t base, uint32_t bytes) {
+std::string HexBytes(u64 base, u32 bytes) {
   if (!base || !bytes || !gpu::IsReadableRange(base, bytes))
     return "\"\"";
-  const auto* p = reinterpret_cast<const uint8_t*>(base);
+  const auto* p = reinterpret_cast<const u8*>(base);
   std::string s = "\"";
   s.reserve(bytes * 2 + 2);
   static const char* kHex = "0123456789abcdef";
-  for (uint32_t i = 0; i < bytes; i++) {
+  for (u32 i = 0; i < bytes; i++) {
     s += kHex[p[i] >> 4];
     s += kHex[p[i] & 0xF];
   }
@@ -396,14 +397,14 @@ std::string HexBytes(uint64_t base, uint32_t bytes) {
 // A stable fingerprint of a guest shader: the code from its entry point up to
 // s_endpgm. Guest shader ADDRESSES move between runs (titles stream shader
 // code), so the address alone cannot identify a program across captures.
-uint64_t GuestCodeHash(uint64_t addr, uint32_t* out_dwords) {
+u64 GuestCodeHash(u64 addr, u32* out_dwords) {
   if (out_dwords)
     *out_dwords = 0;
   if (!addr || !gpu::IsReadableRange(addr, 8))
     return 0;
-  const auto* code = reinterpret_cast<const uint32_t*>(addr);
-  uint64_t h = 1469598103934665603ull;
-  for (uint32_t i = 0; i < 8192; i++) {
+  const auto* code = reinterpret_cast<const u32*>(addr);
+  u64 h = 1469598103934665603ull;
+  for (u32 i = 0; i < 8192; i++) {
     if (!gpu::IsReadableRange(addr + i * 4ull, 4))
       break;
     h = (h ^ code[i]) * 1099511628211ull;
@@ -415,9 +416,9 @@ uint64_t GuestCodeHash(uint64_t addr, uint32_t* out_dwords) {
   return h;
 }
 
-uint64_t SpirvHash(const std::vector<uint32_t>& spirv) {
-  uint64_t h = 1469598103934665603ull;
-  for (uint32_t w : spirv)
+u64 SpirvHash(const std::vector<u32>& spirv) {
+  u64 h = 1469598103934665603ull;
+  for (u32 w : spirv)
     h = (h ^ w) * 1099511628211ull;
   return h;
 }
@@ -546,11 +547,11 @@ const char* LayoutName(VkImageLayout layout) {
   }
 }
 
-float HalfToFloat(uint16_t value) {
-  const uint32_t sign = static_cast<uint32_t>(value & 0x8000) << 16;
-  uint32_t exponent = (value >> 10) & 0x1F;
-  uint32_t mantissa = value & 0x3FF;
-  uint32_t bits;
+float HalfToFloat(u16 value) {
+  const u32 sign = static_cast<u32>(value & 0x8000) << 16;
+  u32 exponent = (value >> 10) & 0x1F;
+  u32 mantissa = value & 0x3FF;
+  u32 bits;
   if (!exponent) {
     if (!mantissa) {
       bits = sign;
@@ -560,7 +561,7 @@ float HalfToFloat(uint16_t value) {
         mantissa <<= 1;
         unbiased--;
       }
-      bits = sign | (static_cast<uint32_t>(unbiased + 127) << 23) |
+      bits = sign | (static_cast<u32>(unbiased + 127) << 23) |
              ((mantissa & 0x3FF) << 13);
     }
   } else if (exponent == 0x1F) {
@@ -573,9 +574,9 @@ float HalfToFloat(uint16_t value) {
   return out;
 }
 
-float PackedUfloat(uint32_t value, uint32_t mantissa_bits) {
-  const uint32_t mantissa = value & ((1u << mantissa_bits) - 1);
-  const uint32_t exponent = value >> mantissa_bits;
+float PackedUfloat(u32 value, u32 mantissa_bits) {
+  const u32 mantissa = value & ((1u << mantissa_bits) - 1);
+  const u32 exponent = value >> mantissa_bits;
   if (!exponent)
     return std::ldexp(static_cast<float>(mantissa),
                       -14 - static_cast<int>(mantissa_bits));
@@ -587,15 +588,15 @@ float PackedUfloat(uint32_t value, uint32_t mantissa_bits) {
 
 // True when the texel is a floating-point (HDR) encoding, i.e. the exposure
 // knob applies. Fills rgba with the raw channel values.
-bool DecodeTexel(const uint8_t* src,
+bool DecodeTexel(const u8* src,
                  VkFormat fmt,
                  float rgba[4],
                  bool* is_hdr) {
-  uint32_t packed;
+  u32 packed;
   *is_hdr = false;
   switch (fmt) {
     case VK_FORMAT_R16G16B16A16_SFLOAT: {
-      const auto* h = reinterpret_cast<const uint16_t*>(src);
+      const auto* h = reinterpret_cast<const u16*>(src);
       for (int i = 0; i < 4; i++)
         rgba[i] = HalfToFloat(h[i]);
       *is_hdr = true;
@@ -623,7 +624,7 @@ bool DecodeTexel(const uint8_t* src,
       *is_hdr = true;
       return true;
     case VK_FORMAT_R16G16_SFLOAT: {
-      const auto* h = reinterpret_cast<const uint16_t*>(src);
+      const auto* h = reinterpret_cast<const u16*>(src);
       rgba[0] = HalfToFloat(h[0]);
       rgba[1] = HalfToFloat(h[1]);
       rgba[2] = 0.0f;
@@ -632,7 +633,7 @@ bool DecodeTexel(const uint8_t* src,
       return true;
     }
     case VK_FORMAT_R16_SFLOAT: {
-      const auto* h = reinterpret_cast<const uint16_t*>(src);
+      const auto* h = reinterpret_cast<const u16*>(src);
       rgba[0] = rgba[1] = rgba[2] = HalfToFloat(h[0]);
       rgba[3] = 1.0f;
       *is_hdr = true;
@@ -647,7 +648,7 @@ bool DecodeTexel(const uint8_t* src,
       *is_hdr = true;
       return true;
     case VK_FORMAT_R16G16B16A16_UNORM: {
-      const auto* u = reinterpret_cast<const uint16_t*>(src);
+      const auto* u = reinterpret_cast<const u16*>(src);
       for (int i = 0; i < 4; i++)
         rgba[i] = u[i] / 65535.0f;
       return true;
@@ -670,7 +671,7 @@ bool DecodeTexel(const uint8_t* src,
   }
 }
 
-uint8_t ToByte(float v, bool hdr) {
+u8 ToByte(float v, bool hdr) {
   if (!std::isfinite(v))
     return hdr ? 255 : 0;  // a NaN in an HDR target must be visible, not black
   if (hdr) {
@@ -679,7 +680,7 @@ uint8_t ToByte(float v, bool hdr) {
     if (gamma > 0.0f && gamma != 1.0f)
       v = std::pow(std::clamp(v, 0.0f, 1.0f), 1.0f / gamma);
   }
-  return static_cast<uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+  return static_cast<u8>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
 }
 
 // --- image readback --------------------------------------------------------
@@ -689,12 +690,12 @@ uint8_t ToByte(float v, bool hdr) {
 // captured frame runs it, so the stall it costs buys a complete answer.
 bool ReadImage(VkImage image,
                VkImageAspectFlags aspect,
-               uint32_t w,
-               uint32_t h,
-               uint32_t texel_bytes,
+               u32 w,
+               u32 h,
+               u32 texel_bytes,
                VkImageLayout layout,
                VkImageLayout* new_layout,
-               std::vector<uint8_t>& out) {
+               std::vector<u8>& out) {
   if (!image || !w || !h)
     return false;
   const VkDeviceSize bytes = VkDeviceSize(w) * h * texel_bytes;
@@ -781,9 +782,9 @@ struct PixelStats {
   double min[4] = {1e30, 1e30, 1e30, 1e30};
   double max[4] = {-1e30, -1e30, -1e30, -1e30};
   double mean[4] = {};
-  uint64_t nonzero = 0;
-  uint64_t nan = 0;
-  uint64_t count = 0;
+  u64 nonzero = 0;
+  u64 nan = 0;
+  u64 count = 0;
 };
 
 std::string StatsObj(const PixelStats& s) {
@@ -804,18 +805,18 @@ std::string StatsObj(const PixelStats& s) {
 }
 
 bool WriteImagePng(const std::string& path,
-                   const uint8_t* src,
-                   uint32_t w,
-                   uint32_t h,
+                   const u8* src,
+                   u32 w,
+                   u32 h,
                    VkFormat fmt,
                    PixelStats* stats) {
-  const uint32_t texel = FormatBytes(fmt);
-  std::vector<uint8_t> rgba(size_t(w) * h * 4);
-  for (uint64_t i = 0; i < uint64_t(w) * h; i++) {
+  const u32 texel = FormatBytes(fmt);
+  std::vector<u8> rgba(size_t(w) * h * 4);
+  for (u64 i = 0; i < u64(w) * h; i++) {
     float v[4] = {0, 0, 0, 1};
     bool hdr = false;
     if (!DecodeTexel(src + i * texel, fmt, v, &hdr)) {
-      uint8_t bgra[4];
+      u8 bgra[4];
       ReadbackPixelBgra(src + i * texel, fmt, bgra);
       v[0] = bgra[2] / 255.0f;
       v[1] = bgra[1] / 255.0f;
@@ -837,7 +838,7 @@ bool WriteImagePng(const std::string& path,
       }
       stats->nonzero += any;
     }
-    uint8_t* dst = rgba.data() + i * 4;
+    u8* dst = rgba.data() + i * 4;
     for (int c = 0; c < 4; c++)
       dst[c] = ToByte(v[c], hdr && c < 3);
     dst[3] = ToByte(v[3], false);
@@ -849,14 +850,14 @@ bool WriteImagePng(const std::string& path,
 // reversed-Z target lives in [0.996, 1]), so it is normalised against its own
 // extent and the extent is recorded.
 bool WriteDepthPng(const std::string& path,
-                   const uint8_t* src,
-                   uint32_t w,
-                   uint32_t h,
+                   const u8* src,
+                   u32 w,
+                   u32 h,
                    PixelStats* stats) {
   const auto* d = reinterpret_cast<const float*>(src);
-  const uint64_t n = uint64_t(w) * h;
+  const u64 n = u64(w) * h;
   float lo = 1e30f, hi = -1e30f;
-  for (uint64_t i = 0; i < n; i++) {
+  for (u64 i = 0; i < n; i++) {
     if (!std::isfinite(d[i])) {
       if (stats)
         stats->nan++;
@@ -871,7 +872,7 @@ bool WriteDepthPng(const std::string& path,
       stats->min[c] = lo;
       stats->max[c] = hi;
     }
-    for (uint64_t i = 0; i < n; i++) {
+    for (u64 i = 0; i < n; i++) {
       if (std::isfinite(d[i])) {
         stats->mean[0] += d[i];
         stats->nonzero += d[i] != 0.0f;
@@ -879,11 +880,11 @@ bool WriteDepthPng(const std::string& path,
     }
   }
   const float span = (hi > lo) ? (hi - lo) : 1.0f;
-  std::vector<uint8_t> rgba(size_t(n) * 4);
-  for (uint64_t i = 0; i < n; i++) {
+  std::vector<u8> rgba(size_t(n) * 4);
+  for (u64 i = 0; i < n; i++) {
     const float t = std::isfinite(d[i]) ? (d[i] - lo) / span : 0.0f;
-    const uint8_t g =
-        static_cast<uint8_t>(std::lround(std::clamp(t, 0.0f, 1.0f) * 255.0f));
+    const u8 g =
+        static_cast<u8>(std::lround(std::clamp(t, 0.0f, 1.0f) * 255.0f));
     rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g;
     rgba[i * 4 + 3] = 255;
   }
@@ -891,8 +892,8 @@ bool WriteDepthPng(const std::string& path,
 }
 
 void WriteRawSidecar(const std::string& path,
-                     const uint8_t* src,
-                     uint64_t bytes) {
+                     const u8* src,
+                     u64 bytes) {
   if (!kCaptureRaw)
     return;
   if (std::FILE* f = std::fopen((path + ".raw").c_str(), "wb")) {
@@ -903,26 +904,26 @@ void WriteRawSidecar(const std::string& path,
 
 // --- guest texture decode --------------------------------------------------
 
-void Bc1Colors(const uint8_t* block, uint8_t out[4][4], bool punchthrough) {
-  uint16_t c0 = uint16_t(block[0] | (block[1] << 8));
-  uint16_t c1 = uint16_t(block[2] | (block[3] << 8));
-  auto expand = [](uint16_t c, uint8_t* p) {
-    p[0] = uint8_t((((c >> 11) & 0x1F) * 255 + 15) / 31);
-    p[1] = uint8_t((((c >> 5) & 0x3F) * 255 + 31) / 63);
-    p[2] = uint8_t(((c & 0x1F) * 255 + 15) / 31);
+void Bc1Colors(const u8* block, u8 out[4][4], bool punchthrough) {
+  u16 c0 = u16(block[0] | (block[1] << 8));
+  u16 c1 = u16(block[2] | (block[3] << 8));
+  auto expand = [](u16 c, u8* p) {
+    p[0] = u8((((c >> 11) & 0x1F) * 255 + 15) / 31);
+    p[1] = u8((((c >> 5) & 0x3F) * 255 + 31) / 63);
+    p[2] = u8(((c & 0x1F) * 255 + 15) / 31);
     p[3] = 255;
   };
   expand(c0, out[0]);
   expand(c1, out[1]);
   if (!punchthrough || c0 > c1) {
     for (int i = 0; i < 3; i++) {
-      out[2][i] = uint8_t((2 * out[0][i] + out[1][i]) / 3);
-      out[3][i] = uint8_t((out[0][i] + 2 * out[1][i]) / 3);
+      out[2][i] = u8((2 * out[0][i] + out[1][i]) / 3);
+      out[3][i] = u8((out[0][i] + 2 * out[1][i]) / 3);
     }
     out[2][3] = out[3][3] = 255;
   } else {
     for (int i = 0; i < 3; i++) {
-      out[2][i] = uint8_t((out[0][i] + out[1][i]) / 2);
+      out[2][i] = u8((out[0][i] + out[1][i]) / 2);
       out[3][i] = 0;
     }
     out[2][3] = 255;
@@ -930,57 +931,57 @@ void Bc1Colors(const uint8_t* block, uint8_t out[4][4], bool punchthrough) {
   }
 }
 
-void Bc4Alpha(const uint8_t* block, uint8_t out[16]) {
-  uint8_t a[8];
+void Bc4Alpha(const u8* block, u8 out[16]) {
+  u8 a[8];
   a[0] = block[0];
   a[1] = block[1];
   if (a[0] > a[1]) {
     for (int i = 1; i < 7; i++)
-      a[i + 1] = uint8_t(((7 - i) * a[0] + i * a[1]) / 7);
+      a[i + 1] = u8(((7 - i) * a[0] + i * a[1]) / 7);
   } else {
     for (int i = 1; i < 5; i++)
-      a[i + 1] = uint8_t(((5 - i) * a[0] + i * a[1]) / 5);
+      a[i + 1] = u8(((5 - i) * a[0] + i * a[1]) / 5);
     a[6] = 0;
     a[7] = 255;
   }
-  uint64_t bits = 0;
+  u64 bits = 0;
   for (int i = 0; i < 6; i++)
-    bits |= uint64_t(block[2 + i]) << (8 * i);
+    bits |= u64(block[2 + i]) << (8 * i);
   for (int i = 0; i < 16; i++)
     out[i] = a[(bits >> (3 * i)) & 7];
 }
 
 // Decode one 4x4 block into rgba (row-major, 16 texels). Returns false for a
 // format this does not decode (recorded as a skip reason, never guessed at).
-bool DecodeBlock(uint32_t dfmt, const uint8_t* block, uint8_t rgba[16][4]) {
+bool DecodeBlock(u32 dfmt, const u8* block, u8 rgba[16][4]) {
   switch (dfmt) {
     case 35: {  // BC1
-      uint8_t palette[4][4];
+      u8 palette[4][4];
       Bc1Colors(block, palette, true);
-      uint32_t idx;
+      u32 idx;
       std::memcpy(&idx, block + 4, 4);
       for (int i = 0; i < 16; i++)
         std::memcpy(rgba[i], palette[(idx >> (2 * i)) & 3], 4);
       return true;
     }
     case 36: {  // BC2: 4-bit explicit alpha + BC1 colour
-      uint8_t palette[4][4];
+      u8 palette[4][4];
       Bc1Colors(block + 8, palette, false);
-      uint32_t idx;
+      u32 idx;
       std::memcpy(&idx, block + 12, 4);
       for (int i = 0; i < 16; i++) {
         std::memcpy(rgba[i], palette[(idx >> (2 * i)) & 3], 4);
-        const uint8_t nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
-        rgba[i][3] = uint8_t(nibble * 17);
+        const u8 nibble = (block[i / 2] >> ((i & 1) * 4)) & 0xF;
+        rgba[i][3] = u8(nibble * 17);
       }
       return true;
     }
     case 37: {  // BC3: BC4 alpha + BC1 colour
-      uint8_t alpha[16];
+      u8 alpha[16];
       Bc4Alpha(block, alpha);
-      uint8_t palette[4][4];
+      u8 palette[4][4];
       Bc1Colors(block + 8, palette, false);
-      uint32_t idx;
+      u32 idx;
       std::memcpy(&idx, block + 12, 4);
       for (int i = 0; i < 16; i++) {
         std::memcpy(rgba[i], palette[(idx >> (2 * i)) & 3], 4);
@@ -989,7 +990,7 @@ bool DecodeBlock(uint32_t dfmt, const uint8_t* block, uint8_t rgba[16][4]) {
       return true;
     }
     case 38: {  // BC4: single channel
-      uint8_t red[16];
+      u8 red[16];
       Bc4Alpha(block, red);
       for (int i = 0; i < 16; i++) {
         rgba[i][0] = rgba[i][1] = rgba[i][2] = red[i];
@@ -998,7 +999,7 @@ bool DecodeBlock(uint32_t dfmt, const uint8_t* block, uint8_t rgba[16][4]) {
       return true;
     }
     case 39: {  // BC5: two BC4 channels
-      uint8_t red[16], green[16];
+      u8 red[16], green[16];
       Bc4Alpha(block, red);
       Bc4Alpha(block + 8, green);
       for (int i = 0; i < 16; i++) {
@@ -1015,11 +1016,11 @@ bool DecodeBlock(uint32_t dfmt, const uint8_t* block, uint8_t rgba[16][4]) {
 }
 
 // One linear (already de-tiled) element -> RGBA8.
-bool DecodeGuestTexel(uint32_t dfmt,
-                      uint32_t nfmt,
-                      const uint8_t* src,
-                      uint8_t out[4]) {
-  uint32_t packed;
+bool DecodeGuestTexel(u32 dfmt,
+                      u32 nfmt,
+                      const u8* src,
+                      u8 out[4]) {
+  u32 packed;
   switch (dfmt) {
     case 1:  // 8
       out[0] = out[1] = out[2] = src[0];
@@ -1028,7 +1029,7 @@ bool DecodeGuestTexel(uint32_t dfmt,
     case 2:  // 16
       if (nfmt == 7) {
         out[0] = out[1] = out[2] =
-            ToByte(HalfToFloat(uint16_t(src[0] | (src[1] << 8))), true);
+            ToByte(HalfToFloat(u16(src[0] | (src[1] << 8))), true);
       } else {
         out[0] = out[1] = out[2] = src[1];
       }
@@ -1056,10 +1057,10 @@ bool DecodeGuestTexel(uint32_t dfmt,
     case 8:  // 2_10_10_10 (ARGB)
     case 9:  // 2_10_10_10 (ABGR)
       std::memcpy(&packed, src, 4);
-      out[dfmt == 8 ? 2 : 0] = uint8_t(((packed & 0x3FF) * 255) / 1023);
-      out[1] = uint8_t((((packed >> 10) & 0x3FF) * 255) / 1023);
-      out[dfmt == 8 ? 0 : 2] = uint8_t((((packed >> 20) & 0x3FF) * 255) / 1023);
-      out[3] = uint8_t(((packed >> 30) & 3) * 85);
+      out[dfmt == 8 ? 2 : 0] = u8(((packed & 0x3FF) * 255) / 1023);
+      out[1] = u8((((packed >> 10) & 0x3FF) * 255) / 1023);
+      out[dfmt == 8 ? 0 : 2] = u8((((packed >> 20) & 0x3FF) * 255) / 1023);
+      out[3] = u8(((packed >> 30) & 3) * 85);
       return true;
     case 4: {  // 32 -- a single-channel 32-bit texel, which is how a title
                // hands a resolved DEPTH plane to a later pass. Without this the
@@ -1080,14 +1081,14 @@ bool DecodeGuestTexel(uint32_t dfmt,
         out[0] = out[1] = out[2] = ToByte(f * kR32Scale, true);
       } else {
         std::memcpy(&packed, src, 4);
-        out[0] = out[1] = out[2] = uint8_t(packed >> 24);
+        out[0] = out[1] = out[2] = u8(packed >> 24);
       }
       out[3] = 255;
       return true;
     }
     case 5:  // 16_16
       if (nfmt == 7) {
-        const auto* h = reinterpret_cast<const uint16_t*>(src);
+        const auto* h = reinterpret_cast<const u16*>(src);
         out[0] = ToByte(HalfToFloat(h[0]), true);
         out[1] = ToByte(HalfToFloat(h[1]), true);
       } else {
@@ -1098,10 +1099,10 @@ bool DecodeGuestTexel(uint32_t dfmt,
       out[3] = 255;
       return true;
     case 12: {  // 16_16_16_16
-      const auto* h = reinterpret_cast<const uint16_t*>(src);
+      const auto* h = reinterpret_cast<const u16*>(src);
       for (int i = 0; i < 4; i++)
         out[i] =
-            nfmt == 7 ? ToByte(HalfToFloat(h[i]), i < 3) : uint8_t(h[i] >> 8);
+            nfmt == 7 ? ToByte(HalfToFloat(h[i]), i < 3) : u8(h[i] >> 8);
       return true;
     }
     case 14: {  // 32_32_32_32 float
@@ -1123,10 +1124,10 @@ bool DumpGuestTexture(const TexKey& t,
                       const char** reason) {
   *reason = "";
   const bool compressed = GuestFormatBlockCompressed(t.dfmt);
-  const uint32_t elem = GuestFormatElemBytes(t.dfmt);
-  const uint32_t ew = compressed ? (t.w + 3) / 4 : t.w;
-  const uint32_t eh = compressed ? (t.h + 3) / 4 : t.h;
-  const uint32_t epitch = compressed ? ((t.pitch ? t.pitch : t.w) + 3) / 4
+  const u32 elem = GuestFormatElemBytes(t.dfmt);
+  const u32 ew = compressed ? (t.w + 3) / 4 : t.w;
+  const u32 eh = compressed ? (t.h + 3) / 4 : t.h;
+  const u32 epitch = compressed ? ((t.pitch ? t.pitch : t.w) + 3) / 4
                                      : (t.pitch ? t.pitch : t.w);
   if (!t.w || !t.h) {
     *reason = "empty";
@@ -1143,39 +1144,39 @@ bool DumpGuestTexture(const TexKey& t,
     *reason = "unreadable";
     return false;
   }
-  std::vector<uint8_t> linear(uint64_t(ew) * eh * elem);
+  std::vector<u8> linear(u64(ew) * eh * elem);
   if (!gcn::DetileTextureMip32(reinterpret_cast<const void*>(t.base),
                                linear.data(), layout, 0, 0)) {
     *reason = "detile";
     return false;
   }
-  std::vector<uint8_t> rgba(uint64_t(t.w) * t.h * 4, 0);
+  std::vector<u8> rgba(u64(t.w) * t.h * 4, 0);
   if (compressed) {
-    for (uint32_t by = 0; by < eh; by++) {
-      for (uint32_t bx = 0; bx < ew; bx++) {
-        uint8_t block[16][4];
+    for (u32 by = 0; by < eh; by++) {
+      for (u32 bx = 0; bx < ew; bx++) {
+        u8 block[16][4];
         if (!DecodeBlock(t.dfmt,
-                         linear.data() + (uint64_t(by) * ew + bx) * elem,
+                         linear.data() + (u64(by) * ew + bx) * elem,
                          block)) {
           *reason = "format";
           return false;
         }
-        for (uint32_t y = 0; y < 4; y++) {
-          for (uint32_t x = 0; x < 4; x++) {
-            const uint32_t px = bx * 4 + x, py = by * 4 + y;
+        for (u32 y = 0; y < 4; y++) {
+          for (u32 x = 0; x < 4; x++) {
+            const u32 px = bx * 4 + x, py = by * 4 + y;
             if (px >= t.w || py >= t.h)
               continue;
-            std::memcpy(&rgba[(uint64_t(py) * t.w + px) * 4], block[y * 4 + x],
+            std::memcpy(&rgba[(u64(py) * t.w + px) * 4], block[y * 4 + x],
                         4);
           }
         }
       }
     }
   } else {
-    for (uint64_t i = 0; i < uint64_t(t.w) * t.h; i++) {
-      const uint32_t x = uint32_t(i % t.w), y = uint32_t(i / t.w);
+    for (u64 i = 0; i < u64(t.w) * t.h; i++) {
+      const u32 x = u32(i % t.w), y = u32(i / t.w);
       if (!DecodeGuestTexel(t.dfmt, t.nfmt,
-                            linear.data() + (uint64_t(y) * ew + x) * elem,
+                            linear.data() + (u64(y) * ew + x) * elem,
                             &rgba[i * 4])) {
         *reason = "format";
         return false;
@@ -1187,10 +1188,10 @@ bool DumpGuestTexture(const TexKey& t,
 
 // --- draw serialization ----------------------------------------------------
 
-std::string ShaderObj(uint64_t addr, const std::vector<uint32_t>* spirv) {
+std::string ShaderObj(u64 addr, const std::vector<u32>* spirv) {
   Obj o;
   o.Hex("addr", addr);
-  uint32_t dwords = 0;
+  u32 dwords = 0;
   o.Hex("guest_hash", GuestCodeHash(addr, &dwords));
   o.U("guest_dwords", dwords);
   if (spirv && !spirv->empty()) {
@@ -1200,7 +1201,7 @@ std::string ShaderObj(uint64_t addr, const std::vector<uint32_t>* spirv) {
   return o.Done();
 }
 
-std::string TexObj(uint32_t index,
+std::string TexObj(u32 index,
                    const rhi::DrawInfo::DrawTex& t,
                    const DrawBindings* b) {
   Obj o;
@@ -1235,12 +1236,12 @@ std::string TexObj(uint32_t index,
   o.Bool("null_descriptor", t.null_descriptor);
   o.Bool("sampler_valid", t.sampler_valid);
   Arr sampler;
-  for (uint32_t i = 0; i < 4; i++)
+  for (u32 i = 0; i < 4; i++)
     sampler.Add(Line::HexText(t.sampler[i]));
   o.Raw("sampler", sampler.Done());
   // How the binding actually resolved -- the whole point of a capture.
   const char* how = "unknown";
-  uint64_t resolved = 0;
+  u64 resolved = 0;
   if (b && index < b->tex_count) {
     if (b->tex_storage && b->tex_storage[index]) {
       how = "storage";
@@ -1262,10 +1263,10 @@ std::string TexObj(uint32_t index,
   }
   o.Str("resolved", how);
   o.Hex("resolved_base", resolved);
-  const uint32_t elem = GuestFormatElemBytes(t.dfmt);
+  const u32 elem = GuestFormatElemBytes(t.dfmt);
   const bool compressed = GuestFormatBlockCompressed(t.dfmt);
-  const uint64_t stride = t.pitch ? t.pitch : t.w;
-  const uint64_t bytes = compressed
+  const u64 stride = t.pitch ? t.pitch : t.w;
+  const u64 bytes = compressed
                              ? ((stride + 3) / 4) * ((t.h + 3ull) / 4) * elem
                              : stride * t.h * elem;
   o.Raw("guest", GuestObj(t.base, bytes ? bytes : 4));
@@ -1294,19 +1295,19 @@ void NoteTexture(const rhi::DrawInfo::DrawTex& t) {
 
 void QueueSnapshot(VkImage image,
                    VkImageAspectFlags aspect,
-                   uint32_t w,
-                   uint32_t h,
+                   u32 w,
+                   u32 h,
                    VkFormat fmt,
-                   uint64_t base,
+                   u64 base,
                    bool depth,
-                   uint32_t at_draw,
+                   u32 at_draw,
                    VkImageLayout layout,
                    VkImageLayout* layout_out) {
-  const uint32_t texel = depth ? 4 : FormatBytes(fmt);
+  const u32 texel = depth ? 4 : FormatBytes(fmt);
   if (!image || !w || !h || !texel)
     return;
   Snapshot s;
-  s.bytes = uint64_t(w) * h * texel;
+  s.bytes = u64(w) * h * texel;
   s.w = w;
   s.h = h;
   s.fmt = fmt;
@@ -1357,16 +1358,16 @@ void QueueSnapshot(VkImage image,
 // cannot be recorded inside dynamic rendering, so the region is closed first;
 // the next draw reopens it with loadOp LOAD, which is what it would have done
 // anyway for an already-rendered target.
-void SnapshotOpenRegion(uint32_t draw_index) {
+void SnapshotOpenRegion(u32 draw_index) {
   if (!g_region.open)
     return;
-  uint64_t mrt[8];
-  const uint32_t n = std::min(g_region.cur_mrt_count, 8u);
-  for (uint32_t i = 0; i < n; i++)
+  u64 mrt[8];
+  const u32 n = std::min(g_region.cur_mrt_count, 8u);
+  for (u32 i = 0; i < n; i++)
     mrt[i] = g_region.cur_mrt[i];
-  const uint64_t depth_base = g_region.cur_depth;
+  const u64 depth_base = g_region.cur_depth;
   EndRegion();
-  for (uint32_t i = 0; i < n; i++) {
+  for (u32 i = 0; i < n; i++) {
     auto it = g_rts.find(mrt[i]);
     if (it == g_rts.end())
       continue;
@@ -1392,7 +1393,7 @@ void DrainSnapshots() {
                   g_prefix.c_str(), s.at_draw, s.depth ? "depth" : "rt",
                   (unsigned long long)s.base, s.w, s.h);
     PixelStats stats;
-    const auto* bytes = static_cast<const uint8_t*>(s.map);
+    const auto* bytes = static_cast<const u8*>(s.map);
     const bool ok = s.depth
                         ? WriteDepthPng(name, bytes, s.w, s.h, &stats)
                         : WriteImagePng(name, bytes, s.w, s.h, s.fmt, &stats);
@@ -1424,7 +1425,7 @@ void DumpFrameResources() {
       RTarget& rt = kv.second;
       if (!rt.used_this_frame && !rt.ever_rendered)
         continue;
-      std::vector<uint8_t> bytes;
+      std::vector<u8> bytes;
       if (!ReadImage(rt.image, VK_IMAGE_ASPECT_COLOR_BIT, rt.w, rt.h,
                      FormatBytes(rt.fmt), rt.layout, &rt.layout, bytes))
         continue;
@@ -1462,7 +1463,7 @@ void DumpFrameResources() {
       DepthTarget& dt = kv.second;
       if (!dt.used_this_frame)
         continue;
-      std::vector<uint8_t> bytes;
+      std::vector<u8> bytes;
       if (!ReadImage(dt.image, VK_IMAGE_ASPECT_DEPTH_BIT, dt.w, dt.h, 4,
                      dt.layout, &dt.layout, bytes))
         continue;
@@ -1536,7 +1537,7 @@ ValidationCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
   // The active label stack is what names the guest draw: vk_debug opens
   // "frame N" / "region rt=..." / "recomp vs=... ps=..." around every command.
   std::string labels;
-  for (uint32_t i = 0; i < data->cmdBufLabelCount; i++) {
+  for (u32 i = 0; i < data->cmdBufLabelCount; i++) {
     if (!labels.empty())
       labels += " > ";
     labels += data->pCmdBufLabels[i].pLabelName;
@@ -1615,13 +1616,13 @@ bool NamesWanted() {
   return want;
 }
 
-void RegisterObjectName(VkObjectType, uint64_t handle, const char* name) {
+void RegisterObjectName(VkObjectType, u64 handle, const char* name) {
   if (!handle || !name)
     return;
   NameTable()[handle] = name;
 }
 
-const char* ObjectName(uint64_t handle) {
+const char* ObjectName(u64 handle) {
   auto it = NameTable().find(handle);
   return it == NameTable().end() ? "" : it->second.c_str();
 }
@@ -1641,7 +1642,7 @@ void FrameBegin(int frame_num) {
     if (kCaptureAfter.get() > 0.f &&
         double(NowNs() - g_start_ns) / 1e9 >= double(kCaptureAfter.get()))
       trigger = true;
-    if (kCaptureBusy.get() > 0 && g_frame.draws >= uint32_t(kCaptureBusy.get()))
+    if (kCaptureBusy.get() > 0 && g_frame.draws >= u32(kCaptureBusy.get()))
       trigger = true;
     if (!trigger)
       return;
@@ -1689,7 +1690,7 @@ void FrameBegin(int frame_num) {
   f.Emit();
 }
 
-void FrameEnd(uint64_t scanout_base) {
+void FrameEnd(u64 scanout_base) {
   if (!g_recording)
     return;
   DrainSnapshots();
@@ -1720,7 +1721,7 @@ void RegionBegin(const RegionInfo& region) {
   if (!g_recording)
     return;
   Arr colors;
-  for (uint32_t i = 0; i < region.mrt_count && i < 8; i++) {
+  for (u32 i = 0; i < region.mrt_count && i < 8; i++) {
     Obj o;
     o.U("i", i);
     o.Hex("base", region.mrt_base[i]);
@@ -1762,10 +1763,10 @@ void RecordDraw(const rhi::DrawInfo& d,
                 const DrawBindings* b) {
   if (!g_recording)
     return;
-  const uint32_t index = g_draw_seq++;
+  const u32 index = g_draw_seq++;
 
   Arr rts;
-  for (uint32_t i = 0; i < d.mrt_count && i < 8; i++) {
+  for (u32 i = 0; i < d.mrt_count && i < 8; i++) {
     Obj o;
     o.U("i", i);
     o.Hex("base", d.mrt_base[i]);
@@ -1781,19 +1782,19 @@ void RecordDraw(const rhi::DrawInfo& d,
   }
 
   Arr vbufs;
-  for (uint32_t i = 0; i < d.num_vbufs && i < 8; i++) {
+  for (u32 i = 0; i < d.num_vbufs && i < 8; i++) {
     Obj o;
     o.U("i", i);
-    o.Hex("base", reinterpret_cast<uint64_t>(d.vbufs[i].data));
+    o.Hex("base", reinterpret_cast<u64>(d.vbufs[i].data));
     o.U("stride", d.vbufs[i].stride);
     o.U("records", d.vbufs[i].num_records);
     o.Raw("guest",
-          GuestObj(reinterpret_cast<uint64_t>(d.vbufs[i].data),
-                   uint64_t(d.vbufs[i].stride) * d.vbufs[i].num_records));
+          GuestObj(reinterpret_cast<u64>(d.vbufs[i].data),
+                   u64(d.vbufs[i].stride) * d.vbufs[i].num_records));
     vbufs.Add(o);
   }
   Arr vattrs;
-  for (uint32_t i = 0; i < d.num_vattrs && i < 8; i++) {
+  for (u32 i = 0; i < d.num_vattrs && i < 8; i++) {
     Obj o;
     o.U("location", d.vattrs[i].location);
     o.U("binding", d.vattrs[i].binding);
@@ -1807,16 +1808,16 @@ void RecordDraw(const rhi::DrawInfo& d,
   }
 
   Arr texs;
-  const uint32_t ntex = std::min<uint32_t>(d.num_texs, 24);
-  for (uint32_t i = 0; i < ntex; i++) {
+  const u32 ntex = std::min<u32>(d.num_texs, 24);
+  for (u32 i = 0; i < ntex; i++) {
     texs.Add(TexObj(i, d.texs[i], b));
     NoteTexture(d.texs[i]);
   }
 
   Arr cbufs;
-  const uint32_t cbuf_cap =
-      kCaptureCbufBytes.get() < 0 ? 0 : uint32_t(kCaptureCbufBytes.get());
-  for (uint32_t i = 0; i < d.num_cbufs && i < 16; i++) {
+  const u32 cbuf_cap =
+      kCaptureCbufBytes.get() < 0 ? 0 : u32(kCaptureCbufBytes.get());
+  for (u32 i = 0; i < d.num_cbufs && i < 16; i++) {
     if (!d.cbufs[i].base && !d.cbufs[i].size)
       continue;
     Obj o;
@@ -1825,13 +1826,13 @@ void RecordDraw(const rhi::DrawInfo& d,
     o.U("size", d.cbufs[i].size);
     o.Bool("staged", b ? ((b->cbuf_mask >> i) & 1) != 0 : false);
     o.Raw("guest", GuestObj(d.cbufs[i].base, d.cbufs[i].size));
-    const uint32_t bytes =
+    const u32 bytes =
         cbuf_cap ? std::min(cbuf_cap, d.cbufs[i].size) : d.cbufs[i].size;
     o.Raw("data", HexBytes(d.cbufs[i].base, bytes));
     cbufs.Add(o);
   }
   Arr bufs;
-  for (uint32_t i = 0; i < d.num_bufs && i < rhi::DrawInfo::kMaxBuffers; i++) {
+  for (u32 i = 0; i < d.num_bufs && i < rhi::DrawInfo::kMaxBuffers; i++) {
     if (!d.bufs[i].base && !d.bufs[i].size)
       continue;
     Obj o;
@@ -1881,7 +1882,7 @@ void RecordDraw(const rhi::DrawInfo& d,
   viewport.Num("z_offset", d.viewport_z_offset);
 
   Arr vs_ud, ps_ud;
-  for (uint32_t i = 0; i < 16; i++) {
+  for (u32 i = 0; i < 16; i++) {
     vs_ud.Add(Line::HexText(d.vs_user_data[i]));
     ps_ud.Add(Line::HexText(d.ps_user_data[i]));
   }
@@ -1909,7 +1910,7 @@ void RecordDraw(const rhi::DrawInfo& d,
       .U("prim_type", d.prim_type)
       .Bool("clear_rect", d.is_clear_rect)
       .Bool("indexed", d.index_data != nullptr)
-      .Hex("index_base", reinterpret_cast<uint64_t>(d.index_data))
+      .Hex("index_base", reinterpret_cast<u64>(d.index_data))
       .U("index_count", d.index_count)
       .U("index_type", d.index_type)
       .U("vertex_count", d.vertex_count)
@@ -1942,7 +1943,7 @@ void RecordDispatch(const rhi::ComputeInfo& ci) {
   if (!g_recording)
     return;
   Arr res;
-  for (uint32_t i = 0; i < ci.num_res && i < rhi::ComputeInfo::kMaxResources;
+  for (u32 i = 0; i < ci.num_res && i < rhi::ComputeInfo::kMaxResources;
        i++) {
     const auto& r = ci.res[i];
     Obj o;
@@ -1966,10 +1967,10 @@ void RecordDispatch(const rhi::ComputeInfo& ci) {
     res.Add(o);
   }
   Arr ud;
-  for (uint32_t i = 0; i < 16; i++)
+  for (u32 i = 0; i < 16; i++)
     ud.Add(Line::HexText(ci.user_data[i]));
   Arr groups;
-  for (uint32_t i = 0; i < 3; i++)
+  for (u32 i = 0; i < 3; i++)
     groups.Add(Line::IntText(ci.groups[i]));
   Line l("dispatch");
   l.U("seq", g_seq++)
@@ -1992,7 +1993,7 @@ void RecordBarrier(const char* aspect,
     return;
   // Name the image after the guest resource it holds. The RT and depth caches
   // are the authority; anything else falls back to the debug-utils name.
-  std::string name = ObjectName(reinterpret_cast<uint64_t>(image));
+  std::string name = ObjectName(reinterpret_cast<u64>(image));
   if (name.empty()) {
     for (const auto& kv : g_rts)
       if (kv.second.image == image) {
@@ -2007,7 +2008,7 @@ void RecordBarrier(const char* aspect,
   l.U("seq", g_seq++)
       .Int("after_draw", int(g_draw_seq))
       .Str("aspect", aspect)
-      .Hex("image", reinterpret_cast<uint64_t>(image))
+      .Hex("image", reinterpret_cast<u64>(image))
       .Str("resource", name.c_str())
       .Str("from", LayoutName(from))
       .Str("to", LayoutName(to))
@@ -2016,7 +2017,7 @@ void RecordBarrier(const char* aspect,
   l.Emit();
 }
 
-void RecordMemoryFill(uint64_t base, uint64_t bytes, uint32_t value) {
+void RecordMemoryFill(u64 base, u64 bytes, u32 value) {
   if (!g_recording)
     return;
   Line l("memory_fill");

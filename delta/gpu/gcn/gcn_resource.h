@@ -14,6 +14,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -28,37 +29,37 @@ struct ShaderBuffer;
 
 // A decoded vertex-buffer resource (GCN V#, 4 dwords).
 struct VBuffer {
-  uint64_t base = 0;         // guest address of the vertex data
-  uint32_t stride = 0;       // bytes per vertex
-  uint32_t num_records = 0;  // vertex count
-  uint32_t dfmt = 0;         // data format
-  uint32_t nfmt = 0;         // numeric format
+  u64 base = 0;         // guest address of the vertex data
+  u32 stride = 0;       // bytes per vertex
+  u32 num_records = 0;  // vertex count
+  u32 dfmt = 0;         // data format
+  u32 nfmt = 0;         // numeric format
 };
 
 // A decoded image resource (GCN T#, 8 dwords).
 struct TImage {
-  uint64_t base = 0;
-  uint32_t width = 0;
-  uint32_t height = 0;
-  uint32_t pitch = 0;        // surface pitch in pixels (T#.pitch+1)
-  uint32_t depth = 1;        // slices of a volume image (T#.depth+1 for 3D)
-  uint32_t layers = 1;       // physical array layers (T#.depth+1 for 2D arrays)
-  uint32_t base_array = 0;   // first layer exposed by this descriptor view
-  uint32_t view_layers = 1;  // number of layers exposed by this descriptor view
-  uint32_t mip_levels = 1;   // physical levels in storage (LAST_LEVEL + 1)
-  uint32_t base_mip = 0;     // first level exposed by this descriptor view
-  uint32_t view_mips = 1;    // levels exposed by this descriptor view
-  uint32_t min_lod = 0;      // T# MIN_LOD clamp in U4.8 fixed-point
-  uint32_t dfmt = 0;
-  uint32_t nfmt = 0;
-  uint32_t type = 0;        // SQ_RSRC_IMG_* (8/12 = 1D, 9 = 2D, 10 = 3D, 13 = 2D array)
-  uint32_t tiling_idx = 0;  // 8/31 = linear; everything else is tiled
+  u64 base = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 pitch = 0;        // surface pitch in pixels (T#.pitch+1)
+  u32 depth = 1;        // slices of a volume image (T#.depth+1 for 3D)
+  u32 layers = 1;       // physical array layers (T#.depth+1 for 2D arrays)
+  u32 base_array = 0;   // first layer exposed by this descriptor view
+  u32 view_layers = 1;  // number of layers exposed by this descriptor view
+  u32 mip_levels = 1;   // physical levels in storage (LAST_LEVEL + 1)
+  u32 base_mip = 0;     // first level exposed by this descriptor view
+  u32 view_mips = 1;    // levels exposed by this descriptor view
+  u32 min_lod = 0;      // T# MIN_LOD clamp in U4.8 fixed-point
+  u32 dfmt = 0;
+  u32 nfmt = 0;
+  u32 type = 0;        // SQ_RSRC_IMG_* (8/12 = 1D, 9 = 2D, 10 = 3D, 13 = 2D array)
+  u32 tiling_idx = 0;  // 8/31 = linear; everything else is tiled
   // T# DST_SEL_X/Y/Z/W: which source channel (or constant) each sampled
   // component reads. 0=0, 1=1, 4=R, 5=G, 6=B, 7=A. A single-channel mask (a
   // font atlas) is declared with its coverage selected into the components the
   // shader reads; ignoring that samples alpha as 1 and fills every glyph solid.
-  uint32_t dst_sel[4] = {4, 5, 6, 7};
-  uint32_t sampler[4] = {};  // S# used by the sampling MIMG instruction
+  u32 dst_sel[4] = {4, 5, 6, 7};
+  u32 sampler[4] = {};  // S# used by the sampling MIMG instruction
   bool pow2_pad = false;     // pad physical mip dims/layers to powers of two
   bool sampler_valid = false;
   bool is_3d = false;           // SQ_RSRC_IMG_3D: sampled with a w coordinate
@@ -69,21 +70,21 @@ struct TImage {
   bool storage = false;         // image_store target
   bool null_descriptor = false; // all-zero T# samples transparent zero
   bool valid = false;
-  uint64_t src = 0;  // guest address dword 0 was s_loaded from (0 = user data)
+  u64 src = 0;  // guest address dword 0 was s_loaded from (0 = user data)
 };
 
 // DST_SEL in the form the renderer's image views take it (x | y<<3 | z<<6 |
 // w<<9).
-inline uint32_t PackDstSel(const uint32_t dst_sel[4]) {
+inline u32 PackDstSel(const u32 dst_sel[4]) {
   return (dst_sel[0] & 7) | ((dst_sel[1] & 7) << 3) | ((dst_sel[2] & 7) << 6) |
          ((dst_sel[3] & 7) << 9);
 }
 
 // Decode a V# from 4 consecutive dwords.
-VBuffer DecodeVBuffer(const uint32_t* dwords);
+VBuffer DecodeVBuffer(const u32* dwords);
 
 // Decode a T# from 8 consecutive dwords.
-TImage DecodeTImage(const uint32_t* dwords);
+TImage DecodeTImage(const u32* dwords);
 
 // Sampler-binding plan for a pixel shader: MIMG instructions that reference
 // the same descriptor (same T#/S# SGPRs, written by the same s_load -- or
@@ -93,14 +94,14 @@ TImage DecodeTImage(const uint32_t* dwords);
 // per-binding result: both derive from this one plan so they cannot drift.
 struct MimgBindingPlan {
   // MIMG instruction pc -> binding id.
-  std::unordered_map<uint32_t, uint32_t> binding_by_pc;
+  std::unordered_map<u32, u32> binding_by_pc;
   // Per binding: the T# base SGPR of its first-use MIMG.
-  std::vector<uint32_t> binding_srsrc;
+  std::vector<u32> binding_srsrc;
   // Per binding: true when the descriptor is an image_store target.
   std::vector<bool> binding_storage;
 };
 MimgBindingPlan PlanMimgBindings(const Program& program,
-                                 const uint8_t* reachable = nullptr);
+                                 const u8* reachable = nullptr);
 
 // Recover the image(s) a pixel shader references, by tracking its
 // s_load_dwordx4/x8/x16 of descriptor tables out of the user-data SGPRs.
@@ -114,9 +115,9 @@ MimgBindingPlan PlanMimgBindings(const Program& program,
 // table embedded after their own code. Zero leaves the PC unknown.
 std::vector<TImage> TrackTextures(
     const std::shared_ptr<const Program>& ps_program,
-    const uint32_t* ps_user_data,
+    const u32* ps_user_data,
     bool trace = false,
-    uint64_t code_base = 0);
+    u64 code_base = 0);
 
 // Resolve the live descriptor behind each constant buffer a graphics stage
 // reads, following the same extended-user-data / SRT pointer chains as
@@ -127,9 +128,9 @@ std::vector<TImage> TrackTextures(
 // serve as both. FOX passes cbuffer descriptors through EUD, so reading the V#
 // straight out of user data yields base=0; this walks the chain and reads the
 // descriptor at the point of the load.
-std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
+std::unordered_map<u32, VBuffer> ResolveCbuffers(
     const std::shared_ptr<const Program>& program,
-    const uint32_t* user_data);
+    const u32* user_data);
 
 // Resolve attributes fetched directly by MUBUF instructions in the main VS.
 // The descriptor SGPRs may begin as inline user data or be overwritten by an
@@ -139,7 +140,7 @@ std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
 std::vector<VBuffer> ResolveDirectVertexBuffers(
     const std::shared_ptr<const Program>& program,
     const std::vector<ShaderAttr>& attrs,
-    const uint32_t* user_data);
+    const u32* user_data);
 
 // Resolve the live V# behind each raw buffer a graphics stage loads from with
 // MUBUF (see ShaderBuffer / PlanGfxBuffers). Same replay as
@@ -150,18 +151,18 @@ std::vector<VBuffer> ResolveDirectVertexBuffers(
 std::vector<VBuffer> ResolveShaderBuffers(
     const std::shared_ptr<const Program>& program,
     const std::vector<ShaderBuffer>& buffers,
-    const uint32_t* user_data);
+    const u32* user_data);
 
 // Replay a compute shader's uniform scalar descriptor loads and capture each
 // planned V#/T#/pointer at the instruction where it is consumed. This resolves
 // SRT chains into SGPRs above the direct COMPUTE_USER_DATA range.
 struct ResolvedCsResource {
   bool valid = false;
-  uint32_t descriptor[8] = {};
+  u32 descriptor[8] = {};
 };
 std::vector<ResolvedCsResource> ResolveCsResources(const Program& program,
                                                    const RecompiledCs& plan,
-                                                   const uint32_t* user_data);
+                                                   const u32* user_data);
 
 // Given a decoded fetch shader and the VS user-data SGPRs (16 dwords), recover
 // the vertex-attribute buffers it fetches, in attribute order. Handles the
@@ -169,12 +170,12 @@ std::vector<ResolvedCsResource> ResolveCsResources(const Program& program,
 // vertex-buffer table a user SGPR points at, then buffer_load_format per
 // attribute).
 std::vector<VBuffer> TrackVertexBuffers(const Program& fetch_program,
-                                        const uint32_t* vs_user_data);
+                                        const u32* vs_user_data);
 
 // A descriptor table the replay is about to read may still be sitting in a
 // compute buffer, unwritten-back. The recompiler cannot ask a renderer that
 // itself (it is the bottom of the stack), so whoever owns both installs this;
 // left null, the replay just reads guest memory as it finds it.
-extern void (*g_flush_guest_range)(uint64_t address, uint64_t bytes);
+extern void (*g_flush_guest_range)(u64 address, u64 bytes);
 
 }  // namespace gpu::gcn

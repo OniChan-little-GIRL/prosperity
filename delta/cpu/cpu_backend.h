@@ -21,6 +21,7 @@
 #pragma once
 
 #include <cstdint>
+#include "base/arch.h"
 #include <vector>
 
 namespace krnl {
@@ -35,7 +36,7 @@ namespace cpu {
 // inside the x86 JIT; instead we patch it to a tiny `mov eax, <this>; syscall;
 // ret` stub and dispatch it in HandleSyscall -> krnl::guest_tls_get_addr. Well
 // above any real PS4 syscall number so it can't collide.
-constexpr uint32_t kTlsGetAddrSyscall = 0x40000001u;
+constexpr u32 kTlsGetAddrSyscall = 0x40000001u;
 
 // Magic syscall range used on the FEX path to call native HLE functions from
 // guest code (vprx PRX overrides). A guest import slot can't point straight at a
@@ -43,7 +44,7 @@ constexpr uint32_t kTlsGetAddrSyscall = 0x40000001u;
 // the slot a tiny guest trampoline that issues `mov eax,<base|idx>; syscall` and
 // dispatch index `idx` to the registered host function in HandleSyscall. The top
 // byte tags the range; the low 24 bits are the thunk index.
-constexpr uint32_t kHostThunkSyscallBase = 0x42000000u;
+constexpr u32 kHostThunkSyscallBase = 0x42000000u;
 
 class ICpuBackend {
 public:
@@ -60,7 +61,7 @@ public:
   // FEX serializes thread creation against running threads, so creating on the
   // freshly-spawned worker (while other guest threads run in the JIT) races on
   // shared JIT/context state and corrupts it. Returns an opaque handle.
-  virtual void *createGuestThread(uintptr_t entry, void *arg, uint64_t fsbase) = 0;
+  virtual void *createGuestThread(uintptr_t entry, void *arg, u64 fsbase) = 0;
 
   // Run a previously-created guest thread to completion on the CURRENT host
   // thread (does the FEX per-thread registration first), then destroys it.
@@ -74,11 +75,11 @@ public:
   // return address unwinds out via exitGuestThread.
   // Returns the function's eax. Must be called from a context where guest memory
   // and the module's dependencies are already mapped + relocated.
-  virtual uint64_t runGuestFunction(uintptr_t fn, uint64_t a0, uint64_t a1,
-                                    uint64_t a2, uint64_t a3 = 0) = 0;
+  virtual u64 runGuestFunction(uintptr_t fn, u64 a0, u64 a1,
+                                    u64 a2, u64 a3 = 0) = 0;
 
   // Convenience for the main thread: create + run on this thread.
-  void enterGuest(uintptr_t entry, void *arg, uint64_t fsbase) {
+  void enterGuest(uintptr_t entry, void *arg, u64 fsbase) {
     runGuestThread(createGuestThread(entry, arg, fsbase));
   }
 };
@@ -105,7 +106,7 @@ uintptr_t makeHostThunk(void *hostFn, const char *name = nullptr);
 // A guest fault inside the pool is a call through an import slot we bound but
 // cannot service, and this is what names it. FEX backend only; the native
 // backend has no trampolines and returns null.
-const char *hostThunkNameForAddr(uintptr_t addr, uint32_t *idxOut = nullptr);
+const char *hostThunkNameForAddr(uintptr_t addr, u32 *idxOut = nullptr);
 
 // Wrap an already-resolved guest function `realTarget` with a return-capturing
 // guest trampoline: it calls realTarget, then invokes native
@@ -114,7 +115,7 @@ const char *hostThunkNameForAddr(uintptr_t addr, uint32_t *idxOut = nullptr);
 // GOT slot that held realTarget. ARM-safe guest-function trace/hook facility
 // (int3 hooks are x86-host-only). On the native x86 backend this is a no-op that
 // returns realTarget unchanged (int3 works there). Returns guest addr, 0 on fail.
-uintptr_t makeGuestReturnHook(void *realTarget, uint32_t hookId, void *loggerFn,
+uintptr_t makeGuestReturnHook(void *realTarget, u32 hookId, void *loggerFn,
                               const char *name = nullptr);
 
 // Build a callable copy (trampoline) of an internal guest function whose first
@@ -130,7 +131,7 @@ uintptr_t makeGuestReturnHook(void *realTarget, uint32_t hookId, void *loggerFn,
 uintptr_t makeGuestLockWrapper(void *realTarget, void *lockFn, void *unlockFn,
                                const char *name);
 
-uintptr_t makeGuestTrampoline(const void *fnBytes, uint32_t prologueLen,
+uintptr_t makeGuestTrampoline(const void *fnBytes, u32 prologueLen,
                               const void *continueAt);
 
 // Called once at process start, before any large allocation or guest mapping.
@@ -145,21 +146,21 @@ ICpuBackend &backend();
 // Guest RIP of the guest thread currently running on this host thread, or 0.
 // On FEX this is the live CPUState.rip; on native the host RIP is the guest RIP
 // already (the crash handler reads it from the signal context), so this is 0.
-uint64_t currentGuestRip();
+u64 currentGuestRip();
 
 // Guest fs-segment base (TLS pointer) of the guest thread running on this host
 // thread, or 0. Used by hook loggers to read guest thread-local state.
-uint64_t currentGuestFsBase();
+u64 currentGuestFsBase();
 
 // Every live guest thread's fs base. Lets a host thread survey guest TLS
 // across the whole process (e.g. which BPE JobSystem worker ordinals exist)
 // without instrumenting a hot guest path. FEX only; empty on native.
-void guestThreadFsBases(std::vector<uint64_t> &out);
+void guestThreadFsBases(std::vector<u64> &out);
 
 // The 16 guest GPRs (FEXCore::X86State::REG_* order) of the guest thread on this
 // host thread, or nullptr. FEX only; lets the crash handler dump guest regs and
 // walk the guest rbp chain. Native reads regs from the host signal context, so 0.
-const uint64_t *currentGuestGregs();
+const u64 *currentGuestGregs();
 
 // The 16 guest GPRs read out of a SIGNAL CONTEXT taken inside JIT'd code, in
 // FEXCore::X86State::REG_* order. Unlike currentGuestGregs() -- which reads the
@@ -168,7 +169,7 @@ const uint64_t *currentGuestGregs();
 // every guest GPR to a fixed host register (its static register allocation).
 // Returns false when the host PC is not in a JIT code buffer, or on a backend
 // or architecture without such a mapping.
-bool guestGregsFromSignal(const void *ucontext, uint64_t out[16]);
+bool guestGregsFromSignal(const void *ucontext, u64 out[16]);
 
 // If this host thread faulted while inside a guest syscall handler, the syscall
 // number; otherwise -1. Lets the crash handler name the culprit HLE call.
@@ -185,7 +186,7 @@ void dumpThreadTrace(void *fileStar);
 // multiblock compilation hides the real fault site; this asks FEX to map the
 // host JIT PC back to the exact guest instruction. Returns 0 if the host PC
 // isn't in a JIT code buffer (or on the native backend).
-uint64_t reconstructGuestRip(uint64_t hostPC);
+u64 reconstructGuestRip(u64 hostPC);
 
 // Give the active backend a chance to handle a host signal raised inside JIT'd
 // code before it's treated as a fatal guest fault (FEX only). Currently handles

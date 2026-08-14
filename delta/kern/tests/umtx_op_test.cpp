@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "base/arch.h"
 
 #include <array>
 #include <atomic>
@@ -13,8 +14,8 @@ namespace {
 using namespace std::chrono_literals;
 
 struct GuestTimespec {
-  int64_t sec;
-  int64_t nsec;
+  i64 sec;
+  i64 nsec;
 };
 
 bool WaitFor(const std::atomic<int> &value, int expected) {
@@ -26,7 +27,7 @@ bool WaitFor(const std::atomic<int> &value, int expected) {
 }
 
 TEST(UmtxOp, WakeHonorsRequestedCount) {
-  uint32_t word = 0;
+  u32 word = 0;
   GuestTimespec timeout{2, 0};
   std::atomic<int> ready{0};
   std::atomic<int> returned{0};
@@ -63,7 +64,7 @@ TEST(UmtxOp, WakeHonorsRequestedCount) {
 }
 
 TEST(UmtxOp, WakeBeforeWaitIsLost) {
-  uint32_t word = 0;
+  u32 word = 0;
   GuestTimespec timeout{0, 30'000'000};
 
   EXPECT_EQ(krnl::sys_umtx_op(&word, 16, 1, nullptr, nullptr), 0);
@@ -71,7 +72,7 @@ TEST(UmtxOp, WakeBeforeWaitIsLost) {
 }
 
 TEST(UmtxOp, BucketCollisionDoesNotReleaseAnotherAddress) {
-  alignas(16) std::array<uint32_t, 1025> words{};
+  alignas(16) std::array<u32, 1025> words{};
   auto *first = &words[0];
   auto *collision = &words[1024]; // 0x1000 apart: same wait-bucket hash.
   GuestTimespec timeout{2, 0};

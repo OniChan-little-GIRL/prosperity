@@ -14,6 +14,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <vector>
 
 #include "gpu/gcn/gcn_decode.h"
@@ -22,31 +23,31 @@ namespace gpu::gcn {
 
 // Upper bound used by the compute resource planner and Vulkan staging path.
 // The renderer additionally checks the selected device's descriptor limits.
-inline constexpr uint32_t kMaxCsResources = 32;
+inline constexpr u32 kMaxCsResources = 32;
 
 // A vertex attribute recovered from the VS fetch shader, in semantic order.
 struct ShaderAttr {
-  uint32_t location = 0;        // GLSL `in` location == semantic index
-  uint32_t num_comps = 0;       // 1..4 (from the buffer_load_format opcode)
-  uint32_t table_sgpr = 0;      // fetch-table pointer or direct V# base SGPR
-  uint32_t vbuf_dword_off = 0;  // dword offset of this attr's V# in the table
+  u32 location = 0;        // GLSL `in` location == semantic index
+  u32 num_comps = 0;       // 1..4 (from the buffer_load_format opcode)
+  u32 table_sgpr = 0;      // fetch-table pointer or direct V# base SGPR
+  u32 vbuf_dword_off = 0;  // dword offset of this attr's V# in the table
   bool direct_fetch = false;    // MUBUF is in the main VS, not a fetch shader
   // gfx10 unified buffer format carried by a TYPED fetch
   // (tbuffer_load_format_*), which overrides the V#'s own format. 0 = untyped
   // fetch, use the V#.
-  uint32_t inst_format = 0;
-  uint32_t use_pc = ~0u;  // direct/inline fetch MUBUF pc for scalar replay
+  u32 inst_format = 0;
+  u32 use_pc = ~0u;  // direct/inline fetch MUBUF pc for scalar replay
   // Byte offset immediate on the fetch instruction. Sony's RDNA compiler packs
   // every attribute into one V# and separates them with this, so without it all
   // of them land on the first field. Only the RDNA parser fills it in; the PS4
   // fetch shaders give each attribute its own V#.
-  uint32_t inst_offset = 0;
+  u32 inst_offset = 0;
   // The GCN spelling of the same thing: a typed fetch (MTBUF
   // tbuffer_load_format_*) carries dfmt/nfmt in the instruction and the
   // hardware ignores the V#'s. dfmt 0 is not a data format, so 0 means an
   // untyped (MUBUF) fetch whose format comes from the V#.
-  uint32_t inst_dfmt = 0;
-  uint32_t inst_nfmt = 0;
+  u32 inst_dfmt = 0;
+  u32 inst_nfmt = 0;
 };
 
 // Set-1 UBO bindings shared by VS + PS. A shader pair whose constant buffers
@@ -57,14 +58,14 @@ struct ShaderAttr {
 // those than the device allows is an out-of-spec layout the driver is free to
 // mishandle silently. 15 is what current NVIDIA parts report; the check in
 // vk_upload_ring.cc still reports a device below that rather than assuming.
-constexpr uint32_t kMaxCbufBindings = 15;
-constexpr uint32_t kCbufDwords = 4096;
+constexpr u32 kMaxCbufBindings = 15;
+constexpr u32 kCbufDwords = 4096;
 
 // A constant buffer a shader stage reads (s_buffer_load). Bound as a UBO.
 struct ShaderCbuf {
-  uint32_t binding = 0;
-  uint32_t ud_sgpr = 0;  // user-data dword index of the 4-dword V# / chain root
-  uint32_t num_dwords = 0;  // highest dword index read + 1 (UBO size)
+  u32 binding = 0;
+  u32 ud_sgpr = 0;  // user-data dword index of the 4-dword V# / chain root
+  u32 num_dwords = 0;  // highest dword index read + 1 (UBO size)
   // Descriptor pointer chain (RDNA2 SMEM): when the descriptor is not directly
   // in user data but s_load'd from a chain of user-data root pointers.
   // chain_len == 0 means direct (the V# is inline at ud_sgpr). Otherwise
@@ -72,9 +73,9 @@ struct ShaderCbuf {
   // are the byte offsets dereferenced at each level; the last one addresses the
   // final 4-dword V#. The GFX7 path leaves this 0 (direct), so its behavior is
   // unchanged.
-  uint32_t chain_len = 0;
-  uint32_t chain_off[3] = {};
-  uint32_t use_pc = ~0u;  // RDNA consumer used for draw-time scalar replay
+  u32 chain_len = 0;
+  u32 chain_off[3] = {};
+  u32 use_pc = ~0u;  // RDNA consumer used for draw-time scalar replay
   // The descriptor is a 2-dword flat pointer read with s_load, not a 4-dword
   // V# read with s_buffer_load. Engines that keep their constants in a shader
   // resource table (Shadow of the Colossus loads every constant as
@@ -101,13 +102,13 @@ struct ShaderCbuf {
 // pixel shaders reference 5+ distinct raw buffers, and at a cap of 4 every
 // load past the fourth was left unplanned, warned as "mubuf.ps", and took the
 // whole shader down with it.
-constexpr uint32_t kMaxGfxBuffers = 16;
-constexpr uint32_t kMinGfxBuffers = 4;  // the Vulkan floor
-constexpr uint32_t kGfxBufferDwords = 262144;  // 1 MB
+constexpr u32 kMaxGfxBuffers = 16;
+constexpr u32 kMinGfxBuffers = 4;  // the Vulkan floor
+constexpr u32 kGfxBufferDwords = 262144;  // 1 MB
 
 // Planner-visible cap, in [kMinGfxBuffers, kMaxGfxBuffers].
-uint32_t MaxGfxBuffers();
-void SetMaxGfxBuffers(uint32_t n);
+u32 MaxGfxBuffers();
+void SetMaxGfxBuffers(u32 n);
 
 // True when the push-constant budget (>= 144 bytes) has room for each graphics
 // stage's own guest code address after the two 64-byte user-data halves. The
@@ -118,15 +119,15 @@ void SetMaxGfxBuffers(uint32_t n);
 // programs containing s_getpc_b64 must be keyed by address. Defaults to the
 // floor until the renderer reports the device limit, like MaxGfxBuffers.
 bool PushCodeBase();
-void SetPushBudget(uint32_t bytes);
+void SetPushBudget(u32 bytes);
 
 // A GCN wave is 64 lanes. One lane maps to one invocation here, so a host
 // subgroup narrower than that splits a wave across several of them, and the
 // lockstep a wave64 shader is entitled to assume no longer holds. Reported by
 // the renderer at device init; 64 (assume no split) until then.
-constexpr uint32_t kGcnWave = 64;
-uint32_t HostSubgroupSize();
-void SetHostSubgroupSize(uint32_t lanes);
+constexpr u32 kGcnWave = 64;
+u32 HostSubgroupSize();
+void SetHostSubgroupSize(u32 lanes);
 inline bool WaveSplitsAcrossSubgroups() {
   return HostSubgroupSize() < kGcnWave;
 }
@@ -139,21 +140,21 @@ inline bool WaveSplitsAcrossSubgroups() {
 struct LdsBarrierPlan {
   // Instruction indices to emit a barrier before (straight-line shaders, where
   // every point is reached by every invocation exactly once).
-  std::vector<uint32_t> at;
+  std::vector<u32> at;
   // Branchy shaders instead barrier once per dispatch-loop iteration, which
   // separates accesses in different blocks. Costs a workgroup-wide "is anyone
   // still running" reduction, so it is only turned on where it is needed.
   bool lockstep = false;
 };
 LdsBarrierPlan PlanLdsBarriers(const Program& program,
-                               const uint8_t* reachable,
-                               uint32_t threads_per_group);
+                               const u8* reachable,
+                               u32 threads_per_group);
 
 // Per instruction: is this a point every invocation of the group reaches on
 // the same dynamic iteration, so a barrier there is defined? Straight-line
 // shaders are uniform throughout; under the dispatch loop only the entry
 // block is, since a later block can be reached on differing iterations.
-std::vector<uint8_t> UniformPoints(const Program& program);
+std::vector<u8> UniformPoints(const Program& program);
 
 // A raw (non-format) buffer a graphics stage reads with MUBUF: vertex data the
 // VS fetches by hand rather than through the vertex-input state, a skinning
@@ -162,16 +163,16 @@ std::vector<uint8_t> UniformPoints(const Program& program);
 // draw-time scalar evaluation reads it -- it may have arrived there by s_load
 // through an SRT chain, so user data alone does not name it.
 struct ShaderBuffer {
-  uint32_t binding = 0;
-  uint32_t srsrc_sgpr = 0;
-  uint32_t use_pc = 0;
+  u32 binding = 0;
+  u32 srsrc_sgpr = 0;
+  u32 use_pc = 0;
 };
 
 // A texture the PS references (MIMG). Bound as a combined image sampler at
 // set 0; binding order == MIMG order (matches TrackTextures).
 struct ShaderTex {
-  uint32_t binding = 0;
-  uint32_t ud_sgpr = 0;  // PS user-data dword index of the 8-dword T#
+  u32 binding = 0;
+  u32 ud_sgpr = 0;  // PS user-data dword index of the 8-dword T#
   bool storage = false;  // image_store binding rather than a sampled image
   bool is_3d = false;    // volume image (T# type SQ_RSRC_IMG_3D)
   bool is_1d = false;    // 1D image (T# type SQ_RSRC_IMG_1D[_ARRAY])
@@ -179,9 +180,9 @@ struct ShaderTex {
 
 struct Recompiled {
   bool ok = false;
-  std::vector<uint32_t> vs_spirv;  // emitted directly from GCN
-  std::vector<uint32_t> gs_spirv;  // fixed RECTLIST expansion stage
-  std::vector<uint32_t> fs_spirv;
+  std::vector<u32> vs_spirv;  // emitted directly from GCN
+  std::vector<u32> gs_spirv;  // fixed RECTLIST expansion stage
+  std::vector<u32> fs_spirv;
   std::vector<ShaderAttr> attrs;     // vertex inputs
   std::vector<ShaderCbuf> vs_cbufs;  // VS UBOs (set 1, binding = .binding)
   std::vector<ShaderCbuf> ps_cbufs;  // PS UBOs (set 1, binding = .binding)
@@ -191,16 +192,16 @@ struct Recompiled {
   // VS samplers (a vertex texture fetch: displacement, per-vertex lookup).
   // Set 0 is shared, so these are numbered after ps_texs.
   std::vector<ShaderTex> vs_texs;
-  uint32_t num_params = 0;           // VS->PS interpolants (locations 0..n-1)
-  uint8_t ps_mrt_mask = 0;           // bit n set = PS exports MRT color n
+  u32 num_params = 0;           // VS->PS interpolants (locations 0..n-1)
+  u8 ps_mrt_mask = 0;           // bit n set = PS exports MRT color n
 };
 
 // Time spent recompiling shaders (GCN -> SPIR-V + spirv-opt) and the number of
 // recompiles, both since the last FPS report reset them. A title that streams
 // its shader code re-recompiles the same shaders, and that cost shows up
 // nowhere else: it is not inside a draw.
-extern uint64_t g_ns_recomp;
-extern uint32_t g_recomp_n;
+extern u64 g_ns_recomp;
+extern u32 g_recomp_n;
 
 // Recompile a VS+PS pair. vs_code/ps_code are guest pointers to the GCN code;
 // the user-data arrays are the 16 user SGPRs for each stage (used only to read
@@ -214,17 +215,17 @@ extern uint32_t g_recomp_n;
 // tex_uint_mask / mrt_uint_mask mark integer-format sampled images and colour
 // targets: those change the SPIR-V types (uvec4 in and out), so like the two
 // above they are part of the module's identity, not per-draw state.
-Recompiled Recompile(const uint32_t* vs_code,
-                      const uint32_t* ps_code,
-                      const uint32_t* vs_user_data,
-                      const uint32_t* ps_user_data,
-                      uint32_t ps_input_ena = 0,
-                      const uint32_t* ps_in_cntl = nullptr,
-                      uint32_t ps_num_interp = 0,
-                      uint32_t tex_3d_mask = 0,
-                      uint32_t tex_1d_mask = 0,
-                      uint32_t tex_uint_mask = 0,
-                      uint32_t mrt_uint_mask = 0,
+Recompiled Recompile(const u32* vs_code,
+                      const u32* ps_code,
+                      const u32* vs_user_data,
+                      const u32* ps_user_data,
+                      u32 ps_input_ena = 0,
+                      const u32* ps_in_cntl = nullptr,
+                      u32 ps_num_interp = 0,
+                      u32 tex_3d_mask = 0,
+                      u32 tex_1d_mask = 0,
+                      u32 tex_uint_mask = 0,
+                      u32 mrt_uint_mask = 0,
                       bool gl_clip_space = false);
 
 // A memory resource a compute shader touches. The descriptor may be inline in
@@ -233,10 +234,10 @@ Recompiled Recompile(const uint32_t* vs_code,
 // recompiled CS accesses it by `binding`, computing offsets relative to the
 // descriptor base (the storage buffer aliases [base, base + size)).
 struct CsResource {
-  uint32_t base_sgpr = 0;  // SGPR index of the live descriptor at use_pc
-  uint32_t use_pc = 0;     // representative instruction consuming it
-  uint32_t binding = 0;    // storage-buffer binding (set 0)
-  uint8_t kind = 0;        // 0 = buffer V#, 1 = image T#, 2 = scalar pointer
+  u32 base_sgpr = 0;  // SGPR index of the live descriptor at use_pc
+  u32 use_pc = 0;     // representative instruction consuming it
+  u32 binding = 0;    // storage-buffer binding (set 0)
+  u8 kind = 0;        // 0 = buffer V#, 1 = image T#, 2 = scalar pointer
   bool written = false;    // dispatch writes it -> copy back to guest
   // Does the dispatch READ it? A resource that is written and never read does
   // not have to be staged in from guest memory before the dispatch -- and
@@ -245,7 +246,7 @@ struct CsResource {
   // read-modify-write (an atomic, or a load and a store to the same buffer)
   // still reports read.
   bool read = false;
-  uint32_t min_bytes = 0;  // lower bound on size from immediate offsets
+  u32 min_bytes = 0;  // lower bound on size from immediate offsets
 };
 
 // A recompiled compute shader: the GLCompute SPIR-V + its resource-binding
@@ -254,9 +255,9 @@ struct CsResource {
 // module).
 struct RecompiledCs {
   bool ok = false;
-  std::vector<uint32_t> spirv;
+  std::vector<u32> spirv;
   std::vector<CsResource> resources;
-  uint32_t local_size[3] = {1, 1, 1};  // threads per workgroup
+  u32 local_size[3] = {1, 1, 1};  // threads per workgroup
 };
 
 // Recompile a compute shader to a Vulkan compute pipeline (GLCompute SPIR-V).
@@ -267,19 +268,19 @@ struct RecompiledCs {
 // 128-dword granules). Returns ok=false when the shader uses a feature the
 // compute backend does not implement (caller skips the dispatch loudly rather
 // than corrupting memory).
-RecompiledCs RecompileCompute(const uint32_t* cs_code,
-                              uint32_t num_thread_x,
-                              uint32_t num_thread_y,
-                              uint32_t num_thread_z,
-                              uint32_t user_sgpr,
-                              uint32_t tgid_enable,
-                              uint32_t lds_dwords);
+RecompiledCs RecompileCompute(const u32* cs_code,
+                              u32 num_thread_x,
+                              u32 num_thread_y,
+                              u32 num_thread_z,
+                              u32 user_sgpr,
+                              u32 tgid_enable,
+                              u32 lds_dwords);
 
 // Print the instruction listing of the shader at a guest code address, tagged
 // with `tag`. Diagnostic only: a renderer that has caught a target in a bad
 // state (a NaN-poisoned attachment) knows the producing shader's address but
 // not how to decode it, and guest shader addresses move between runs, so the
 // listing has to be produced in the run that observed the problem.
-void DisassembleAt(uint64_t code_address, const char* tag);
+void DisassembleAt(u64 code_address, const char* tag);
 
 }  // namespace gpu::gcn

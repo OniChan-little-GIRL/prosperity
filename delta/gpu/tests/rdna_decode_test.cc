@@ -1,4 +1,5 @@
 #include <cstdint>
+#include "base/arch.h"
 
 #include <gtest/gtest.h>
 
@@ -6,29 +7,29 @@
 
 namespace {
 
-uint32_t Vop2(uint32_t op, uint32_t src0 = 256, uint32_t vsrc1 = 0) {
+u32 Vop2(u32 op, u32 src0 = 256, u32 vsrc1 = 0) {
   return (op << 25) | (vsrc1 << 9) | src0;
 }
 
-uint32_t Sopp(uint32_t op) {
+u32 Sopp(u32 op) {
   return (0x17Fu << 23) | (op << 16);
 }
 
-uint32_t Sopk(uint32_t op) {
+u32 Sopk(u32 op) {
   return (0xBu << 28) | (op << 23);
 }
 
-void Vop3(uint32_t* out,
-          uint32_t op,
-          uint32_t src0,
-          uint32_t src1,
-          uint32_t src2) {
+void Vop3(u32* out,
+          u32 op,
+          u32 src0,
+          u32 src1,
+          u32 src2) {
   out[0] = (0x35u << 26) | (op << 16);
   out[1] = src0 | (src1 << 9) | (src2 << 18);
 }
 
 TEST(RdnaDecode, Dpp8AndDpp8FiConsumeControlDwords) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       Vop2(0x03, 233), 0x01234567, Vop2(0x03, 234), 0x89abcdef, Sopp(0x01),
   };
 
@@ -47,7 +48,7 @@ TEST(RdnaDecode, Dpp8AndDpp8FiConsumeControlDwords) {
 }
 
 TEST(RdnaDecode, SdwaUsesExtensionMetadataInsteadOfLiteralMetadata) {
-  const uint32_t code[] = {Vop2(0x03, 249), 0x12345678, Sopp(0x01)};
+  const u32 code[] = {Vop2(0x03, 249), 0x12345678, Sopp(0x01)};
 
   const gpu::gcn::Program program = gpu::rdna::Decode(code, 3);
 
@@ -58,7 +59,7 @@ TEST(RdnaDecode, SdwaUsesExtensionMetadataInsteadOfLiteralMetadata) {
 }
 
 TEST(RdnaDecode, Vop3pAndFlatHaveDistinctFamilies) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       (0x33u << 26) | (0x0Fu << 16) | (1u << 14),
       3u << 27,
       (0x37u << 26) | (0x12u << 18),
@@ -75,7 +76,7 @@ TEST(RdnaDecode, Vop3pAndFlatHaveDistinctFamilies) {
 }
 
 TEST(RdnaDecode, ReservedVop3pPrefixesRemainUnknown) {
-  const uint32_t code[] = {0xCD000000u, (0x33u << 26) | (1u << 23), 0};
+  const u32 code[] = {0xCD000000u, (0x33u << 26) | (1u << 23), 0};
 
   const gpu::gcn::Program program = gpu::rdna::Decode(code, 3, false);
 
@@ -85,7 +86,7 @@ TEST(RdnaDecode, ReservedVop3pPrefixesRemainUnknown) {
 }
 
 TEST(RdnaDecode, MandatoryImmediateDwordsPreserveInstructionBoundaries) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       Sopk(0x15), 0x11111111,  // s_setreg_imm32_b32
       Vop2(0x2C), 0x44444444,  // v_fmamk_f32
       Vop2(0x2D), 0x55555555,  // v_fmaak_f32
@@ -98,7 +99,7 @@ TEST(RdnaDecode, MandatoryImmediateDwordsPreserveInstructionBoundaries) {
   const gpu::gcn::Program program = gpu::rdna::Decode(code, 12, false);
 
   ASSERT_EQ(program.size(), 7u);
-  for (uint32_t i = 0; i < 5; i++) {
+  for (u32 i = 0; i < 5; i++) {
     EXPECT_EQ(program[i].pc, i * 2);
     EXPECT_EQ(program[i].size, 2u);
     EXPECT_TRUE(program[i].has_literal);
@@ -115,8 +116,8 @@ TEST(RdnaDecode, MandatoryImmediateDwordsPreserveInstructionBoundaries) {
 // had those slots been unused. 0x2C/0x2D/0x37/0x38 already carried theirs at
 // the time, so the whole of that change is attributable to these two.
 TEST(RdnaDecode, GcnMadkSlotsCarryTheirLiteral) {
-  for (uint32_t op : {0x20u, 0x21u}) {
-    const uint32_t code[] = {Vop2(op), 0x12345678u, Sopp(0x01)};
+  for (u32 op : {0x20u, 0x21u}) {
+    const u32 code[] = {Vop2(op), 0x12345678u, Sopp(0x01)};
     const gpu::gcn::Program program = gpu::rdna::Decode(code, 3, false);
     ASSERT_EQ(program.size(), 2u);
     EXPECT_EQ(program[0].enc, gpu::gcn::Enc::kVop2);
@@ -129,7 +130,7 @@ TEST(RdnaDecode, GcnMadkSlotsCarryTheirLiteral) {
 }
 
 TEST(RdnaDecode, FmacImplicitAccumulatorDoesNotSelectLiteral) {
-  uint32_t code[3] = {};
+  u32 code[3] = {};
   Vop3(code, 0x12B, 256, 257, 255);
   code[2] = Sopp(0x01);
 
@@ -146,7 +147,7 @@ TEST(RdnaDecode, FmacImplicitAccumulatorDoesNotSelectLiteral) {
 // `llvm-mc -arch=amdgcn -mcpu=gfx1030` assembles ds_write_b32 (opcode 13) to
 // 0xd8340000. Reading the gfx9 field [24:17] instead yields 26, i.e. op*2.
 TEST(RdnaDecode, DsOpcodeUsesBits25Through18) {
-  const uint32_t code[] = {0xd8340000u, 0};
+  const u32 code[] = {0xd8340000u, 0};
   const gpu::gcn::Program program = gpu::rdna::Decode(code, 2, false);
   ASSERT_EQ(program.size(), 1u);
   EXPECT_EQ(program[0].enc, gpu::gcn::Enc::kDs);
@@ -155,15 +156,15 @@ TEST(RdnaDecode, DsOpcodeUsesBits25Through18) {
 
 // GDS moved to bit 17, so it must not bleed into the opcode.
 TEST(RdnaDecode, DsGdsBitIsNotPartOfTheOpcode) {
-  const uint32_t code[] = {0xd8340000u | (1u << 17), 0};
+  const u32 code[] = {0xd8340000u | (1u << 17), 0};
   const gpu::gcn::Program program = gpu::rdna::Decode(code, 2, false);
   ASSERT_EQ(program.size(), 1u);
   EXPECT_EQ(program[0].opcode, 13u);
 }
 
 TEST(RdnaDecode, VopcDppFormsRetainTheirControlDword) {
-  for (uint32_t source : {233u, 234u, 250u}) {
-    const uint32_t code[] = {(0x3eu << 25) | source, 0x12345678};
+  for (u32 source : {233u, 234u, 250u}) {
+    const u32 code[] = {(0x3eu << 25) | source, 0x12345678};
     const gpu::gcn::Program program = gpu::rdna::Decode(code, 2, false);
     ASSERT_EQ(program.size(), 1u);
     EXPECT_EQ(program[0].enc, gpu::gcn::Enc::kVopc);
@@ -172,7 +173,7 @@ TEST(RdnaDecode, VopcDppFormsRetainTheirControlDword) {
 }
 
 TEST(RdnaDecode, ObservedNggExportPrefixOnlyAcceptsNullExports) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       0x31u << 26,
       0,
       (0x31u << 26) | 1u,
@@ -189,7 +190,7 @@ TEST(RdnaDecode, ObservedNggExportPrefixOnlyAcceptsNullExports) {
 }
 
 TEST(RdnaDecode, MimgNsa3PreservesAllFiveWords) {
-  const uint32_t code[] = {
+  const u32 code[] = {
       (0x3Cu << 26) | (3u << 1), 0x11111111, 0x22222222, 0x33333333, 0x44444444,
   };
 
@@ -206,9 +207,9 @@ TEST(RdnaDecode, MimgNsa3PreservesAllFiveWords) {
 }
 
 TEST(RdnaDecode, TruncatedMultiwordInstructionsBecomeBoundedUnknowns) {
-  const uint32_t vop3[] = {(0x35u << 26) | (0x141u << 16)};
-  const uint32_t nsa3[] = {(0x3Cu << 26) | (3u << 1), 1, 2, 3};
-  const uint32_t dpp8[] = {Vop2(0x03, 233)};
+  const u32 vop3[] = {(0x35u << 26) | (0x141u << 16)};
+  const u32 nsa3[] = {(0x3Cu << 26) | (3u << 1), 1, 2, 3};
+  const u32 dpp8[] = {Vop2(0x03, 233)};
 
   const auto truncated_vop3 = gpu::rdna::Decode(vop3, 1, false);
   const auto truncated_nsa = gpu::rdna::Decode(nsa3, 4, false);
@@ -226,8 +227,8 @@ TEST(RdnaDecode, TruncatedMultiwordInstructionsBecomeBoundedUnknowns) {
 }
 
 TEST(RdnaDecode, OrderedEndpgmAndCodeEndTerminateAppropriately) {
-  const uint32_t ordered[] = {Sopp(0x1E), Vop2(0x03), Sopp(0x01)};
-  const uint32_t code_end[] = {Sopp(0x1F), Vop2(0x03)};
+  const u32 ordered[] = {Sopp(0x1E), Vop2(0x03), Sopp(0x01)};
+  const u32 code_end[] = {Sopp(0x1F), Vop2(0x03)};
 
   EXPECT_EQ(gpu::rdna::Decode(ordered, 3).size(), 1u);
   EXPECT_EQ(gpu::rdna::Decode(ordered, 3, false).size(), 3u);
@@ -235,11 +236,11 @@ TEST(RdnaDecode, OrderedEndpgmAndCodeEndTerminateAppropriately) {
 }
 
 TEST(RdnaDecode, EndpgmSavedTerminatesAndCallTargetsRemainReachable) {
-  const uint32_t saved[] = {Sopp(0x1B), Vop2(0x03)};
+  const u32 saved[] = {Sopp(0x1B), Vop2(0x03)};
   EXPECT_EQ(gpu::rdna::Decode(saved, 2).size(), 1u);
   EXPECT_EQ(gpu::rdna::Decode(saved, 2, false).size(), 2u);
 
-  const uint32_t call[] = {
+  const u32 call[] = {
       Sopk(0x16) | 1u,  // target pc2; pc1 is the return address
       Sopp(0x01),
       Vop2(0x03),

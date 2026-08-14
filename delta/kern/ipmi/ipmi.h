@@ -17,6 +17,7 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 
 namespace krnl::ipmi {
@@ -28,19 +29,19 @@ class Invocation {
 public:
   explicit Invocation(void *request);
 
-  uint32_t method() const;
-  uint32_t numIn() const;
-  uint32_t numOut() const;
+  u32 method() const;
+  u32 numIn() const;
+  u32 numOut() const;
 
   // Input buffer i, or nullptr. `size` receives its length.
-  const void *input(uint32_t i, uint64_t &size) const;
+  const void *input(u32 i, u64 &size) const;
 
   // Fill output buffer i, zero-padding the rest of its capacity. Truncates to
   // that capacity. False if the descriptor is unusable.
-  bool reply(uint32_t i, const void *data, uint64_t size);
-  bool replyU32(uint32_t i, uint32_t v);
+  bool reply(u32 i, const void *data, u64 size);
+  bool replyU32(u32 i, u32 v);
   // Fill output buffer i to its full capacity with `byte`.
-  bool replyFill(uint32_t i, uint8_t byte);
+  bool replyFill(u32 i, u8 byte);
   // Zero every output buffer. This is what "the daemon replied, with nothing to
   // say" looks like; leaving the buffers at their pre-call sentinel instead
   // makes status getters read garbage and poll forever.
@@ -48,10 +49,10 @@ public:
 
   // The method's own return code, separate from the manager syscall's. Defaults
   // to SCE_OK; a service sets it to report a method-level failure.
-  void setResult(int32_t r);
+  void setResult(i32 r);
 
 private:
-  bool outSlot(uint32_t i, uint8_t *&data, uint64_t &cap) const;
+  bool outSlot(u32 i, u8 *&data, u64 &cap) const;
 
   void *req_;
 };
@@ -66,6 +67,6 @@ struct Service {
 };
 
 // sys_ipmimgr_call's body: decode the manager op and dispatch.
-int managerCall(uint32_t op, uint32_t kid, void *out, void *in, uint64_t insize);
+int managerCall(u32 op, u32 kid, void *out, void *in, u64 insize);
 
 } // namespace krnl::ipmi

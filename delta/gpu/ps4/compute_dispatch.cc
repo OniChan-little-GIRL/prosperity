@@ -6,6 +6,7 @@
  */
 
 #include "gpu/ps4/compute_dispatch.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <unordered_set>
@@ -32,13 +33,13 @@ namespace {
 // Sanity caps. A storage buffer beyond kMaxResource is a descriptor we misread;
 // a buffer whose declared size is unbounded is windowed down to the mapped
 // prefix instead of being refused.
-constexpr uint64_t kMaxResource = 256ull * 1024 * 1024;
-constexpr uint64_t kMaxUnboundedBuffer = 16ull * 1024 * 1024;
+constexpr u64 kMaxResource = 256ull * 1024 * 1024;
+constexpr u64 kMaxUnboundedBuffer = 16ull * 1024 * 1024;
 // An all-zero descriptor stands in for a binding the shader guards and never
 // takes; the translator returns zero for it, so a token allocation is enough.
-constexpr uint64_t kZeroFillBytes = 16;
+constexpr u64 kZeroFillBytes = 16;
 
-bool IsMappedGuestRange(uint64_t address, uint64_t bytes) {
+bool IsMappedGuestRange(u64 address, u64 bytes) {
   return IsGuestRange(address, bytes) &&
          utl::isMemoryRangeMapped(reinterpret_cast<const void*>(address),
                                   bytes);
@@ -46,14 +47,14 @@ bool IsMappedGuestRange(uint64_t address, uint64_t bytes) {
 
 // One resource's live guest range and how it has to be staged.
 struct ResourceRange {
-  uint64_t base = 0;
-  uint64_t size = 0;        // bytes the dispatch reads/writes through it
-  uint64_t guest_size = 0;  // bytes it occupies in guest memory
+  u64 base = 0;
+  u64 size = 0;        // bytes the dispatch reads/writes through it
+  u64 guest_size = 0;  // bytes it occupies in guest memory
   gcn::TImage image;
   bool image_staging = false;  // tiled or reformatted: stage, don't alias
   bool zero_fill = false;      // no live range: hand the shader zeros
-  uint32_t elem_bytes = 4;
-  uint32_t stage_elem_bytes = 4;
+  u32 elem_bytes = 4;
+  u32 stage_elem_bytes = 4;
   bool ok = true;
 };
 
@@ -64,9 +65,9 @@ struct ResourceRange {
 // the linear staging area it inflated texture.qar into to the tiled surface the
 // draws sample. Rejecting the alias zero-filled both bindings, so the copy
 // wrote a 16-byte dummy and every streamed texture stayed empty.
-ResourceRange ResolveImageResource(uint64_t cs_addr,
+ResourceRange ResolveImageResource(u64 cs_addr,
                                    const gcn::CsResource& res,
-                                   const uint32_t* descriptor,
+                                   const u32* descriptor,
                                    bool trace) {
   ResourceRange out;
   const gcn::TImage t = gcn::DecodeTImage(descriptor);
@@ -121,7 +122,7 @@ ResourceRange ResolveImageResource(uint64_t cs_addr,
     return out;
   }
   gcn::TextureLayout32 linear;
-  const uint32_t stage_tiling = t.tiling_idx == 31 ? 31 : 8;
+  const u32 stage_tiling = t.tiling_idx == 31 ? 31 : 8;
   if (!gcn::BuildTextureLayout32(
           linear, t.width, t.height, t.pitch, t.is_3d ? t.depth : t.layers,
           t.mip_levels, stage_tiling, t.pow2_pad, out.stage_elem_bytes)) {
@@ -133,26 +134,26 @@ ResourceRange ResolveImageResource(uint64_t cs_addr,
   return out;
 }
 
-ResourceRange ResolveBufferResource(uint64_t cs_addr,
+ResourceRange ResolveBufferResource(u64 cs_addr,
                                     const gcn::CsResource& res,
-                                    const uint32_t* descriptor,
+                                    const u32* descriptor,
                                     bool trace) {
   ResourceRange out;
   if (res.kind == 2) {  // scalar-load pointer into an SRT/descriptor table
     out.base =
-        (static_cast<uint64_t>(descriptor[1] & 0xFFFF) << 32) | descriptor[0];
+        (static_cast<u64>(descriptor[1] & 0xFFFF) << 32) | descriptor[0];
     out.size = res.min_bytes;
     if (!IsMappedGuestRange(out.base, 1)) {
       out.zero_fill = true;
       out.base = 0;
-      out.size = std::max<uint64_t>(out.size, kZeroFillBytes);
+      out.size = std::max<u64>(out.size, kZeroFillBytes);
     }
     return out;
   }
   // Buffer V#: stride*num_records, else the min hint from immediate offsets.
   const gcn::VBuffer v = gcn::DecodeVBuffer(descriptor);
   out.base = v.base;
-  out.size = v.stride ? (uint64_t)v.stride * v.num_records : v.num_records;
+  out.size = v.stride ? (u64)v.stride * v.num_records : v.num_records;
   if (out.size < res.min_bytes)
     out.size = res.min_bytes;
   if (!IsMappedGuestRange(out.base, 1)) {
@@ -160,7 +161,7 @@ ResourceRange ResolveBufferResource(uint64_t cs_addr,
     out.base = 0;
     out.size = kZeroFillBytes;
   } else if (out.size > kMaxResource) {
-    const uint64_t declared = out.size;
+    const u64 declared = out.size;
     out.size = utl::mappedMemoryPrefix(reinterpret_cast<const void*>(out.base),
                                        kMaxUnboundedBuffer);
     if (trace)
@@ -173,22 +174,22 @@ ResourceRange ResolveBufferResource(uint64_t cs_addr,
 
 void DispatchCompute(rhi::Renderer& renderer,
                      const Regs& regs,
-                     const uint32_t* body,
-                     uint32_t count) {
-  const uint32_t groups[3] = {count >= 1 ? body[0] : 0,
+                     const u32* body,
+                     u32 count) {
+  const u32 groups[3] = {count >= 1 ? body[0] : 0,
                               count >= 2 ? body[1] : 0,
                               count >= 3 ? body[2] : 0};
-  const uint64_t cs_addr =
-      (static_cast<uint64_t>(regs[mmCOMPUTE_PGM_HI] & 0xFF) << 32 |
+  const u64 cs_addr =
+      (static_cast<u64>(regs[mmCOMPUTE_PGM_HI] & 0xFF) << 32 |
        regs[mmCOMPUTE_PGM_LO])
       << 8;
-  const uint32_t threads[3] = {regs[mmCOMPUTE_NUM_THREAD_X] & 0xFFFF,
+  const u32 threads[3] = {regs[mmCOMPUTE_NUM_THREAD_X] & 0xFFFF,
                                regs[mmCOMPUTE_NUM_THREAD_Y] & 0xFFFF,
                                regs[mmCOMPUTE_NUM_THREAD_Z] & 0xFFFF};
-  const uint32_t rsrc2 = regs[mmCOMPUTE_PGM_RSRC2];
-  const uint32_t user_sgpr = (rsrc2 >> 1) & 0x1F;   // num_user_regs [37:33]
-  const uint32_t tgid_enable = (rsrc2 >> 7) & 0x7;  // tgid_enable [41:39]
-  const uint32_t lds_dwords = (rsrc2 >> 15) & 0x1FF;
+  const u32 rsrc2 = regs[mmCOMPUTE_PGM_RSRC2];
+  const u32 user_sgpr = (rsrc2 >> 1) & 0x1F;   // num_user_regs [37:33]
+  const u32 tgid_enable = (rsrc2 >> 7) & 0x7;  // tgid_enable [41:39]
+  const u32 lds_dwords = (rsrc2 >> 15) & 0x1FF;
   TraceComputeShader(regs, cs_addr, groups, threads, user_sgpr, tgid_enable,
                      lds_dwords);
 
@@ -210,14 +211,14 @@ void DispatchCompute(rhi::Renderer& renderer,
   if (!rc.ok) {
     // Loud, not silently corrupting memory: an unsupported CS is content the
     // frame is missing, and one report per shader says which.
-    static std::unordered_set<uint64_t> reported;
+    static std::unordered_set<u64> reported;
     if (reported.size() < 8 && reported.insert(cs_addr).second)
       BASE_LOGW("csgpu", "unsupported CS @{:#x} groups=[{} {} {}], skipped",
                 cs_addr, groups[0], groups[1], groups[2]);
     return;
   }
 
-  const uint32_t* user_data = regs.At(mmCOMPUTE_USER_DATA_0);
+  const u32* user_data = regs.At(mmCOMPUTE_USER_DATA_0);
   rhi::ComputeInfo ci;
   ci.cs_addr = cs_addr;
   ci.groups[0] = groups[0];
@@ -247,7 +248,7 @@ void DispatchCompute(rhi::Renderer& renderer,
   }
 
   const bool trace = ShouldTraceCsResources(cs_addr);
-  static constexpr uint32_t kNullDescriptor[8] = {};
+  static constexpr u32 kNullDescriptor[8] = {};
   for (const auto& r : rc.resources) {
     const bool binding_resolved =
         r.binding < resolved.size() && resolved[r.binding].valid;
@@ -256,7 +257,7 @@ void DispatchCompute(rhi::Renderer& renderer,
         TraceCsUnresolved(cs_addr, r);
       TraceCsCode(cs_addr);
     }
-    const uint32_t* descriptor =
+    const u32* descriptor =
         binding_resolved ? resolved[r.binding].descriptor : kNullDescriptor;
     ResourceRange range =
         r.kind == 1 ? ResolveImageResource(cs_addr, r, descriptor, trace)

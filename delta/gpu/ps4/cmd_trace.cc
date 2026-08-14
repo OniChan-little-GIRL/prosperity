@@ -5,6 +5,7 @@
  */
 
 #include "gpu/ps4/cmd_trace.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <atomic>
@@ -35,9 +36,9 @@
 namespace {
 
 DELTA_OPTION(bool, kTrace, "DELTA_GPU_TRACE", false);
-DELTA_OPTION(uint64_t, kAddrWatch, "DELTA_GPU_ADDRWATCH", 0);
+DELTA_OPTION(u64, kAddrWatch, "DELTA_GPU_ADDRWATCH", 0);
 DELTA_OPTION(bool, kBlitDump, "DELTA_GPU_BLITDUMP", false);
-DELTA_OPTION(uint64_t, kBlitRt, "DELTA_GPU_BLIT_RT", 0);
+DELTA_OPTION(u64, kBlitRt, "DELTA_GPU_BLIT_RT", 0);
 DELTA_OPTION(bool, kCbInfoTrace, "DELTA_GPU_CBINFO", false);
 DELTA_OPTION(bool, kCcbHist, "DELTA_GPU_CCBHIST", false);
 DELTA_OPTION(bool, kCeTrace, "DELTA_GPU_CETRACE", false);
@@ -45,10 +46,10 @@ DELTA_OPTION(int, kCeTraceMax, "DELTA_GPU_CETRACE_MAX", 200);
 DELTA_OPTION(bool, kCounterTrace, "DELTA_GPU_COUNTERTRACE", false);
 DELTA_OPTION(bool, kCsDrops, "DELTA_GPU_CSDROPS", false);
 DELTA_OPTION(bool, kCsDump, "DELTA_GPU_CSDUMP", false);
-DELTA_OPTION(uint64_t, kCsResTrace, "DELTA_GPU_CSRES", 0);
-DELTA_OPTION(uint64_t, kCsWatch, "DELTA_GPU_CSWATCH", 0);
+DELTA_OPTION(u64, kCsResTrace, "DELTA_GPU_CSRES", 0);
+DELTA_OPTION(u64, kCsWatch, "DELTA_GPU_CSWATCH", 0);
 DELTA_OPTION(bool, kDbTrace, "DELTA_GPU_DBTRACE", false);
-DELTA_OPTION(uint64_t, kDbWatch, "DELTA_GPU_DBWATCH", 0);
+DELTA_OPTION(u64, kDbWatch, "DELTA_GPU_DBWATCH", 0);
 DELTA_OPTION(bool, kDcbStat, "DELTA_GPU_DCBSTAT", false);
 DELTA_OPTION(bool, kDesyncTrace, "DELTA_GPU_DESYNC", false);
 DELTA_OPTION(bool, kDrawList, "DELTA_GPU_DRAWLIST", false);
@@ -58,23 +59,23 @@ DELTA_OPTION(bool, kDmaTrace, "DELTA_GPU_DMATRACE", false);
 DELTA_OPTION(bool, kEopTrace, "DELTA_GPU_EOPTRACE", false);
 DELTA_OPTION(bool, kEudFail, "DELTA_GPU_EUDFAIL", false);
 DELTA_OPTION(bool, kGeomDump, "DELTA_GPU_GEOMDUMP", false);
-DELTA_OPTION(uint32_t, kGeomMin, "DELTA_GPU_GEOMMIN", 500);
+DELTA_OPTION(u32, kGeomMin, "DELTA_GPU_GEOMMIN", 500);
 DELTA_OPTION(bool, kIbTrace, "DELTA_GPU_IBTRACE", false);
 DELTA_OPTION(bool, kMaskTrace, "DELTA_GPU_MASKTRACE", false);
 DELTA_OPTION(int, kMtAfter, "DELTA_GPU_MASKTRACE_AFTER", 0);
 DELTA_OPTION(int, kMtMax, "DELTA_GPU_MASKTRACE_MAX", 200);
-DELTA_OPTION(uint64_t, kMtRt, "DELTA_GPU_MASKTRACE_RT", 0);
+DELTA_OPTION(u64, kMtRt, "DELTA_GPU_MASKTRACE_RT", 0);
 DELTA_OPTION(bool, kNoMrtTrace, "DELTA_GPU_NOMRT", false);
 DELTA_OPTION(bool, kOpHist, "DELTA_GPU_OPHIST", false);
 DELTA_OPTION(int, kOhAfter, "DELTA_GPU_OPHIST_AFTER", 100);
 DELTA_OPTION(bool, kOpTrace, "DELTA_GPU_OPTRACE", false);
-DELTA_OPTION(uint64_t, kPsInCntl, "DELTA_GPU_PSINCNTL", 0);
+DELTA_OPTION(u64, kPsInCntl, "DELTA_GPU_PSINCNTL", 0);
 DELTA_OPTION(bool, kRawBufTrace, "DELTA_GPU_RAWBUF", false);
 DELTA_OPTION(int, kRegSrcFrame, "DELTA_GPU_REGSRC_FRAME", -1);
-DELTA_OPTION(uint64_t, kRegSrcPs, "DELTA_GPU_REGSRC_PS", 0);
-DELTA_OPTION(uint64_t, kRootWprotHash, "DELTA_GPU_ROOT_WPROT_HASH", 0);
+DELTA_OPTION(u64, kRegSrcPs, "DELTA_GPU_REGSRC_PS", 0);
+DELTA_OPTION(u64, kRootWprotHash, "DELTA_GPU_ROOT_WPROT_HASH", 0);
 DELTA_OPTION(int, kRootWprotMs, "DELTA_GPU_ROOT_WPROT_MS", 1);
-DELTA_OPTION(uint64_t, kRootWprotPs, "DELTA_GPU_ROOT_WPROT_PS", 0);
+DELTA_OPTION(u64, kRootWprotPs, "DELTA_GPU_ROOT_WPROT_PS", 0);
 DELTA_OPTION(bool, kRootWprotStep, "DELTA_GPU_ROOT_WPROT_STEP", false);
 DELTA_OPTION(bool, kShReloc, "DELTA_GPU_SHRELOC", false);
 DELTA_OPTION(bool, kSpriteDis, "DELTA_GPU_SPRITEDIS", false);
@@ -112,37 +113,37 @@ namespace {
 
 // Where each register was last written from, and how often the colour masks
 // have been programmed. Nothing but the probes below reads either.
-const uint32_t* g_reg_sources[kRegFileSize] = {};
-uint32_t g_shader_mask_writes = 0;
-uint32_t g_target_mask_writes = 0;
+const u32* g_reg_sources[kRegFileSize] = {};
+u32 g_shader_mask_writes = 0;
+u32 g_target_mask_writes = 0;
 
 WriteWatchFn g_write_watch = nullptr;
 
 // Opcode histogram and per-opcode walk time of the draw command buffers.
-uint32_t g_op_hist[256] = {};
-uint64_t g_op_ns[256] = {};
-uint64_t g_dcb_words = 0;
-uint64_t g_dcb_packets = 0;
+u32 g_op_hist[256] = {};
+u64 g_op_ns[256] = {};
+u64 g_dcb_words = 0;
+u64 g_dcb_packets = 0;
 int g_dcb_seen = 0;
 
-uint32_t g_ccb_hist[256] = {};
-uint64_t g_ccb_count = 0;
+u32 g_ccb_hist[256] = {};
+u64 g_ccb_count = 0;
 int g_ccb_hist_dumps = 0;
 
-const uint32_t* UserData(const Regs& regs, uint32_t first_reg) {
+const u32* UserData(const Regs& regs, u32 first_reg) {
   return regs.At(first_reg);
 }
 
 // base::FormatTo appends, so a line assembled a piece at a time is one log
 // entry rather than one per piece.
-base::String HexRun(const uint32_t* values, uint32_t count) {
+base::String HexRun(const u32* values, u32 count) {
   base::String out;
-  for (uint32_t i = 0; i < count; i++)
+  for (u32 i = 0; i < count; i++)
     base::FormatTo(out, " {:08x}", values[i]);
   return out;
 }
 
-void LogUserData(const char* channel, const char* label, const uint32_t* ud) {
+void LogUserData(const char* channel, const char* label, const u32* ud) {
   BASE_LOGI(channel, "{}{}", label, HexRun(ud, 16).c_str());
 }
 
@@ -172,12 +173,12 @@ const char* RecompStatusName(RecompStatus status) {
 
 // --- register file ---------------------------------------------------------
 
-void NoteRegisterWrites(uint32_t first_reg,
-                        const uint32_t* values,
-                        uint32_t count,
-                        uint32_t packet_base) {
-  for (uint32_t i = 0; i < count; i++) {
-    const uint32_t reg = first_reg + i;
+void NoteRegisterWrites(u32 first_reg,
+                        const u32* values,
+                        u32 count,
+                        u32 packet_base) {
+  for (u32 i = 0; i < count; i++) {
+    const u32 reg = first_reg + i;
     if (reg < kRegFileSize)
       g_reg_sources[reg] = &values[i];
     if (reg == mmCB_SHADER_MASK)
@@ -196,7 +197,7 @@ void NoteRegisterWrites(uint32_t first_reg,
     for (int rt = 0; rt < 8; rt++) {
       if (reg != mmCB_COLOR0_INFO + rt * kCbColorStride)
         continue;
-      static std::atomic<uint64_t> nonzero{0}, zero{0};
+      static std::atomic<u64> nonzero{0}, zero{0};
       static int shown = 0;
       (values[i] ? nonzero : zero).fetch_add(1);
       if (shown < 24) {
@@ -205,7 +206,7 @@ void NoteRegisterWrites(uint32_t first_reg,
                   "cb{} = {:#x} (packet base={:#x} reg={:#x} count={} word={})",
                   rt, values[i], packet_base, reg, count, i);
       }
-      const uint64_t total = nonzero.load() + zero.load();
+      const u64 total = nonzero.load() + zero.load();
       if ((total % 20000) == 0)
         BASE_LOGI("cbinfo", "{} non-zero, {} zero",
                   (unsigned long long)nonzero.load(),
@@ -221,21 +222,21 @@ void SetWriteWatch(WriteWatchFn watch) {
 }
 
 void MaybeArmRootWriteWatch(const Regs& regs,
-                            uint64_t ps_addr,
-                            uint32_t frame) {
+                            u64 ps_addr,
+                            u32 frame) {
   static bool armed = false;
   if (armed || !g_write_watch || (!kRootWprotPs && !kRootWprotHash))
     return;
-  uint64_t hash = 0;
+  u64 hash = 0;
   if (kRootWprotHash && IsGuestAddress(ps_addr))
     hash = gcn::CachedCodeHash(ps_addr, 4096);
   const bool match = (kRootWprotPs && kRootWprotPs == ps_addr) ||
                      (kRootWprotHash && kRootWprotHash == hash);
   if (!match)
     return;
-  const uint32_t* user_data = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
-  const uint64_t root =
-      (static_cast<uint64_t>(user_data[1] & 0xFFFF) << 32) | user_data[0];
+  const u32* user_data = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
+  const u64 root =
+      (static_cast<u64>(user_data[1] & 0xFFFF) << 32) | user_data[0];
   if (!IsGuestAddress(root) ||
       !utl::isMemoryRangeMapped(reinterpret_cast<const void*>(root), 64))
     return;
@@ -253,30 +254,30 @@ void MaybeArmRootWriteWatch(const Regs& regs,
   g_write_watch(root, watch_size, interval, false, kRootWprotStep);
 }
 
-void TraceRegisterSources(const Regs& regs, uint64_t ps_addr, uint32_t frame) {
+void TraceRegisterSources(const Regs& regs, u64 ps_addr, u32 frame) {
   if (!kRegSrcPs || ps_addr != kRegSrcPs)
     return;
-  if (kRegSrcFrame >= 0 && static_cast<uint32_t>(kRegSrcFrame) != frame)
+  if (kRegSrcFrame >= 0 && static_cast<u32>(kRegSrcFrame) != frame)
     return;
-  static uint32_t reports = 0;
+  static u32 reports = 0;
   if (reports++ >= 64)
     return;
   base::String line;
-  for (uint32_t i = 0; i < 16; i++) {
-    const uint32_t reg = mmSPI_SHADER_USER_DATA_PS_0 + i;
+  for (u32 i = 0; i < 16; i++) {
+    const u32 reg = mmSPI_SHADER_USER_DATA_PS_0 + i;
     base::FormatTo(line, " s{}={:08x}@{:#x}", i, regs[reg],
-                   reinterpret_cast<uint64_t>(g_reg_sources[reg]));
+                   reinterpret_cast<u64>(g_reg_sources[reg]));
   }
   BASE_LOGI("regsrc", "f{} PS={:#x} user_data:{}", frame, ps_addr,
             line.c_str());
 }
 
-void TraceFirstTexturedPs(const Regs& regs, uint64_t ps_addr) {
+void TraceFirstTexturedPs(const Regs& regs, u64 ps_addr) {
   static bool probed = false;
   if (!kTrace || probed || !IsGuestAddress(ps_addr))
     return;
   const auto program =
-      gcn::Decode(reinterpret_cast<const uint32_t*>(ps_addr), 256);
+      gcn::Decode(reinterpret_cast<const u32*>(ps_addr), 256);
   int n_mimg = 0, n_smrd = 0;
   for (const auto& inst : program) {
     if (inst.enc == gcn::Enc::kMimg)
@@ -289,7 +290,7 @@ void TraceFirstTexturedPs(const Regs& regs, uint64_t ps_addr) {
   probed = true;
   BASE_LOGI("gpu", "TEXTURED PS @{:#x}: mimg={} smrd={}",
             (unsigned long)ps_addr, n_mimg, n_smrd);
-  const uint32_t* ud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
+  const u32* ud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
   LogUserData("gpu", "  PS user_data:", ud);
   auto texs =
       gcn::TrackTextures(gcn::CachedProgram(ps_addr, 4096), ud, false, ps_addr);
@@ -301,23 +302,23 @@ void TraceFirstTexturedPs(const Regs& regs, uint64_t ps_addr) {
   FILE* f = std::fopen("/tmp/tex_raw.bin", "wb");
   if (!f)
     return;
-  std::fwrite(reinterpret_cast<const uint8_t*>(t.base), 1,
+  std::fwrite(reinterpret_cast<const u8*>(t.base), 1,
               (size_t)t.width * t.height * 4, f);
   std::fclose(f);
   BASE_LOGI("gpu", "  dumped /tmp/tex_raw.bin ({}x{} rgba)", t.width, t.height);
 }
 
-void TraceDrawOpcode(uint32_t op, uint32_t prim_type, uint32_t auto_count) {
+void TraceDrawOpcode(u32 op, u32 prim_type, u32 auto_count) {
   if (!kDrawPkt)
     return;
   // A histogram over the WHOLE run, not the first N draws: the counts that
   // decline downstream are not the ones a first-N sample catches.
   struct Bucket {
-    uint32_t op, prim, auto_count, n;
+    u32 op, prim, auto_count, n;
   };
   static Bucket buckets[32];
-  static uint32_t nbuckets = 0, total = 0;
-  uint32_t i = 0;
+  static u32 nbuckets = 0, total = 0;
+  u32 i = 0;
   for (; i < nbuckets; i++)
     if (buckets[i].op == op && buckets[i].prim == prim_type &&
         buckets[i].auto_count == auto_count)
@@ -329,15 +330,15 @@ void TraceDrawOpcode(uint32_t op, uint32_t prim_type, uint32_t auto_count) {
   if (++total % 2000 != 0)
     return;
   base::String line;
-  for (uint32_t j = 0; j < nbuckets; j++)
+  for (u32 j = 0; j < nbuckets; j++)
     base::FormatTo(line, " op={:#x}/prim={:#x}/auto={} x{}", buckets[j].op,
                    buckets[j].prim, buckets[j].auto_count, buckets[j].n);
   BASE_LOGI("drawpkt", "{} draws:{}", total, line.c_str());
 }
 
-void TraceIndexBuffer(uint64_t index_base,
-                      uint32_t index_count,
-                      uint32_t index_type,
+void TraceIndexBuffer(u64 index_base,
+                      u32 index_count,
+                      u32 index_type,
                       bool accepted) {
   if (!kDrawPkt)
     return;
@@ -353,12 +354,12 @@ void TraceIndexBuffer(uint64_t index_base,
                                      : " (base out of range)");
 }
 
-void TraceIndirectArgs(uint32_t op,
-                       uint64_t args_addr,
-                       uint64_t indirect_base,
-                       uint32_t offset,
+void TraceIndirectArgs(u32 op,
+                       u64 args_addr,
+                       u64 indirect_base,
+                       u32 offset,
                        bool mapped,
-                       const uint32_t args[3]) {
+                       const u32 args[3]) {
   if (!kDrawPkt)
     return;
   static int n = 0;
@@ -371,12 +372,12 @@ void TraceIndirectArgs(uint32_t op,
             mapped ? "mapped" : "UNMAPPED", args[0], args[1], args[2]);
 }
 
-void TraceIndexOffsetArgs(uint32_t max_size,
-                          uint32_t index_offset,
-                          uint32_t index_count,
-                          uint64_t index_base,
-                          uint64_t resolved_base,
-                          uint32_t index_type,
+void TraceIndexOffsetArgs(u32 max_size,
+                          u32 index_offset,
+                          u32 index_count,
+                          u64 index_base,
+                          u64 resolved_base,
+                          u32 index_type,
                           bool accepted) {
   if (!kDrawPkt)
     return;
@@ -396,13 +397,13 @@ void TraceIndexOffsetArgs(uint32_t max_size,
 }
 
 void TraceMrtSlotZeroGap(const rhi::DrawInfo& d,
-                         uint32_t target_mask,
-                         uint64_t vs_addr,
-                         uint64_t ps_addr) {
+                         u32 target_mask,
+                         u64 vs_addr,
+                         u64 ps_addr) {
   if (!kNoMrtTrace || !d.mrt_count || d.mrt_base[0])
     return;
-  static std::atomic<uint64_t> n{0};
-  const uint64_t seen = n.fetch_add(1);
+  static std::atomic<u64> n{0};
+  const u64 seen = n.fetch_add(1);
   if ((seen % 200) != 0)
     return;
   base::String live;
@@ -416,9 +417,9 @@ void TraceMrtSlotZeroGap(const rhi::DrawInfo& d,
 
 void TraceNoMrtBound(const Regs& regs,
                      const rhi::DrawInfo& d,
-                     uint32_t target_mask,
-                     uint64_t vs_addr,
-                     uint64_t ps_addr) {
+                     u32 target_mask,
+                     u64 vs_addr,
+                     u64 ps_addr) {
   if (!kNoMrtTrace || !target_mask || d.mrt_count)
     return;
   static int n = 0;
@@ -436,8 +437,8 @@ void TraceNoMrtBound(const Regs& regs,
               regs[mmCB_COLOR0_SLICE + rt * kCbColorStride]);
 }
 
-void TraceDepthState(const Regs& regs, uint32_t z_info) {
-  const uint32_t depth_control = regs[mmDB_DEPTH_CONTROL];
+void TraceDepthState(const Regs& regs, u32 z_info) {
+  const u32 depth_control = regs[mmDB_DEPTH_CONTROL];
   static int n = 0;
   if (!kDbTrace || n >= 20000 || (!z_info && !depth_control))
     return;
@@ -446,8 +447,8 @@ void TraceDepthState(const Regs& regs, uint32_t z_info) {
             "DEPTH_CONTROL={:#x} Z_INFO={:#x} Zread={:#x} Zwrite={:#x} "
             "clear={:#x} prim={} size={:#x} slice={:#x}",
             depth_control, z_info,
-            static_cast<uint64_t>(regs[mmDB_Z_READ_BASE]) << 8,
-            static_cast<uint64_t>(regs[mmDB_Z_WRITE_BASE]) << 8,
+            static_cast<u64>(regs[mmDB_Z_READ_BASE]) << 8,
+            static_cast<u64>(regs[mmDB_Z_WRITE_BASE]) << 8,
             regs[mmDB_DEPTH_CLEAR], regs[mmVGT_PRIMITIVE_TYPE],
             regs[mmDB_DEPTH_SIZE], regs[mmDB_DEPTH_SLICE]);
 }
@@ -456,17 +457,17 @@ void TraceDepthBaseWatch(const Regs& regs) {
   if (!kDbWatch)
     return;
   static int n = 0;
-  const uint32_t want = static_cast<uint32_t>((uint64_t)kDbWatch >> 8);
-  const uint32_t db_regs[] = {mmDB_Z_READ_BASE, mmDB_STENCIL_READ_BASE,
+  const u32 want = static_cast<u32>((u64)kDbWatch >> 8);
+  const u32 db_regs[] = {mmDB_Z_READ_BASE, mmDB_STENCIL_READ_BASE,
                               mmDB_Z_WRITE_BASE, mmDB_STENCIL_WRITE_BASE,
                               mmDB_HTILE_DATA_BASE};
-  for (uint32_t reg : db_regs)
+  for (u32 reg : db_regs)
     if (regs[reg] == want && n++ < 8)
       BASE_LOGI("dbwatch", "reg {:#x} == {:#x} (shifted {:#x})", reg,
                 (unsigned long)kDbWatch, want);
 }
 
-bool ShouldTraceTextureTracking(uint32_t frame, uint64_t ps_addr) {
+bool ShouldTraceTextureTracking(u32 frame, u64 ps_addr) {
   if (kTexTrackFrame < 0 || static_cast<int>(frame) != kTexTrackFrame)
     return false;
   BASE_LOGI("textrack", "f{} ps={:#x}", frame, (unsigned long)ps_addr);
@@ -485,18 +486,18 @@ void TraceTextureFormat(const gcn::TImage& tex, const rhi::DrawInfo& d) {
 }
 
 void TracePsInputCntl(const Regs& regs,
-                      uint64_t ps_addr,
-                      uint32_t ps_input_ena,
-                      const uint32_t* ps_in_cntl) {
+                      u64 ps_addr,
+                      u32 ps_input_ena,
+                      const u32* ps_in_cntl) {
   if (!kPsInCntl || !ps_input_ena)
     return;
   // With DELTA_GPU_PSINCNTL=1, report only shaders whose mapping is NOT the
   // identity: an identity mapping is a no-op by construction, so those are the
   // only ones honouring these registers can change.
   bool non_identity = false;
-  for (uint32_t i = 0; i < 16; i++)
+  for (u32 i = 0; i < 16; i++)
     non_identity |= (ps_in_cntl[i] & 0x1F) != i;
-  if (kPsInCntl == 1 ? !non_identity : ps_addr != (uint64_t)kPsInCntl)
+  if (kPsInCntl == 1 ? !non_identity : ps_addr != (u64)kPsInCntl)
     return;
   static int n = 0;
   if (n++ >= 30)
@@ -504,7 +505,7 @@ void TracePsInputCntl(const Regs& regs,
   // NUM_INTERP says how many of the 32 slots are meaningful; slots at or above
   // it are don't-care and their zero is not evidence of anything.
   base::String slots;
-  for (uint32_t i = 0; i < 8; i++)
+  for (u32 i = 0; i < 8; i++)
     base::FormatTo(slots, " {}:off={}(raw={:#x})", i,
                    regs[mmSPI_PS_INPUT_CNTL_0 + i] & 0x3F,
                    regs[mmSPI_PS_INPUT_CNTL_0 + i]);
@@ -512,25 +513,25 @@ void TracePsInputCntl(const Regs& regs,
             ps_input_ena, regs[mmSPI_PS_IN_CONTROL] & 0x3F, slots.c_str());
 }
 
-void TraceShaderCacheMiss(uint64_t vs_addr,
-                          uint64_t ps_addr,
-                          uint64_t vs_hash,
-                          uint64_t ps_hash,
-                          uint64_t fetch_hash,
-                          uint32_t ps_input_ena,
-                          uint32_t tex_3d_mask,
-                          uint32_t tex_1d_mask) {
+void TraceShaderCacheMiss(u64 vs_addr,
+                          u64 ps_addr,
+                          u64 vs_hash,
+                          u64 ps_hash,
+                          u64 fetch_hash,
+                          u32 ps_input_ena,
+                          u32 tex_3d_mask,
+                          u32 tex_1d_mask) {
   if (!kShReloc)
     return;
   struct Seen {
-    uint64_t addr_vs = 0, addr_ps = 0, fetch = 0;
-    uint32_t ena = 0, t3d = 0, t1d = 0;
-    std::unordered_set<uint64_t> fetches, states;
+    u64 addr_vs = 0, addr_ps = 0, fetch = 0;
+    u32 ena = 0, t3d = 0, t1d = 0;
+    std::unordered_set<u64> fetches, states;
   };
-  static std::unordered_map<uint64_t, Seen> seen;  // by content pair
-  static uint32_t n_new = 0, n_addr = 0, n_fetch = 0, n_ena = 0, n_3d = 0,
+  static std::unordered_map<u64, Seen> seen;  // by content pair
+  static u32 n_new = 0, n_addr = 0, n_fetch = 0, n_ena = 0, n_3d = 0,
                   n_1d = 0, n_none = 0, n_total = 0;
-  const uint64_t pair = vs_hash ^ (ps_hash * 0x9e3779b97f4a7c15ull);
+  const u64 pair = vs_hash ^ (ps_hash * 0x9e3779b97f4a7c15ull);
   n_total++;
   auto it = seen.find(pair);
   if (it == seen.end()) {
@@ -538,7 +539,7 @@ void TraceShaderCacheMiss(uint64_t vs_addr,
     it = seen.emplace(pair, Seen{}).first;
   } else {
     const Seen& s = it->second;
-    uint32_t what = 0;
+    u32 what = 0;
     if (s.addr_vs != vs_addr || s.addr_ps != ps_addr) {
       n_addr++;
       what++;
@@ -581,8 +582,8 @@ void TraceShaderCacheMiss(uint64_t vs_addr,
   s.t3d = tex_3d_mask;
   s.t1d = tex_1d_mask;
   s.fetches.insert(fetch_hash);
-  s.states.insert((static_cast<uint64_t>(ps_input_ena) << 32) |
-                  (static_cast<uint64_t>(tex_3d_mask) << 16) | tex_1d_mask);
+  s.states.insert((static_cast<u64>(ps_input_ena) << 32) |
+                  (static_cast<u64>(tex_3d_mask) << 16) | tex_1d_mask);
   if ((n_total & 31) == 0) {
     size_t max_fetch = 0, max_state = 0;
     for (const auto& [key, value] : seen) {
@@ -598,10 +599,10 @@ void TraceShaderCacheMiss(uint64_t vs_addr,
 }
 
 void TraceRawBuffer(const char* stage,
-                    uint64_t vs_addr,
+                    u64 vs_addr,
                     const gcn::ShaderBuffer& buffer,
                     const gcn::VBuffer& resolved,
-                    uint64_t bytes,
+                    u64 bytes,
                     bool accepted,
                     const rhi::DrawInfo& d) {
   if (!kRawBufTrace)
@@ -620,13 +621,13 @@ void TraceRawBuffer(const char* stage,
 
 void TraceBlitDraw(const Regs& regs,
                    const rhi::DrawInfo& d,
-                   uint64_t vs_addr,
-                   uint64_t ps_addr) {
+                   u64 vs_addr,
+                   u64 ps_addr) {
   static int n = 0;
   if (!kBlitDump || n >= 6)
     return;
   bool target_bound = !kBlitRt || d.rt_base == kBlitRt;
-  for (uint32_t i = 0; kBlitRt && i < std::min(d.mrt_count, 8u); i++)
+  for (u32 i = 0; kBlitRt && i < std::min(d.mrt_count, 8u); i++)
     target_bound |= d.mrt_base[i] == kBlitRt;
   if (!target_bound || (!kBlitRt && d.rt_w < 1280))
     return;
@@ -638,7 +639,7 @@ void TraceBlitDraw(const Regs& regs,
             (unsigned long)ps_addr, (unsigned long)d.tex_base, d.tex_w, d.tex_h,
             d.num_vattrs, d.vertex_stride, d.index_count, d.blend_control);
   base::String mrt;
-  for (uint32_t i = 0; i < std::min(d.mrt_count, 8u); i++)
+  for (u32 i = 0; i < std::min(d.mrt_count, 8u); i++)
     base::FormatTo(mrt, " {:#x}", d.mrt_base[i]);
   BASE_LOGI("blit", "  MRT({}):{}", d.mrt_count, mrt.c_str());
   BASE_LOGI("blit", "  CB0 pitch={:#x} slice={:#x} info={:#x} attrib={:#x}",
@@ -655,12 +656,12 @@ void TraceBlitDraw(const Regs& regs,
               "    T# base={:#x} {}x{} pitch={} dfmt={} nfmt={} tiling={}",
               (unsigned long)t.base, t.width, t.height, t.pitch, t.dfmt, t.nfmt,
               t.tiling_idx);
-  const uint32_t* ps_code = reinterpret_cast<const uint32_t*>(ps_addr);
-  const uint32_t ps_words = gcn::CodeLength(ps_code, 4096);
+  const u32* ps_code = reinterpret_cast<const u32*>(ps_addr);
+  const u32 ps_words = gcn::CodeLength(ps_code, 4096);
   gcn::Disassemble(ps_code, ps_words ? ps_words : 512, "blit.PS");
   if (n != 1 || !d.recomp)
     return;
-  const uint32_t* ud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
+  const u32* ud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
   LogUserData("blit", "  PS user data:", ud);
   for (const auto& cb : d.recomp->ps_cbufs) {
     const auto& resolved = d.cbufs[cb.binding];
@@ -669,10 +670,10 @@ void TraceBlitDraw(const Regs& regs,
               (unsigned long)resolved.base, resolved.size);
     if (!resolved.base)
       continue;
-    const uint32_t* words = reinterpret_cast<const uint32_t*>(resolved.base);
-    const uint32_t rows =
+    const u32* words = reinterpret_cast<const u32*>(resolved.base);
+    const u32 rows =
         std::min({(cb.num_dwords + 3) / 4, resolved.size / 16, 64u});
-    for (uint32_t row = 0; row < rows; row++) {
+    for (u32 row = 0; row < rows; row++) {
       float values[4];
       std::memcpy(values, words + row * 4, sizeof(values));
       BASE_LOGI("blit",
@@ -686,9 +687,9 @@ void TraceBlitDraw(const Regs& regs,
 
 void TraceDrawList(const Regs& regs,
                    const rhi::DrawInfo& d,
-                   uint64_t vs_addr,
-                   uint64_t ps_addr,
-                   uint64_t fetch_addr,
+                   u64 vs_addr,
+                   u64 ps_addr,
+                   u64 fetch_addr,
                    RecompStatus status) {
   // The title/menu floods the early run, so logging starts
   // DELTA_GPU_DRAWLIST_AFTER seconds (default 90) after the first draw, by
@@ -712,7 +713,7 @@ void TraceDrawList(const Regs& regs,
 
 void TraceColorMasks(const Regs& regs,
                      const rhi::DrawInfo& d,
-                     uint64_t ps_addr,
+                     u64 ps_addr,
                      RecompStatus status) {
   if (!kMaskTrace)
     return;
@@ -722,14 +723,14 @@ void TraceColorMasks(const Regs& regs,
   const double elapsed = since_first_draw.Seconds();
   static int n = 0;
   bool rt_hit = !kMtRt || d.rt_base == kMtRt;
-  for (uint32_t i = 0; kMtRt && i < std::min(d.mrt_count, 8u); i++)
+  for (u32 i = 0; kMtRt && i < std::min(d.mrt_count, 8u); i++)
     rt_hit |= d.mrt_base[i] == kMtRt;
   if (!rt_hit || n >= kMtMax || elapsed < kMtAfter)
     return;
   n++;
-  const uint32_t tm = regs[mmCB_TARGET_MASK];
-  const uint32_t sm = regs[mmCB_SHADER_MASK];
-  const uint32_t cc = regs[mmCB_COLOR_CONTROL];
+  const u32 tm = regs[mmCB_TARGET_MASK];
+  const u32 sm = regs[mmCB_SHADER_MASK];
+  const u32 cc = regs[mmCB_COLOR_CONTROL];
   BASE_LOGI(
       "mask",
       "#{} rt={:#x} {}x{} mrt={} cb0base={:#x} cb1base={:#x} "
@@ -772,11 +773,11 @@ void TraceSpriteDraw(const rhi::DrawInfo& d) {
   static bool disassembled = false;
   if (kSpriteDis && !disassembled) {
     disassembled = true;
-    const uint32_t* ps = reinterpret_cast<const uint32_t*>(d.ps_addr);
-    const uint32_t words = gcn::CodeLength(ps, 4096);
+    const u32* ps = reinterpret_cast<const u32*>(d.ps_addr);
+    const u32 words = gcn::CodeLength(ps, 4096);
     gcn::Disassemble(ps, words ? words : 512, "sprite.PS");
     LogUserData("sprite", "  PS user data:", d.ps_user_data);
-    for (uint32_t i = 0; i < d.num_texs; i++) {
+    for (u32 i = 0; i < d.num_texs; i++) {
       const auto& tex = d.texs[i];
       BASE_LOGI("sprite",
                 "  tex{}={:#x} {}x{} pitch={} dfmt={} nfmt={} tiling={} "
@@ -786,7 +787,7 @@ void TraceSpriteDraw(const rhi::DrawInfo& d) {
                 tex.sampler[2], tex.sampler[3]);
     }
     for (const auto& inst : *gcn::CachedProgram(d.ps_addr, 4096)) {
-      const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+      const u32 w = inst.raw[0], w1 = inst.raw[1];
       if (inst.enc == gcn::Enc::kVintrp) {
         BASE_LOGI("sprite", "  interp pc={:#x} op={} attr={} chan={} v{}",
                   inst.pc, (w >> 16) & 3, (w >> 10) & 0x3f, (w >> 8) & 3,
@@ -807,14 +808,14 @@ void TraceSpriteDraw(const rhi::DrawInfo& d) {
       }
     }
   }
-  for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
+  for (u32 a = 0; a < d.num_vattrs && a < 8; a++) {
     const auto& attr = d.vattrs[a];
     if (attr.binding >= d.num_vbufs || !d.vbufs[attr.binding].data)
       continue;
     const auto& binding = d.vbufs[attr.binding];
     base::String vertices;
-    for (uint32_t v = 0; v < std::min(d.vertex_count, 3u); v++) {
-      const uint8_t* raw = static_cast<const uint8_t*>(binding.data) +
+    for (u32 v = 0; v < std::min(d.vertex_count, 3u); v++) {
+      const u8* raw = static_cast<const u8*>(binding.data) +
                            static_cast<size_t>(v) * binding.stride +
                            attr.offset;
       if (attr.dfmt == 10) {
@@ -846,14 +847,14 @@ void TraceVertexAttrs(const rhi::DrawInfo& d) {
   BASE_LOGI("vattr", "vcount={} prim={:#x} nattrs={} nbufs={} rt={:#x}",
             d.vertex_count, d.prim_type, d.num_vattrs, d.num_vbufs,
             (unsigned long)d.rt_base);
-  for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
+  for (u32 a = 0; a < d.num_vattrs && a < 8; a++) {
     const auto& attr = d.vattrs[a];
     const auto& vb = d.vbufs[attr.binding < d.num_vbufs ? attr.binding : 0];
-    const auto* p = static_cast<const uint8_t*>(vb.data);
-    constexpr uint32_t kBytes = 8;  // covers every <=64-bit attribute format
+    const auto* p = static_cast<const u8*>(vb.data);
+    constexpr u32 kBytes = 8;  // covers every <=64-bit attribute format
     base::String v0;
     if (p && utl::isMemoryRangeMapped(p + attr.offset, kBytes))
-      for (uint32_t b = 0; b < kBytes; b++)
+      for (u32 b = 0; b < kBytes; b++)
         base::FormatTo(v0, "{:02x}", p[attr.offset + b]);
     else
       v0.append("(unmapped)");
@@ -875,7 +876,7 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
   n++;
   const float* cb =
       d.cbuf_base ? reinterpret_cast<const float*>(d.cbuf_base) : nullptr;
-  const auto* vb = static_cast<const uint8_t*>(d.vertex_data);
+  const auto* vb = static_cast<const u8*>(d.vertex_data);
   const float* p0 = reinterpret_cast<const float*>(vb + d.vattrs[0].offset);
   BASE_LOGI("geom",
             "idx={} ps_texs={} tex={:#x} {}x{} tiling={} pitch={} rt={:#x} "
@@ -908,11 +909,11 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
     };
     int on_r = 0, on_c = 0, on_rfz = 0, on_cfz = 0,
         count = d.index_count < 64 ? d.index_count : 64;
-    const uint16_t* i16 = (d.index_type == 0)
-                              ? static_cast<const uint16_t*>(d.index_data)
+    const u16* i16 = (d.index_type == 0)
+                              ? static_cast<const u16*>(d.index_data)
                               : nullptr;
-    const uint32_t* i32 = (d.index_type == 1)
-                              ? static_cast<const uint32_t*>(d.index_data)
+    const u32* i32 = (d.index_type == 1)
+                              ? static_cast<const u32*>(d.index_data)
                               : nullptr;
     float first_r[4] = {0}, first_c[4] = {0};
     auto onscreen = [](float* o) {
@@ -924,7 +925,7 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
     for (int i = 0; i < count; i++) {
       // Use the INDEX buffer to fetch the real vertex (these are indexed draws;
       // a linear 0..n read hits unused verts at the buffer head).
-      uint32_t idx = i16 ? i16[i] : i32 ? i32[i] : (uint32_t)i;
+      u32 idx = i16 ? i16[i] : i32 ? i32[i] : (u32)i;
       const float* p = reinterpret_cast<const float*>(
           vb + (size_t)idx * d.vertex_stride + d.vattrs[0].offset);
       float r4[4], c4[4];
@@ -960,13 +961,13 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
     // The game is in real gameplay, so a valid view transform exists. Maybe the
     // VS projects a DIFFERENT attribute than attr0. Project EACH >=3-comp attr
     // (over the indexed verts) and report which, if any, lands on-screen.
-    uint32_t first_idx = i16 ? i16[0] : i32 ? i32[0] : 0;
-    for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
+    u32 first_idx = i16 ? i16[0] : i32 ? i32[0] : 0;
+    for (u32 a = 0; a < d.num_vattrs && a < 8; a++) {
       if (d.vattrs[a].num_comps < 3)
         continue;
       int on_a = 0;
       for (int i = 0; i < count; i++) {
-        uint32_t idx = i16 ? i16[i] : i32 ? i32[i] : (uint32_t)i;
+        u32 idx = i16 ? i16[i] : i32 ? i32[i] : (u32)i;
         const float* p = reinterpret_cast<const float*>(
             vb + (size_t)idx * d.vertex_stride + d.vattrs[a].offset);
         float c4[4];
@@ -988,11 +989,11 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
   // (so our load zeroes it)? This decides why the src-alpha blend makes walls
   // invisible.
   if (IsGuestAddress(d.tex_base) && d.tex_w && d.tex_h) {
-    const uint32_t* tp = reinterpret_cast<const uint32_t*>(d.tex_base);
-    uint64_t total = (uint64_t)d.tex_w * d.tex_h,
+    const u32* tp = reinterpret_cast<const u32*>(d.tex_base);
+    u64 total = (u64)d.tex_w * d.tex_h,
              step = total > 4096 ? total / 4096 : 1, a_nz = 0, rgb_nz = 0;
-    for (uint64_t i = 0; i < total; i += step) {
-      uint32_t px = tp[i];
+    for (u64 i = 0; i < total; i += step) {
+      u32 px = tp[i];
       if (px >> 24)
         a_nz++;
       if (px & 0x00FFFFFF)
@@ -1005,12 +1006,12 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
   // The PS's texture-load pattern: SMRD (op/sdst/sbase/imm/off) + MIMG srsrc,
   // plus the first user-data dwords, to see how the T#s are loaded.
   auto ps_insts =
-      gcn::Decode(reinterpret_cast<const uint32_t*>(d.ps_addr), 4096);
-  const uint32_t* pud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
+      gcn::Decode(reinterpret_cast<const u32*>(d.ps_addr), 4096);
+  const u32* pud = UserData(regs, mmSPI_SHADER_USER_DATA_PS_0);
   BASE_LOGI("geom", "  ps_ud=[{}]", HexRun(pud, 8).c_str());
   for (const auto& inst : ps_insts) {
     if (inst.enc == gcn::Enc::kSmrd) {
-      const uint32_t w = inst.raw[0];
+      const u32 w = inst.raw[0];
       BASE_LOGI("geom", "  smrd op={} sdst={} sbase={} imm={} off={:#x}",
                 (w >> 22) & 0x1F, (w >> 15) & 0x7F, (w >> 9) & 0x3F,
                 (w >> 8) & 1, w & 0xFF);
@@ -1024,29 +1025,29 @@ void TraceWorldGeometry(const Regs& regs, const rhi::DrawInfo& d) {
   if (!IsGuestAddress(d.vs_addr))
     return;
   auto vs_insts =
-      gcn::Decode(reinterpret_cast<const uint32_t*>(d.vs_addr), 4096);
-  const uint32_t* vud = UserData(regs, mmSPI_SHADER_USER_DATA_VS_0);
+      gcn::Decode(reinterpret_cast<const u32*>(d.vs_addr), 4096);
+  const u32* vud = UserData(regs, mmSPI_SHADER_USER_DATA_VS_0);
   BASE_LOGI("geom", "  vs_ud=[{}]", HexRun(vud, 8).c_str());
   int shown = 0;
   for (const auto& inst : vs_insts) {
     if (inst.enc != gcn::Enc::kSmrd || shown >= 6)
       continue;
-    const uint32_t w = inst.raw[0], op = (w >> 22) & 0x1F,
+    const u32 w = inst.raw[0], op = (w >> 22) & 0x1F,
                    sbase = (w >> 9) & 0x3F;
     const bool imm = (w >> 8) & 1;
-    const uint32_t off = w & 0xFF;
+    const u32 off = w & 0xFF;
     shown++;
-    const uint32_t b2 = sbase * 2;
-    const uint32_t boff = imm ? off * 4 : 0;
+    const u32 b2 = sbase * 2;
+    const u32 boff = imm ? off * 4 : 0;
     // op<8 = s_load (64-bit pointer in ud[b2..b2+1]); op>=8 = s_buffer_load (V#
     // in ud[b2..b2+3], base in the low 44 bits). A 2nd matrix here would be the
     // missing view transform.
-    uint64_t base = 0;
+    u64 base = 0;
     if (b2 + 1 < 16) {
       if (op < 0x08)
-        base = ((uint64_t)vud[b2 + 1] << 32 | vud[b2]);
+        base = ((u64)vud[b2 + 1] << 32 | vud[b2]);
       else
-        base = ((uint64_t)(vud[b2 + 1] & 0xFFF) << 32 | vud[b2]);
+        base = ((u64)(vud[b2 + 1] & 0xFFF) << 32 | vud[b2]);
     }
     base::String matrix;
     if (base >= 0x1000000ull && base < kGuestEnd) {
@@ -1070,13 +1071,13 @@ namespace {
 // The embedded "OrbShdr" BinaryInfo in a shader's GCN code, which carries its
 // length and hash. Layout: if code[0] == 0xBEEB03FF the info is at code +
 // (code[1]+1)*2 dwords; else scan for the 7-byte signature.
-void ProbeShaderBinaryInfo(const char* tag, uint64_t addr) {
-  const auto* code = reinterpret_cast<const uint32_t*>(addr);
-  const uint8_t* info = nullptr;
+void ProbeShaderBinaryInfo(const char* tag, u64 addr) {
+  const auto* code = reinterpret_cast<const u32*>(addr);
+  const u8* info = nullptr;
   if (code[0] == 0xBEEB03FFu) {
-    info = reinterpret_cast<const uint8_t*>(code + (code[1] + 1) * 2);
+    info = reinterpret_cast<const u8*>(code + (code[1] + 1) * 2);
   } else {
-    const auto* bytes = reinterpret_cast<const uint8_t*>(code);
+    const auto* bytes = reinterpret_cast<const u8*>(code);
     for (int k = 0; k < 0x4000; k++)
       if (std::memcmp(bytes + k, "OrbShdr", 7) == 0) {
         info = bytes + k;
@@ -1088,9 +1089,9 @@ void ProbeShaderBinaryInfo(const char* tag, uint64_t addr) {
               (unsigned long)addr, code[0]);
     return;
   }
-  uint32_t len_field;
+  u32 len_field;
   std::memcpy(&len_field, info + 8, 4);
-  uint64_t hash;
+  u64 hash;
   std::memcpy(&hash, info + 0xC, 8);  // approx offsets
   BASE_LOGI("gpu", "  {} shader @{:#x} OrbShdr len={} hash={:#x}", tag,
             (unsigned long)addr, len_field & 0xFFFFFF, (unsigned long)hash);
@@ -1098,24 +1099,24 @@ void ProbeShaderBinaryInfo(const char* tag, uint64_t addr) {
 
 // The user-data SGPRs, decoding any dword pair that forms a plausible guest
 // pointer as a V# (base44, stride, num_records).
-void DumpUserDataDescriptors(const char* tag, const uint32_t* ud) {
+void DumpUserDataDescriptors(const char* tag, const u32* ud) {
   LogUserData("gpu", base::Format("  {} user_data:", tag).c_str(), ud);
   for (int k = 0; k + 1 < 16; k += 2) {
-    const uint64_t base = ((uint64_t)(ud[k + 1] & 0xFFF) << 32) | ud[k];
+    const u64 base = ((u64)(ud[k + 1] & 0xFFF) << 32) | ud[k];
     if (!IsGuestAddress(base))
       continue;
-    const uint32_t stride = (ud[k + 1] >> 16) & 0x3FFF;
-    const uint32_t nrec = ud[k + 2];
+    const u32 stride = (ud[k + 1] >> 16) & 0x3FFF;
+    const u32 nrec = ud[k + 2];
     BASE_LOGI("gpu", "    sgpr[{}..]: ptr={:#x} stride={} nrec={} fmt={:#x}", k,
               (unsigned long)base, stride, nrec, ud[k + 3]);
     // A small vertex buffer (a quad): dump it as floats to learn the layout.
     if (!stride || stride > 64 || !nrec || nrec > 8)
       continue;
     const auto* f = reinterpret_cast<const float*>(base);
-    const auto* u = reinterpret_cast<const uint32_t*>(base);
-    for (uint32_t v = 0; v < nrec; v++) {
+    const auto* u = reinterpret_cast<const u32*>(base);
+    for (u32 v = 0; v < nrec; v++) {
       base::String values;
-      for (uint32_t c = 0; c < stride / 4; c++)
+      for (u32 c = 0; c < stride / 4; c++)
         base::FormatTo(values, " {:g}({:08x})", f[v * (stride / 4) + c],
                        u[v * (stride / 4) + c]);
       BASE_LOGI("gpu", "      v{}:{}", v, values.c_str());
@@ -1125,21 +1126,21 @@ void DumpUserDataDescriptors(const char* tag, const uint32_t* ud) {
 
 // A descriptor table a user-data pointer points at: V# (4 dwords: base48,
 // stride, num_records) and T# (8 dwords: base + width/height) heuristics.
-void DumpDescriptorTable(const char* tag, uint64_t ptr) {
+void DumpDescriptorTable(const char* tag, u64 ptr) {
   if (!IsGuestAddress(ptr))
     return;
-  const auto* t = reinterpret_cast<const uint32_t*>(ptr);
+  const auto* t = reinterpret_cast<const u32*>(ptr);
   BASE_LOGI("gpu", "  table {} @{:#x}:", tag, (unsigned long)ptr);
   for (int k = 0; k < 32; k += 4) {
-    const uint64_t b = ((uint64_t)(t[k + 1] & 0xFFFF) << 32) | t[k];
-    const uint32_t stride = (t[k + 1] >> 16) & 0x3FFF;
+    const u64 b = ((u64)(t[k + 1] & 0xFFFF) << 32) | t[k];
+    const u32 stride = (t[k + 1] >> 16) & 0x3FFF;
     if (IsGuestAddress(b) && stride && stride <= 256)
       BASE_LOGI("gpu",
                 "    +{:02x} V#? base={:#x} stride={} nrec={} dfmt={:#x}",
                 k * 4, (unsigned long)b, stride, t[k + 2], t[k + 3]);
     // T# heuristic: dword2 has width-1[0:13], height-1[14:27]
-    const uint64_t tb = ((uint64_t)(t[k + 1] & 0xFFFFFF) << 32) | t[k];
-    const uint32_t w = (t[k + 2] & 0x3FFF) + 1,
+    const u64 tb = ((u64)(t[k + 1] & 0xFFFFFF) << 32) | t[k];
+    const u32 w = (t[k + 2] & 0x3FFF) + 1,
                    h = ((t[k + 2] >> 14) & 0x3FFF) + 1;
     if (IsGuestAddress(tb) && w > 4 && w <= 8192 && h > 4 && h <= 8192)
       BASE_LOGI("gpu", "    +{:02x} T#? base={:#x} {}x{} dfmt={:#x}", k * 4,
@@ -1150,15 +1151,15 @@ void DumpDescriptorTable(const char* tag, uint64_t ptr) {
 }  // namespace
 
 void TraceDrawRegisters(const Regs& regs,
-                        uint32_t op,
-                        const uint32_t* body,
-                        uint32_t count) {
+                        u32 op,
+                        const u32* body,
+                        u32 count) {
   if (!kTrace)
     return;
-  const uint64_t vs = regs.ShaderAddr(mmSPI_SHADER_PGM_LO_VS);
-  const uint64_t ps = regs.ShaderAddr(mmSPI_SHADER_PGM_LO_PS);
-  const uint32_t sc_tl = regs[mmPA_SC_SCREEN_SCISSOR_TL];
-  const uint32_t sc_br = regs[mmPA_SC_SCREEN_SCISSOR_BR];
+  const u64 vs = regs.ShaderAddr(mmSPI_SHADER_PGM_LO_VS);
+  const u64 ps = regs.ShaderAddr(mmSPI_SHADER_PGM_LO_PS);
+  const u32 sc_tl = regs[mmPA_SC_SCREEN_SCISSOR_TL];
+  const u32 sc_br = regs[mmPA_SC_SCREEN_SCISSOR_BR];
   BASE_LOGI("gpu",
             "DRAW op={:#x} prim={} indices={} | RT={:#x} info={:#x} "
             "attrib={:#x} scissor=[{},{}..{},{}] VS={:#x} PS={:#x}",
@@ -1176,27 +1177,27 @@ void TraceDrawRegisters(const Regs& regs,
   DumpUserDataDescriptors("VS", UserData(regs, mmSPI_SHADER_USER_DATA_VS_0));
   DumpUserDataDescriptors("PS", UserData(regs, mmSPI_SHADER_USER_DATA_PS_0));
 
-  const uint32_t* vud = UserData(regs, mmSPI_SHADER_USER_DATA_VS_0);
-  DumpDescriptorTable("VS.sgpr0", ((uint64_t)(vud[1] & 0xFFFF) << 32) | vud[0]);
-  DumpDescriptorTable("VS.sgpr2", ((uint64_t)(vud[3] & 0xFFFF) << 32) | vud[2]);
+  const u32* vud = UserData(regs, mmSPI_SHADER_USER_DATA_VS_0);
+  DumpDescriptorTable("VS.sgpr0", ((u64)(vud[1] & 0xFFFF) << 32) | vud[0]);
+  DumpDescriptorTable("VS.sgpr2", ((u64)(vud[3] & 0xFFFF) << 32) | vud[2]);
 
   // The fetch shader (sgpr0 ptr, just past the VS code) does the s_load(V#
   // table) + buffer_load(attributes).
-  gcn::Disassemble(reinterpret_cast<const uint32_t*>(vs), 512, "VS");
-  gcn::Disassemble(reinterpret_cast<const uint32_t*>(ps), 512, "PS");
-  const uint64_t fetch = ((uint64_t)(vud[1] & 0xFFFF) << 32) | vud[0];
+  gcn::Disassemble(reinterpret_cast<const u32*>(vs), 512, "VS");
+  gcn::Disassemble(reinterpret_cast<const u32*>(ps), 512, "PS");
+  const u64 fetch = ((u64)(vud[1] & 0xFFFF) << 32) | vud[0];
   if (!IsGuestAddress(fetch))
     return;
-  gcn::Disassemble(reinterpret_cast<const uint32_t*>(fetch), 128, "VS.fetch");
+  gcn::Disassemble(reinterpret_cast<const u32*>(fetch), 128, "VS.fetch");
   auto vbs = gcn::TrackVertexBuffers(*gcn::CachedProgram(fetch, 64), vud);
   for (size_t i = 0; i < vbs.size(); i++) {
     const auto& v = vbs[i];
     BASE_LOGI("gpu", "  VB{} base={:#x} stride={} nrec={}", i,
               (unsigned long)v.base, v.stride, v.num_records);
     const auto* f = reinterpret_cast<const float*>(v.base);
-    for (uint32_t r = 0; r < v.num_records && r < 6; r++) {
+    for (u32 r = 0; r < v.num_records && r < 6; r++) {
       base::String values;
-      for (uint32_t c = 0; c < v.stride / 4 && c < 8; c++)
+      for (u32 c = 0; c < v.stride / 4 && c < 8; c++)
         base::FormatTo(values, " {:g}", f[r * (v.stride / 4) + c]);
       BASE_LOGI("gpu", "    r{}:{}", r, values.c_str());
     }
@@ -1206,13 +1207,13 @@ void TraceDrawRegisters(const Regs& regs,
 // --- compute ---------------------------------------------------------------
 
 void TraceComputeShader(const Regs& regs,
-                        uint64_t cs_addr,
-                        const uint32_t groups[3],
-                        const uint32_t threads[3],
-                        uint32_t user_sgpr,
-                        uint32_t tgid_enable,
-                        uint32_t lds_dwords) {
-  static std::unordered_set<uint64_t> dumped;
+                        u64 cs_addr,
+                        const u32 groups[3],
+                        const u32 threads[3],
+                        u32 user_sgpr,
+                        u32 tgid_enable,
+                        u32 lds_dwords) {
+  static std::unordered_set<u64> dumped;
   if (!kCsDump || dumped.size() >= 32 || !IsGuestAddress(cs_addr) ||
       !dumped.insert(cs_addr).second)
     return;
@@ -1222,60 +1223,60 @@ void TraceComputeShader(const Regs& regs,
       (unsigned long)cs_addr, groups[0], groups[1], groups[2], threads[0],
       threads[1], threads[2], user_sgpr, tgid_enable, lds_dwords);
   LogUserData("cs", "  user_data:", UserData(regs, mmCOMPUTE_USER_DATA_0));
-  gcn::Disassemble(reinterpret_cast<const uint32_t*>(cs_addr), 1024, "cs");
+  gcn::Disassemble(reinterpret_cast<const u32*>(cs_addr), 1024, "cs");
 }
 
-void TraceDroppedDispatch(uint64_t cs_addr,
-                          const uint32_t groups[3],
-                          const uint32_t threads[3],
+void TraceDroppedDispatch(u64 cs_addr,
+                          const u32 groups[3],
+                          const u32 threads[3],
                           const char* reason) {
   if (!kCsDrops)
     return;
-  static std::atomic<uint64_t> dropped{0};
-  const uint64_t n = dropped.fetch_add(1) + 1;
+  static std::atomic<u64> dropped{0};
+  const u64 n = dropped.fetch_add(1) + 1;
   if (n <= 64 || (n % 512) == 0)
     BASE_LOGI("csdrop", "#{} cs={:#x} groups=[{} {} {}] tg=[{} {} {}] ({})", n,
               cs_addr, groups[0], groups[1], groups[2], threads[0], threads[1],
               threads[2], reason);
 }
 
-bool ShouldTraceCsResources(uint64_t cs_addr) {
+bool ShouldTraceCsResources(u64 cs_addr) {
   if (!kCsResTrace)
     return false;
   if (kCsResTrace > 1)
-    return cs_addr == (uint64_t)kCsResTrace;
-  static std::unordered_set<uint64_t> traced;
+    return cs_addr == (u64)kCsResTrace;
+  static std::unordered_set<u64> traced;
   return traced.size() < 64 && traced.insert(cs_addr).second;
 }
 
-bool CsWatchCovers(uint64_t base, uint64_t size) {
-  return kCsWatch && base <= (uint64_t)kCsWatch &&
-         (uint64_t)kCsWatch < base + std::max<uint64_t>(size, 1);
+bool CsWatchCovers(u64 base, u64 size) {
+  return kCsWatch && base <= (u64)kCsWatch &&
+         (u64)kCsWatch < base + std::max<u64>(size, 1);
 }
 
-void TraceCsUnresolved(uint64_t cs_addr, const gcn::CsResource& res) {
+void TraceCsUnresolved(u64 cs_addr, const gcn::CsResource& res) {
   BASE_LOGI(
       "csres", "cs={:#x} bind={} kind={} s{} pc={:#x} unresolved; using dummy",
       (unsigned long)cs_addr, res.binding, res.kind, res.base_sgpr, res.use_pc);
 }
 
-void TraceCsCode(uint64_t cs_addr) {
-  static std::unordered_set<uint64_t> dumped;
+void TraceCsCode(u64 cs_addr) {
+  static std::unordered_set<u64> dumped;
   if (!kEudFail || !dumped.insert(cs_addr).second)
     return;
-  const uint32_t* code = reinterpret_cast<const uint32_t*>(cs_addr);
+  const u32* code = reinterpret_cast<const u32*>(cs_addr);
   BASE_LOGI("csdump", "cs={:#x} first 0x360 dwords:", (unsigned long)cs_addr);
-  for (uint32_t k = 0; k < 0x360; k += 8)
+  for (u32 k = 0; k < 0x360; k += 8)
     BASE_LOGI("csdump",
               "{:04x}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
               k, code[k], code[k + 1], code[k + 2], code[k + 3], code[k + 4],
               code[k + 5], code[k + 6], code[k + 7]);
 }
 
-void TraceCsZeroFill(uint64_t cs_addr,
-                     uint32_t binding,
+void TraceCsZeroFill(u64 cs_addr,
+                     u32 binding,
                      const gcn::TImage& image,
-                     const uint32_t* descriptor) {
+                     const u32* descriptor) {
   BASE_LOGI("csres",
             "cs={:#x} bind={} zero-fill type={} dfmt={} nfmt={} words=[{:08x} "
             "{:08x} {:08x} {:08x}]",
@@ -1283,10 +1284,10 @@ void TraceCsZeroFill(uint64_t cs_addr,
             descriptor[0], descriptor[1], descriptor[2], descriptor[3]);
 }
 
-void TraceCsUnsupportedImage(uint64_t cs_addr,
-                             uint32_t binding,
+void TraceCsUnsupportedImage(u64 cs_addr,
+                             u32 binding,
                              const gcn::TImage& image,
-                             const uint32_t* descriptor) {
+                             const u32* descriptor) {
   BASE_LOGI("csres",
             "cs={:#x} bind={} unsupported image valid={} base={:#x} type={} "
             "dfmt={} nfmt={} tiling={} {}x{} pitch={} layers={} words=[{:08x} "
@@ -1299,35 +1300,35 @@ void TraceCsUnsupportedImage(uint64_t cs_addr,
             descriptor[7]);
 }
 
-void TraceCsWindowedBuffer(uint64_t cs_addr,
-                           uint32_t binding,
-                           uint64_t declared_size,
-                           uint64_t mapped_size) {
+void TraceCsWindowedBuffer(u64 cs_addr,
+                           u32 binding,
+                           u64 declared_size,
+                           u64 mapped_size) {
   BASE_LOGI("csres",
             "cs={:#x} bind={} windowed buffer declared={:#x} mapped={:#x}",
             (unsigned long)cs_addr, binding, (unsigned long)declared_size,
             (unsigned long)mapped_size);
 }
 
-void TraceCsResource(uint64_t cs_addr,
+void TraceCsResource(u64 cs_addr,
                      const gcn::CsResource& res,
-                     uint64_t base,
-                     uint64_t size,
-                     uint64_t guest_size,
+                     u64 base,
+                     u64 size,
+                     u64 guest_size,
                      bool image_staging,
                      const gcn::TImage& image,
-                     uint32_t elem_bytes,
-                     uint32_t stage_elem_bytes) {
+                     u32 elem_bytes,
+                     u32 stage_elem_bytes) {
   // Non-zero bytes currently in the guest range. A copy whose SOURCE is empty
   // and one whose destination never receives the write look the same from the
   // descriptor alone.
-  uint64_t nonzero = 0;
+  u64 nonzero = 0;
   if (base && guest_size && guest_size <= (1u << 24) &&
       IsGuestRange(base, guest_size) &&
       utl::isMemoryRangeMapped(reinterpret_cast<const void*>(base),
                                guest_size)) {
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(base);
-    for (uint64_t i = 0; i < guest_size; i++)
+    const u8* p = reinterpret_cast<const u8*>(base);
+    for (u64 i = 0; i < guest_size; i++)
       nonzero += p[i] != 0;
   }
   BASE_LOGI("csres",
@@ -1340,16 +1341,16 @@ void TraceCsResource(uint64_t cs_addr,
             stage_elem_bytes, (unsigned long)nonzero);
 }
 
-void TraceCsInvalidRange(uint64_t cs_addr,
-                         uint32_t binding,
-                         uint64_t base,
-                         uint64_t guest_size) {
+void TraceCsInvalidRange(u64 cs_addr,
+                         u32 binding,
+                         u64 base,
+                         u64 guest_size) {
   BASE_LOGI("csres", "cs={:#x} bind={} invalid range base={:#x} size={:#x}",
             (unsigned long)cs_addr, binding, (unsigned long)base,
             (unsigned long)guest_size);
 }
 
-void TraceCsDispatch(uint64_t cs_addr, bool executed, uint32_t num_resources) {
+void TraceCsDispatch(u64 cs_addr, bool executed, u32 num_resources) {
   BASE_LOGI("csres", "cs={:#x} dispatch {} ({} resources)",
             (unsigned long)cs_addr, executed ? "executed" : "failed",
             num_resources);
@@ -1357,12 +1358,12 @@ void TraceCsDispatch(uint64_t cs_addr, bool executed, uint32_t num_resources) {
 
 // --- the packet stream -----------------------------------------------------
 
-void NotePacket(uint32_t op) {
+void NotePacket(u32 op) {
   g_op_hist[op & 0xFF]++;
   g_dcb_packets++;
 }
 
-void NotePacketCost(uint32_t op, uint64_t ns) {
+void NotePacketCost(u32 op, u64 ns) {
   g_op_ns[op & 0xFF] += ns;
 }
 
@@ -1378,26 +1379,26 @@ void DumpOpcodeHistogram() {
 }
 
 void TraceConstRam(const char* what,
-                   uint32_t ce_offset,
-                   uint32_t num_dwords,
-                   uint64_t addr,
+                   u32 ce_offset,
+                   u32 num_dwords,
+                   u64 addr,
                    const char* verdict,
-                   uint32_t first_dword) {
+                   u32 first_dword) {
   if (!kCeTrace)
     return;
-  static std::atomic<uint64_t> n{0};
-  static std::atomic<uint64_t> dst_lo{~0ull}, dst_hi{0};
+  static std::atomic<u64> n{0};
+  static std::atomic<u64> dst_lo{~0ull}, dst_hi{0};
   if (addr) {
-    uint64_t lo = dst_lo.load();
+    u64 lo = dst_lo.load();
     while (addr < lo && !dst_lo.compare_exchange_weak(lo, addr)) {
     }
-    uint64_t hi = dst_hi.load();
-    const uint64_t end = addr + (uint64_t)num_dwords * 4;
+    u64 hi = dst_hi.load();
+    const u64 end = addr + (u64)num_dwords * 4;
     while (end > hi && !dst_hi.compare_exchange_weak(hi, end)) {
     }
   }
-  const uint64_t seq = n.fetch_add(1);
-  if (seq < (uint64_t)kCeTraceMax.get())
+  const u64 seq = n.fetch_add(1);
+  if (seq < (u64)kCeTraceMax.get())
     BASE_LOGI("ce", "{:<8} ceoff={:#x} ndw={} addr={:#x} {} data0={:#x}", what,
               ce_offset, num_dwords, (unsigned long)addr, verdict, first_dword);
   // The tail reports the destination span every dump landed in, which is what
@@ -1408,17 +1409,17 @@ void TraceConstRam(const char* what,
               (unsigned long)dst_hi.load());
 }
 
-void NoteCcbPacket(uint32_t op) {
+void NoteCcbPacket(u32 op) {
   g_ccb_hist[op & 0xFF]++;
 }
 
-void TraceCcbSubmit(uint32_t size_bytes, uint32_t words) {
+void TraceCcbSubmit(u32 size_bytes, u32 words) {
   if (kCcbHist && g_ccb_count == 0)
     BASE_LOGI("ccb", "first ccb: {} bytes ({} words)", size_bytes, words);
   g_ccb_count++;
 }
 
-void TraceCcbHistogram(uint32_t words) {
+void TraceCcbHistogram(u32 words) {
   if (!kCcbHist || g_ccb_hist_dumps >= 3 || g_ccb_count < 50)
     return;
   g_ccb_hist_dumps++;
@@ -1432,7 +1433,7 @@ void TraceCcbHistogram(uint32_t words) {
 void TraceWaitRegMem(bool timed_out) {
   if (!kWaitTrace)
     return;
-  static std::atomic<uint64_t> waits{0}, expired{0};
+  static std::atomic<u64> waits{0}, expired{0};
   waits.fetch_add(1);
   if (timed_out)
     expired.fetch_add(1);
@@ -1442,13 +1443,13 @@ void TraceWaitRegMem(bool timed_out) {
               (unsigned long long)expired.load());
 }
 
-void TraceDmaData(uint32_t control,
-                  uint32_t command,
-                  uint32_t src_sel,
-                  uint32_t dst_sel,
-                  uint64_t src,
-                  uint64_t dst,
-                  uint32_t bytes,
+void TraceDmaData(u32 control,
+                  u32 command,
+                  u32 src_sel,
+                  u32 dst_sel,
+                  u64 src,
+                  u64 dst,
+                  u32 bytes,
                   bool copied) {
   if (!kDmaTrace)
     return;
@@ -1456,7 +1457,7 @@ void TraceDmaData(uint32_t control,
   // and used to eat the whole trace cap, which made "this title never CP-DMAs
   // anything" unfalsifiable. Count every packet by class and spend the cap on
   // transfers only.
-  static std::atomic<uint64_t> n_all{0}, n_prefetch{0}, n_copy{0}, n_reject{0};
+  static std::atomic<u64> n_all{0}, n_prefetch{0}, n_copy{0}, n_reject{0};
   static int shown = 0;
   n_all.fetch_add(1);
   if (src == dst)
@@ -1481,12 +1482,12 @@ void TraceDmaData(uint32_t control,
 }
 
 void TraceAddrWatch(const char* packet,
-                    uint64_t dst,
-                    uint64_t bytes,
-                    uint32_t first_dword,
-                    uint32_t max_lines) {
-  if (!kAddrWatch || dst > (uint64_t)kAddrWatch ||
-      (uint64_t)kAddrWatch >= dst + (bytes ? bytes : 4))
+                    u64 dst,
+                    u64 bytes,
+                    u32 first_dword,
+                    u32 max_lines) {
+  if (!kAddrWatch || dst > (u64)kAddrWatch ||
+      (u64)kAddrWatch >= dst + (bytes ? bytes : 4))
     return;
   // One budget per packet class, keyed by the caller's literal. A shared cap
   // lets whichever packet type hits first spend it all, and "nothing writes
@@ -1494,7 +1495,7 @@ void TraceAddrWatch(const char* packet,
   // exists to answer.
   struct Site {
     const char* packet = nullptr;
-    uint32_t hits = 0;
+    u32 hits = 0;
   };
   static Site sites[8];
   Site* site = nullptr;
@@ -1512,41 +1513,41 @@ void TraceAddrWatch(const char* packet,
 }
 
 void TraceLabelWrite(const char* packet,
-                     uint64_t addr,
-                     uint32_t data_sel,
-                     uint64_t value) {
+                     u64 addr,
+                     u32 data_sel,
+                     u64 value) {
   if (!kEopTrace)
     return;
   BASE_LOGI("eop", "{} addr={:#x} sel={} val={:#x}", packet,
             (unsigned long)addr, data_sel, (unsigned long)value);
 }
 
-void TraceEosLabel(uint64_t addr, uint32_t value) {
+void TraceEosLabel(u64 addr, u32 value) {
   if (!kEopTrace)
     return;
   BASE_LOGI("eop", "EOS addr={:#x} val={:#x}", (unsigned long)addr, value);
 }
 
-void TraceDataWrite(uint64_t addr, uint32_t dwords, uint32_t first_dword) {
+void TraceDataWrite(u64 addr, u32 dwords, u32 first_dword) {
   if (!kEopTrace)
     return;
   BASE_LOGI("eop", "WRITE_DATA dst={:#x} ndw={} v0={:#x}", (unsigned long)addr,
             dwords, first_dword);
 }
 
-void TraceUnhandledOpcode(uint32_t op, uint32_t count) {
+void TraceUnhandledOpcode(u32 op, u32 count) {
   if (!kOpTrace)
     return;
-  static std::atomic<uint64_t> seen[256];
-  const uint64_t n = seen[op & 0xFF].fetch_add(1);
+  static std::atomic<u64> seen[256];
+  const u64 n = seen[op & 0xFF].fetch_add(1);
   if (n == 0 || n == 4096)
     BASE_LOGI("pm4", "unhandled op={:#x} count={} seen={}", op, count,
               (unsigned long long)(n + 1));
 }
 
-void TraceIndirectBuffer(uint32_t position,
-                         uint32_t depth,
-                         uint32_t words,
+void TraceIndirectBuffer(u32 position,
+                         u32 depth,
+                         u32 words,
                          bool followed) {
   if (!kIbTrace)
     return;
@@ -1556,23 +1557,23 @@ void TraceIndirectBuffer(uint32_t position,
     BASE_LOGI("ib", "dcb chain skipped @{} depth={}", position, depth);
 }
 
-void TraceCounter(const char* packet, uint64_t value) {
+void TraceCounter(const char* packet, u64 value) {
   if (!kCounterTrace)
     return;
   BASE_LOGI("cnt", "{} -> {}", packet, (unsigned long long)value);
 }
 
-void TraceWaitOnCeCounter(uint32_t wanted, uint64_t ce_counter) {
+void TraceWaitOnCeCounter(u32 wanted, u64 ce_counter) {
   if (!kCounterTrace)
     return;
   BASE_LOGI("cnt", "WAIT_ON_CE_COUNTER want={} (ce={}, always ok)", wanted,
             (unsigned long long)ce_counter);
 }
 
-void TraceDesync(uint32_t position,
-                 uint32_t words,
-                 uint32_t type,
-                 uint32_t hdr,
+void TraceDesync(u32 position,
+                 u32 words,
+                 u32 type,
+                 u32 hdr,
                  bool force) {
   if (!force && !kDesyncTrace)
     return;
@@ -1582,7 +1583,7 @@ void TraceDesync(uint32_t position,
 
 // --- submissions -----------------------------------------------------------
 
-bool ShouldDumpDcb(uint32_t size_bytes) {
+bool ShouldDumpDcb(u32 size_bytes) {
   static bool dumped = false;
   if (!kTrace || dumped || size_bytes <= 4000)
     return false;
@@ -1591,15 +1592,15 @@ bool ShouldDumpDcb(uint32_t size_bytes) {
   return true;
 }
 
-void TraceDcbPacket(uint32_t position, uint32_t op, uint32_t count) {
+void TraceDcbPacket(u32 position, u32 op, u32 count) {
   BASE_LOGI("gpu", "  @{:<5} T3 op={:#04x} count={}", position, op, count);
 }
 
 void TraceSubmit(const void* dcb,
-                 uint32_t size_bytes,
-                 uint32_t words,
-                 uint64_t submit_number,
-                 uint64_t draws_so_far) {
+                 u32 size_bytes,
+                 u32 words,
+                 u64 submit_number,
+                 u64 draws_so_far) {
   if (!kTrace)
     return;
   if (submit_number <= 8 || submit_number % 256 == 0)
@@ -1608,22 +1609,22 @@ void TraceSubmit(const void* dcb,
               (unsigned long)draws_so_far);
   if (g_dcb_seen < 6)
     BASE_LOGI("gpu", "SubmitDcb dcb={} size_bytes={} words={} hdr0={:#x}", dcb,
-              size_bytes, words, static_cast<const uint32_t*>(dcb)[0]);
+              size_bytes, words, static_cast<const u32*>(dcb)[0]);
 }
 
-void TraceDcbWalkResult(const uint32_t* dcb,
-                        uint32_t words,
-                        uint32_t words_walked) {
+void TraceDcbWalkResult(const u32* dcb,
+                        u32 words,
+                        u32 words_walked) {
   BASE_LOGI("gpu", "=== big dcb walk done: {}/{} words ===", words_walked,
             words);
   // Brute-scan the whole buffer for draw-opcode headers (in case the walker
   // desynced and missed a draw), and dump raw words around the stop point.
   int found = 0;
-  for (uint32_t w = 0; w < words; w++) {
-    const uint32_t hdr = dcb[w];
+  for (u32 w = 0; w < words; w++) {
+    const u32 hdr = dcb[w];
     if ((hdr >> 30) != 3)
       continue;
-    const uint32_t op = (hdr >> 8) & 0xFF;
+    const u32 op = (hdr >> 8) & 0xFF;
     if (op == 0x2D || op == 0x27 || op == 0x35 || op == 0x30 || op == 0x15) {
       BASE_LOGI("gpu", "  SCAN found draw op={:#x} @word {}", op, w);
       if (++found > 8)
@@ -1633,12 +1634,12 @@ void TraceDcbWalkResult(const uint32_t* dcb,
   if (!found)
     BASE_LOGI("gpu", "  SCAN: no draw opcode anywhere in {} words", words);
   base::String raw;
-  for (uint32_t w = 255; w < 271 && w < words; w++)
+  for (u32 w = 255; w < 271 && w < words; w++)
     base::FormatTo(raw, " {:08x}", dcb[w]);
   BASE_LOGI("gpu", "  raw[255..270]:{}", raw.c_str());
 }
 
-void TraceDcbStat(uint32_t words) {
+void TraceDcbStat(u32 words) {
   if (!kDcbStat)
     return;
   g_dcb_words += words;
@@ -1650,16 +1651,16 @@ void TraceDcbStat(uint32_t words) {
   // Not the numerous packets that cost: on SotC's load phase DISPATCH_DIRECT is
   // half the walk's time and DRAW_INDEX_INDIRECT another quarter, while NOP is
   // 37% of the PACKETS and free.
-  uint32_t top_op[5] = {}, top_n[5] = {}, slow_op[5] = {};
-  uint64_t slow_ns[5] = {};
-  for (uint32_t o = 0; o < 256; o++) {
-    uint32_t n = g_op_hist[o], op = o;
+  u32 top_op[5] = {}, top_n[5] = {}, slow_op[5] = {};
+  u64 slow_ns[5] = {};
+  for (u32 o = 0; o < 256; o++) {
+    u32 n = g_op_hist[o], op = o;
     for (int k = 0; k < 5; k++)
       if (n > top_n[k]) {
         std::swap(n, top_n[k]);
         std::swap(op, top_op[k]);
       }
-    uint64_t ns = g_op_ns[o];
+    u64 ns = g_op_ns[o];
     op = o;
     for (int k = 0; k < 5; k++)
       if (ns > slow_ns[k]) {
@@ -1679,7 +1680,7 @@ void TraceDcbStat(uint32_t words) {
             g_dcb_words, line.c_str());
 }
 
-void MaybeDumpOpcodeHistogram(uint32_t words_walked, uint32_t words) {
+void MaybeDumpOpcodeHistogram(u32 words_walked, u32 words) {
   static Elapsed since_first_submit;
   const double elapsed = since_first_submit.Seconds();
   if (kTrace && g_dcb_seen < 4)

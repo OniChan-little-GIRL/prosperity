@@ -10,12 +10,13 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <cstdint>
 
 namespace {
-// f(handle, const void *cmds, uint32_t count): command submission, all inputs.
-int PS4ABI ngs2SubmitCommands(void *, const void *, uint32_t) { return 0; }
+// f(handle, const void *cmds, u32 count): command submission, all inputs.
+int PS4ABI ngs2SubmitCommands(void *, const void *, u32) { return 0; }
 }  // namespace
 
 static const runtime::funcInfo functions[] = {

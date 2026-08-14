@@ -15,6 +15,7 @@
 // the authoritative PS4/PS5 syscall map. Enumerate with DELTA_PS5_SYSTRACE.
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdint>
 #include <cstdio>
@@ -30,9 +31,9 @@ DELTA_OPTION(bool, kPs5SysTrace, "DELTA_PS5_SYSTRACE", false);
 }  // namespace
 
 namespace krnl {
-const char *syscall_getname(uint32_t idx);
-uintptr_t lv2_get(uint32_t sid);                        // shared base handlers
-uintptr_t lv2_trampoline(const void *handler, uint32_t sid);
+const char *syscall_getname(u32 idx);
+uintptr_t lv2_get(u32 sid);                        // shared base handlers
+uintptr_t lv2_trampoline(const void *handler, u32 sid);
 
 // stub handlers (BSD convention applied by the trampoline)
 static int PS4ABI ps5_ok() { return 0; }
@@ -51,7 +52,7 @@ struct ps5Sys {
 // from the PS4/PS5 syscall map; OK (return 0) for advisory/ctrl/notify calls,
 // NOSYS for fd-returning POSIX calls we don't implement (so the caller errors
 // instead of using a bogus fd) and unassigned numbers, PAGESIZE for 0x2c1.
-constexpr uint32_t kPs5Base = 0x2a5; // 677
+constexpr u32 kPs5Base = 0x2a5; // 677
 static const ps5Sys kPs5Extra[] = {
     {"wait6", PK_OK},                     // 0x2a5
     {"cap_rights_limit", PK_OK},          // 0x2a6
@@ -101,18 +102,18 @@ static const ps5Sys kPs5Extra[] = {
     {"workspace_ctrl", PK_OK},            // 0x2d2
 };
 
-static const ps5Sys *ps5Extra(uint32_t sid) {
+static const ps5Sys *ps5Extra(u32 sid) {
   if (sid < kPs5Base)
     return nullptr;
-  uint32_t i = sid - kPs5Base;
+  u32 i = sid - kPs5Base;
   return i < (sizeof(kPs5Extra) / sizeof(kPs5Extra[0])) ? &kPs5Extra[i]
                                                         : nullptr;
 }
 
-uintptr_t lv2_get_ps5(uint32_t sid) {
+uintptr_t lv2_get_ps5(u32 sid) {
   const ps5Sys *ex = ps5Extra(sid);
 
-  static std::set<uint32_t> seen;
+  static std::set<u32> seen;
   if (kPs5SysTrace && seen.insert(sid).second) {
     const char *name = ex ? ex->name : syscall_getname(sid);
     BASE_LOGI("ps5sys", "{:4}  {}", sid, name ? name : "?");

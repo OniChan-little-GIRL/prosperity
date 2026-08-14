@@ -8,7 +8,7 @@ G=delta/gpu
 OUT=/tmp/rdna_selftest
 c++ -std=c++20 -DDELTA_HAVE_SPIRV_BACKEND=1 \
   $(pkg-config --cflags SPIRV-Headers SPIRV-Tools) \
-  -Idelta -I"$G" -I"$G/ps4" -Ishared \
+  -Idelta -I"$G" -I"$G/ps4" -Ishared -Ivendor/equilibrium \
   tools/rdna_selftest.cpp \
   "$G/ps5/rdna/rdna_decode.cc" \
   "$G/ps5/rdna/rdna_translate.cc" \

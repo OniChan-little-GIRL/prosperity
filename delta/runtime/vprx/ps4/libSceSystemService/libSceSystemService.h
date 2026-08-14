@@ -17,10 +17,11 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 int PS4ABI sceSystemServiceReportAbnormalTermination(void *param);
-int PS4ABI sceSystemServiceParamGetInt(int32_t paramId, int32_t *value);
+int PS4ABI sceSystemServiceParamGetInt(i32 paramId, i32 *value);
 }  // extern "C"

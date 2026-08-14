@@ -18,6 +18,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"
 #include "gpu/ps4/liverpool.h"
@@ -27,23 +28,23 @@ namespace gpu::ps4 {
 // The state one VS/PS pair is compiled against. Addresses are guest addresses;
 // `fetch_addr` is zero when the VS calls no fetch shader.
 struct GraphicsShaderState {
-  uint64_t vs_addr = 0;
-  uint64_t ps_addr = 0;
-  uint64_t fetch_addr = 0;
-  uint32_t ps_input_ena = 0;
+  u64 vs_addr = 0;
+  u64 ps_addr = 0;
+  u64 fetch_addr = 0;
+  u32 ps_input_ena = 0;
   // SPI_PS_INPUT_CNTL_0..31: the VS parameter export each PS input slot reads.
   // Always part of the module's identity; only handed to the translator when
   // `honour_ps_in_cntl` is set (see DELTA_GPU_PSCNTL_APPLY).
-  const uint32_t* ps_in_cntl = nullptr;
+  const u32* ps_in_cntl = nullptr;
   bool honour_ps_in_cntl = false;
-  uint32_t ps_num_interp = 0;
+  u32 ps_num_interp = 0;
   // Bit n set = sampler binding n reads a volume / 1D / integer-format image.
   // A 3D or integer descriptor is indistinguishable in the code, so the
   // dimensionality and the texel type belong to the module's identity.
-  uint32_t tex_3d_mask = 0;
-  uint32_t tex_1d_mask = 0;
-  uint32_t tex_uint_mask = 0;
-  uint32_t mrt_uint_mask = 0;  // colour targets with an integer texel format
+  u32 tex_3d_mask = 0;
+  u32 tex_1d_mask = 0;
+  u32 tex_uint_mask = 0;
+  u32 mrt_uint_mask = 0;  // colour targets with an integer texel format
   // PA_CL_CLIP_CNTL.DX_CLIP_SPACE_DEF == 0: the VS bakes the z remap in.
   bool gl_clip = false;
 };
@@ -57,9 +58,9 @@ const gcn::Recompiled& GetGraphicsShader(const Regs& regs,
 // CS can legally be re-dispatched with a different workgroup size, so the code
 // address alone does not identify the module.
 struct ComputeShaderState {
-  uint64_t cs_addr = 0;
-  uint32_t thread_x = 0, thread_y = 0, thread_z = 0;
-  uint32_t user_sgpr = 0, tgid_enable = 0, lds_dwords = 0;
+  u64 cs_addr = 0;
+  u32 thread_x = 0, thread_y = 0, thread_z = 0;
+  u32 user_sgpr = 0, tgid_enable = 0, lds_dwords = 0;
 };
 
 // The compute module for `state`, recompiled on first use. Never null; .ok is

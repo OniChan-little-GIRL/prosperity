@@ -1,4 +1,5 @@
 #include "gpu/vulkan/vk_memory_span.h"
+#include "base/arch.h"
 
 #include <gtest/gtest.h>
 
@@ -7,7 +8,7 @@ namespace {
 
 TEST(MemorySpanAllocator, AllocatesAlignedSpans) {
   MemorySpanAllocator allocator(1024);
-  uint64_t first = 0, second = 0;
+  u64 first = 0, second = 0;
   ASSERT_TRUE(allocator.Allocate(3, 1, first));
   ASSERT_TRUE(allocator.Allocate(64, 64, second));
   EXPECT_EQ(first, 0u);
@@ -17,7 +18,7 @@ TEST(MemorySpanAllocator, AllocatesAlignedSpans) {
 
 TEST(MemorySpanAllocator, CoalescesReturnedSpans) {
   MemorySpanAllocator allocator(1024);
-  uint64_t first = 0, second = 0, third = 0;
+  u64 first = 0, second = 0, third = 0;
   ASSERT_TRUE(allocator.Allocate(128, 1, first));
   ASSERT_TRUE(allocator.Allocate(256, 1, second));
   ASSERT_TRUE(allocator.Allocate(64, 1, third));
@@ -25,14 +26,14 @@ TEST(MemorySpanAllocator, CoalescesReturnedSpans) {
   allocator.Free(first, 128);
   allocator.Free(third, 64);
   EXPECT_EQ(allocator.FreeBytes(), 1024u);
-  uint64_t whole = 1;
+  u64 whole = 1;
   EXPECT_TRUE(allocator.Allocate(1024, 1, whole));
   EXPECT_EQ(whole, 0u);
 }
 
 TEST(MemorySpanAllocatorDeathTest, DoubleFreeDiesAtTheViolation) {
   MemorySpanAllocator allocator(1024);
-  uint64_t offset = 0;
+  u64 offset = 0;
   ASSERT_TRUE(allocator.Allocate(128, 1, offset));
   allocator.Free(offset, 128);
   EXPECT_DEATH(allocator.Free(offset, 128), "double free");
@@ -40,7 +41,7 @@ TEST(MemorySpanAllocatorDeathTest, DoubleFreeDiesAtTheViolation) {
 
 TEST(MemorySpanAllocator, RejectsInvalidAndExhaustedRequests) {
   MemorySpanAllocator allocator(128);
-  uint64_t offset = 0;
+  u64 offset = 0;
   EXPECT_FALSE(allocator.Allocate(0, 1, offset));
   EXPECT_FALSE(allocator.Allocate(1, 3, offset));
   EXPECT_FALSE(allocator.Allocate(129, 1, offset));

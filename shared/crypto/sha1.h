@@ -27,10 +27,11 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <string.h>
+#include "base/arch.h"
 
 #ifdef _MSC_VER
 #include <basetsd.h>
-typedef UINT32 uint32_t;
+typedef UINT32 u32;
 #else
 #include <inttypes.h>
 #endif
@@ -45,8 +46,8 @@ typedef UINT32 uint32_t;
  * \brief          SHA-1 context structure
  */
 typedef struct {
-  uint32_t total[2];        /*!< number of bytes processed  */
-  uint32_t state[5];        /*!< intermediate digest state  */
+  u32 total[2];        /*!< number of bytes processed  */
+  u32 state[5];        /*!< intermediate digest state  */
   unsigned char buffer[64]; /*!< data block being processed */
 
   unsigned char ipad[64]; /*!< HMAC: inner padding        */

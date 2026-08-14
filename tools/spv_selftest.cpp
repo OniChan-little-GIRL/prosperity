@@ -2,12 +2,13 @@
  * Standalone validation harness for the SPIR-V builder (spv_emit). Builds a
  * passthrough VS and FS and validates the emitted binary with SPIRV-Tools.
  * Not part of the emulator build; compiled directly (from repo root):
- *   D=delta/gpu/gcn/spirv; nix develop --command c++ -std=c++20 -Idelta \
+ *   D=delta/gpu/gcn/spirv; nix develop --command c++ -std=c++20 -Idelta -Ivendor/equilibrium \
  *     $(pkg-config --cflags SPIRV-Headers SPIRV-Tools) tools/spv_selftest.cpp \
  *     $D/spv_emit.cc $D/spv_post.cc $(pkg-config --libs SPIRV-Tools) -o /tmp/t && /tmp/t
  */
 
 #include "gpu/gcn/spirv/spv_emit.h"
+#include "base/arch.h"
 #include "gpu/gcn/spirv/spv_post.h"
 
 #include <cstdio>
@@ -16,7 +17,7 @@
 
 using namespace gpu::gcn::spirv;
 
-static bool validate(const std::vector<uint32_t> &spv, const char *tag) {
+static bool validate(const std::vector<u32> &spv, const char *tag) {
   spv_context ctx = spvContextCreate(SPV_ENV_VULKAN_1_1);
   spv_diagnostic diag = nullptr;
   spv_const_binary_t bin{spv.data(), spv.size()};
@@ -29,7 +30,7 @@ static bool validate(const std::vector<uint32_t> &spv, const char *tag) {
   return ok;
 }
 
-static std::vector<uint32_t> buildVs() {
+static std::vector<u32> buildVs() {
   Module m;
   Id tVoid = m.typeVoid();
   Id tFn = m.typeFunction(tVoid);
@@ -37,7 +38,7 @@ static std::vector<uint32_t> buildVs() {
   Id tV4 = m.typeVec(tF, 4);
   Id pOutV4 = m.typePointer(spv::StorageClass::Output, tV4);
   Id posOut = m.variable(pOutV4, spv::StorageClass::Output);
-  m.decorate(posOut, spv::Decoration::BuiltIn, {(uint32_t)spv::BuiltIn::Position});
+  m.decorate(posOut, spv::Decoration::BuiltIn, {(u32)spv::BuiltIn::Position});
   Id main = m.beginFunction(tVoid, tFn);
   Id c0 = m.constF32(0.f), c1 = m.constF32(1.f);
   Id pos = m.constComposite(tV4, {c0, c0, c0, c1});
@@ -48,7 +49,7 @@ static std::vector<uint32_t> buildVs() {
   return m.assemble();
 }
 
-static std::vector<uint32_t> buildFs() {
+static std::vector<u32> buildFs() {
   Module m;
   Id tVoid = m.typeVoid();
   Id tFn = m.typeFunction(tVoid);
@@ -71,7 +72,7 @@ static std::vector<uint32_t> buildFs() {
 // A register-VM-style VS: a Private uint[8] "vgpr" file, written then read back,
 // position computed via float<->uint bitcasts. Exercises exactly what the GCN
 // translator emits; legalization must promote vgpr[] to SSA.
-static std::vector<uint32_t> buildRegVmVs() {
+static std::vector<u32> buildRegVmVs() {
   Module m;
   Id tVoid = m.typeVoid(), tFn = m.typeFunction(tVoid);
   Id tU = m.typeInt(32, false), tF = m.typeFloat(32), tV4 = m.typeVec(tF, 4);
@@ -82,7 +83,7 @@ static std::vector<uint32_t> buildRegVmVs() {
   m.name(vgpr, "vgpr");
   Id pOutV4 = m.typePointer(spv::StorageClass::Output, tV4);
   Id posOut = m.variable(pOutV4, spv::StorageClass::Output);
-  m.decorate(posOut, spv::Decoration::BuiltIn, {(uint32_t)spv::BuiltIn::Position});
+  m.decorate(posOut, spv::Decoration::BuiltIn, {(u32)spv::BuiltIn::Position});
   Id main = m.beginFunction(tVoid, tFn);
   // vgpr[0] = bitcast(1.0); vgpr[1] = bitcast(0.5)
   m.store(m.accessChain(pPrivU, vgpr, {m.constU32(0)}), m.bitcast(tU, m.constF32(1.f)));

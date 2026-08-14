@@ -8,6 +8,7 @@
 // draws that path cannot run.
 
 #include "gpu/rhi/renderer.h"
+#include "base/arch.h"
 
 #include "gpu/vulkan/vk_debug.h"
 #include "gpu/vulkan/vk_device.h"
@@ -32,7 +33,7 @@
 namespace {
 DELTA_OPTION(int, kMaxDraw, "DELTA_GPU_MAXDRAW", -1);
 DELTA_OPTION(int, kOnlyDraw, "DELTA_GPU_ONLYDRAW", -1);
-DELTA_OPTION(uint32_t, kOnlyIc, "DELTA_GPU_ONLYIC", 0);
+DELTA_OPTION(u32, kOnlyIc, "DELTA_GPU_ONLYIC", 0);
 DELTA_OPTION(bool, kRecompPath, "DELTA_GPU_RECOMP", true);
 DELTA_OPTION(bool, kDrawTraceAll, "DELTA_GPU_DRAWTRACE", false);
 DELTA_OPTION(bool, kNoCull, "DELTA_GPU_NOCULL", false);
@@ -82,7 +83,7 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   if (d_sw.depth_base && !d_sw.depth_test_enable && !d_sw.depth_write_enable) {
     if (d_sw.tex_base == d_sw.depth_base)
       detach_depth = true;
-    for (uint32_t i = 0; i < d_sw.num_texs && !detach_depth; i++)
+    for (u32 i = 0; i < d_sw.num_texs && !detach_depth; i++)
       if (d_sw.texs[i].base == d_sw.depth_base)
         detach_depth = true;
   }
@@ -111,9 +112,9 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   ScopeNs draw_timer(&g_ns_draw);
   ScopeNs frame_draw_timer(&g_fr_draw);
   if (d.index_data && d.index_count) {
-    const uint64_t index_bytes = static_cast<uint64_t>(d.index_count) *
+    const u64 index_bytes = static_cast<u64>(d.index_count) *
                                  GuestIndexElementBytes(d.index_type);
-    if (!FlushCsWritesRange(renderer, reinterpret_cast<uint64_t>(d.index_data),
+    if (!FlushCsWritesRange(renderer, reinterpret_cast<u64>(d.index_data),
                             index_bytes))
       return;
   }
@@ -125,7 +126,7 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   if (!renderer.available())
     return;
   if (kDrawTraceAll) {
-    static uint32_t traced = 0;
+    static u32 traced = 0;
     if (traced++ < 100)
       BASE_LOGI("dt", "f{} rt={:#x} count={} indexed={} nv={} mrt={} mask={:#x} "
                       "psmask={:#x} prim={} vp=[{:.1f} {:.1f} {:.1f} {:.1f}] "
@@ -141,8 +142,8 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
     return;
   if (!d.vertex_data || !d.vertex_stride)
     return;
-  if (!FlushCsWritesRange(renderer, reinterpret_cast<uint64_t>(d.vertex_data),
-                          static_cast<uint64_t>(d.vertex_stride) *
+  if (!FlushCsWritesRange(renderer, reinterpret_cast<u64>(d.vertex_data),
+                          static_cast<u64>(d.vertex_stride) *
                               (d.vertex_count ? d.vertex_count : 1)))
     return;
   // Indexed triangle list (the common GNM draw): the index buffer selects which
@@ -150,11 +151,11 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   // so we repack exactly that many (the V# num_records can be the whole shared
   // batch).
   bool indexed = d.index_data && d.index_count >= 3;
-  uint32_t nv = d.vertex_count;
+  u32 nv = d.vertex_count;
   if (indexed) {
     if (d.index_count > 1500000u)
       return;
-    const uint32_t max_index =
+    const u32 max_index =
         MaxGuestIndex(d.index_data, d.index_count, d.index_type);
     if (max_index >= 200000u)
       return;
@@ -175,10 +176,10 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   if (indexed && aligned_ioff + index_bytes > g_ring.ib_end)
     return;
   // Repack pos / color / uv interleaved into the vertex ring (stride 32).
-  auto* base = static_cast<const uint8_t*>(d.vertex_data);
+  auto* base = static_cast<const u8*>(d.vertex_data);
   auto* dst = reinterpret_cast<float*>(g_ring.vb_map + g_ring.vb_offset);
-  for (uint32_t v = 0; v < nv; v++) {
-    const uint8_t* vert = base + (size_t)v * d.vertex_stride;
+  for (u32 v = 0; v < nv; v++) {
+    const u8* vert = base + (size_t)v * d.vertex_stride;
     auto* p = reinterpret_cast<const float*>(vert + d.pos_offset);
     dst[v * 8 + 0] = p[0];
     dst[v * 8 + 1] = p[1];
@@ -205,9 +206,9 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
   // footprint overlaps a live RT, binds that RT's image instead of stale guest
   // memory. This replaces the old per-symptom FRESHRT/CYCLEREDIR/ROOMALPHA
   // address heuristics with one principled, game-agnostic lookup.
-  uint64_t tex_base = d.tex_base;
+  u64 tex_base = d.tex_base;
   if (tex_base && !d.tex_arrayed && !g_rts.count(tex_base)) {
-    uint64_t r = ResolveSampledRT(tex_base, d.tex_w, d.tex_h);
+    u64 r = ResolveSampledRT(tex_base, d.tex_w, d.tex_h);
     if (r)
       tex_base = r;
   }
@@ -275,7 +276,7 @@ void Draw(Renderer& renderer, const DrawInfo& d_in) {
                                   ColorTargetFormat(d.mrt_info[0])));
     float pc[17];
     std::memcpy(pc, d.mvp, 64);
-    reinterpret_cast<uint32_t*>(pc)[16] =
+    reinterpret_cast<u32*>(pc)[16] =
         0u;  // clipUV: real per-vertex uv/colour
     vkCmdPushConstants(g_frame.cmd, g_quad.tex_layout,
                        VK_SHADER_STAGE_VERTEX_BIT, 0, 68, pc);

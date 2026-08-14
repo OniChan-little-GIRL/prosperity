@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/string_ref.h>
@@ -51,21 +52,21 @@ namespace krnl {
 // call, and trapping it per use is far too slow for busy-wait loops), so instead
 // report the real host rate (calibrated once) so the two agree. On FEX/aarch64
 // the guest rdtsc is emulated by the JIT, so keep the PS4-native 1.6 GHz.
-static uint64_t guestTscFreq() {
+static u64 guestTscFreq() {
 #if defined(DELTA_BACKEND_NATIVE)
-  static const uint64_t hz = [] {
+  static const u64 hz = [] {
     auto nowNs = [] {
       timespec t{};
       clock_gettime(CLOCK_MONOTONIC, &t);
-      return static_cast<uint64_t>(t.tv_sec) * 1000000000ull + t.tv_nsec;
+      return static_cast<u64>(t.tv_sec) * 1000000000ull + t.tv_nsec;
     };
-    uint64_t t0 = nowNs(), c0 = __builtin_ia32_rdtsc();
+    u64 t0 = nowNs(), c0 = __builtin_ia32_rdtsc();
     timespec s{0, 20 * 1000 * 1000};  // ~20 ms; actual elapsed is measured below
     nanosleep(&s, nullptr);
-    uint64_t dt = nowNs() - t0, dc = __builtin_ia32_rdtsc() - c0;
+    u64 dt = nowNs() - t0, dc = __builtin_ia32_rdtsc() - c0;
     if (dt == 0)
-      return uint64_t(1600000000);
-    uint64_t f = static_cast<uint64_t>(static_cast<double>(dc) * 1e9 /
+      return u64(1600000000);
+    u64 f = static_cast<u64>(static_cast<double>(dc) * 1e9 /
                                        static_cast<double>(dt) + 0.5);
     BASE_LOGI("tsc", "calibrated host TSC = {} Hz (rdtsc==tsc_freq)",
               (unsigned long long)f);
@@ -73,7 +74,7 @@ static uint64_t guestTscFreq() {
   }();
   return hz;
 #else
-  return uint64_t(1600000000);  // FEX emulates rdtsc; PS4 invariant TSC rate
+  return u64(1600000000);  // FEX emulates rdtsc; PS4 invariant TSC rate
 #endif
 }
 int sys_budget_get_ptype();
@@ -82,7 +83,7 @@ moduleInfo *called_in(void *addr);
 
 int PS4ABI sys_is_in_sandbox() { return 0; }
 
-int PS4ABI sys_cpuset_getaffinity(int /*level*/, int /*which*/, int64_t /*id*/,
+int PS4ABI sys_cpuset_getaffinity(int /*level*/, int /*which*/, i64 /*id*/,
                                   size_t cpusetsize, void *mask) {
   // Report the CPUs the title is allowed to run on. Base PS4 grants a game 6
   // cores (0..5; the OS keeps 6/7). The KEX engine (Doom64) sizes its worker
@@ -92,7 +93,7 @@ int PS4ABI sys_cpuset_getaffinity(int /*level*/, int /*which*/, int64_t /*id*/,
   // pump spun, throttling the whole engine. Fill the low 6 bits.
   if (mask && cpusetsize) {
     std::memset(mask, 0, cpusetsize);
-    uint64_t bits = 0x3F;  // cores 0..5
+    u64 bits = 0x3F;  // cores 0..5
     // DELTA_SOTC_7CORE: also grant core 6. SotC's engine hardcodes its "Resource
     // Loading" thread to core 6 (mask 0x40) and its BPE JobSystem sizes its worker
     // pool from the set-bit count here, giving each worker an ordinal = spawn seq.
@@ -119,7 +120,7 @@ int PS4ABI sys_get_authinfo(int pid, void *infoOut) {
   // application plus a permissive capability mask. Returning 1 here (the old
   // behaviour) reads as EPERM and aborts libc.
   std::memset(infoOut, 0, 136);
-  auto *p = reinterpret_cast<uint64_t *>(infoOut);
+  auto *p = reinterpret_cast<u64 *>(infoOut);
   p[0] = 0x3100000000000001ull; // auth_id: regular application
   p[2] = 0x2000038000000000ull; // capability bits
   p[4] = 0x4000400040000000ull; // attributes / shared
@@ -141,10 +142,10 @@ int PS4ABI sys_get_proc_type_info(void *oinfo) {
   // (0x40), so cptype = 0x42. Without the JIT-app bit libkernel's process-init
   // path skips the JIT shm setup it later expects to find.
   struct procTypeInfo {
-    uint64_t reserved;
-    int32_t ptype;
-    uint8_t cptype;
-    uint8_t pad[3];
+    u64 reserved;
+    i32 ptype;
+    u8 cptype;
+    u8 pad[3];
   };
   static_assert(sizeof(procTypeInfo) == 16);
 
@@ -156,7 +157,7 @@ int PS4ABI sys_get_proc_type_info(void *oinfo) {
   return 0;
 }
 
-int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
+int PS4ABI sys_sysctl(int *name, u32 namelen, void *oldp, size_t *oldlenp,
                       const void *newp, size_t newlen) {
   // for sceKernelGetAppInfo
   if (name[0] == 1 && name[1] == 14 && name[2] == 35 && namelen == 4) {
@@ -173,8 +174,8 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
            proc::getActive()->getPlatform() == proc::platform::ps5) {
     if (oldp && oldlenp) {
       std::memset(oldp, 0, *oldlenp);
-      if (*oldlenp >= sizeof(uint32_t))
-        *reinterpret_cast<uint32_t *>(oldp) = proc::getActive()->getSdkVersion();
+      if (*oldlenp >= sizeof(u32))
+        *reinterpret_cast<u32 *>(oldp) = proc::getActive()->getSdkVersion();
     }
     return 0;
   }
@@ -190,8 +191,8 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
            proc::getActive()->getPlatform() == proc::platform::ps5) {
     if (oldp && oldlenp) {
       std::memset(oldp, 0, *oldlenp);
-      if (*oldlenp >= 2 * sizeof(uint32_t))
-        static_cast<uint32_t *>(oldp)[0] = 1;
+      if (*oldlenp >= 2 * sizeof(u32))
+        static_cast<u32 *>(oldp)[0] = 1;
     }
     return 0;
   }
@@ -233,21 +234,21 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
 
   // kern.pagesize
   else if (name[0] == 6 && name[1] == 7 && namelen == 2) {
-    *reinterpret_cast<uint32_t *>(oldp) = 0x4000;
+    *reinterpret_cast<u32 *>(oldp) = 0x4000;
     if (oldlenp)
-      *oldlenp = sizeof(uint32_t);
+      *oldlenp = sizeof(u32);
     return 0;
   }
 
 #if 0
 		else if (name[0] == 0x1337 && name[1] == 1 && namelen == 2) {
-			*reinterpret_cast<uint64_t*>(oldp) = 1357;
+			*reinterpret_cast<u64*>(oldp) = 1357;
 			return 0;
 		}
 #endif
 
   else if (name[0] == 0x1337 && name[1] == 1 && namelen == 2) {
-    *reinterpret_cast<uint64_t *>(oldp) = 1;
+    *reinterpret_cast<u64 *>(oldp) = 1;
     return 0;
   }
 
@@ -255,9 +256,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // Bit 0 gates loading libSceDbgUBSanitizer.sprx (a debug-only module). Return
   // 0 so libkernel takes the success path and skips the sanitizer preload.
   else if (name[0] == 1 && name[1] == 14 && name[2] == 41 && namelen == 3) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
-      *reinterpret_cast<uint32_t *>(oldp) = 0;
-      *oldlenp = sizeof(uint32_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
+      *reinterpret_cast<u32 *>(oldp) = 0;
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -265,9 +266,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // kern.cpumode (kern.14.42) is selected by the title's PSF attributes, not by
   // the Base/Neo GPU hardware profile.
   else if (name[0] == 1 && name[1] == 14 && name[2] == 42 && namelen == 3) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
-      *reinterpret_cast<uint32_t *>(oldp) = ps4::cpuMode();
-      *oldlenp = sizeof(uint32_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
+      *reinterpret_cast<u32 *>(oldp) = ps4::cpuMode();
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -289,13 +290,13 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
 
   // answer kern.prot.ptc
   else if (name[0] == 0x1337 && name[1] == 2 && namelen == 2) {
-    *reinterpret_cast<uint64_t *>(oldp) = 1357;
+    *reinterpret_cast<u64 *>(oldp) = 1357;
     return 0;
   }
 
   // answer kern.sched.cpusize
   else if (name[0] == 0x1337 && name[1] == 4 && namelen == 2) {
-    *reinterpret_cast<uint32_t *>(oldp) = 8;
+    *reinterpret_cast<u32 *>(oldp) = 8;
     return 0;
   }
 
@@ -304,9 +305,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // time, so it MUST match the rate the guest's rdtsc actually advances at (see
   // guestTscFreq): the host TSC rate on native, 1.6 GHz on FEX.
   else if (name[0] == 0x1337 && name[1] == 5 && namelen == 2) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint64_t)) {
-      *reinterpret_cast<uint64_t *>(oldp) = guestTscFreq();
-      *oldlenp = sizeof(uint64_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u64)) {
+      *reinterpret_cast<u64 *>(oldp) = guestTscFreq();
+      *oldlenp = sizeof(u64);
     }
     return 0;
   }
@@ -315,9 +316,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // SDK version, encoded as 0x0MMMmmpp (major/minor/patch). 5.05 (0x05050001)
   // is broadly compatible and matches what most retail titles tolerate.
   else if (name[0] == 0x1337 && name[1] == 6 && namelen == 2) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
-      *reinterpret_cast<uint32_t *>(oldp) = 0x05050001;
-      *oldlenp = sizeof(uint32_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
+      *reinterpret_cast<u32 *>(oldp) = 0x05050001;
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -330,13 +331,13 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // create fails -> empty pipelines -> zero SPI_SHADER_PGM -> nothing renders. This
   // oid is PS5-only (the 0x1337 family is synthetic PS5 config), so PS4 is unaffected.
   else if (name[0] == 0x1337 && name[1] == 7 && namelen == 2) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
       const auto *active = proc::getActive();
-      *reinterpret_cast<uint32_t *>(oldp) =
+      *reinterpret_cast<u32 *>(oldp) =
           active && active->getPlatform() == proc::platform::ps5
               ? 0x840fc0
               : ps4::hardwareModeProfile().mainSocId;
-      *oldlenp = sizeof(uint32_t);
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -346,7 +347,7 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // instead of 0; matches the order of the reported direct-memory pool.
   else if (name[0] == 0x1337 && name[1] == 8 && namelen == 2) {
     if (oldp && oldlenp) {
-      uint64_t v = 0x180000000ull;
+      u64 v = 0x180000000ull;
       size_t n = *oldlenp < sizeof(v) ? *oldlenp : sizeof(v);
       std::memcpy(oldp, &v, n);
       *oldlenp = n;
@@ -366,7 +367,7 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // Report the same 6 GiB as mlock_total: nothing has been wired yet.
   else if (name[0] == 0x1337 && name[1] == 11 && namelen == 2) {
     if (oldp && oldlenp) {
-      uint64_t v = 0x180000000ull;
+      u64 v = 0x180000000ull;
       size_t n = *oldlenp < sizeof(v) ? *oldlenp : sizeof(v);
       std::memcpy(oldp, &v, n);
       *oldlenp = n;
@@ -379,9 +380,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // answering 0 cost 30 million name2oid resolutions in 80 seconds and hung
   // Minecraft's OpenSSL key generation behind it.
   else if (name[0] == 0x1337 && name[1] == 12 && namelen == 2) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
-      *static_cast<uint32_t *>(oldp) = 1;
-      *oldlenp = sizeof(uint32_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
+      *static_cast<u32 *>(oldp) = 1;
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -406,9 +407,9 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // kern.neomode (synthetic {0x1337,10}). It deliberately has its own oid so it
   // cannot inherit the unrelated zero-filled PS5 config response above.
   else if (name[0] == 0x1337 && name[1] == 10 && namelen == 2) {
-    if (oldp && oldlenp && *oldlenp >= sizeof(uint32_t)) {
-      *reinterpret_cast<uint32_t *>(oldp) = ps4::isNeoMode() ? 1 : 0;
-      *oldlenp = sizeof(uint32_t);
+    if (oldp && oldlenp && *oldlenp >= sizeof(u32)) {
+      *reinterpret_cast<u32 *>(oldp) = ps4::isNeoMode() ? 1 : 0;
+      *oldlenp = sizeof(u32);
     }
     return 0;
   }
@@ -424,57 +425,57 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
     // heap from a missing budget), leaking sync objects until the pthread
     // internal heap ran out. Map them to synthetic oids answered below.
     if (name == "hw.sce_main_socid") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 7;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 7;
       *oldlenp = 8;
       return 0;
     } else if (name == "vm.budgets.mlock_total") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 8;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 8;
       *oldlenp = 8;
       return 0;
     } else if (name == "vm.budgets.mlock_avail") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 11;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 11;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.amm.param" || name == "kern.app.memconf" ||
                name == "machdep.auto_update_version" ||
                name == "kern.gjevmtrb") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 9;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 9;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.neomode") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 10;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 10;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.rng_pseudo") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 12;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 12;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.ps4_sdk_version") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 6;  // reuse kern.sdk_version answer
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 6;  // reuse kern.sdk_version answer
       *oldlenp = 8;
       return 0;
     }
 
     if (name == "kern.smp.cpus") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 1;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 1;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.proc.ptc") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 2;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 2;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.sched.cpusetsize") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 4;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 4;
       *oldlenp = 8;
       return 0;
     }
@@ -490,20 +491,20 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
     }
 
     else if (name == "machdep.tsc_freq") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 5;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 5;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.sdk_version") {
-      static_cast<uint32_t *>(oldp)[0] = 0x1337;
-      static_cast<uint32_t *>(oldp)[1] = 6;
+      static_cast<u32 *>(oldp)[0] = 0x1337;
+      static_cast<u32 *>(oldp)[1] = 6;
       *oldlenp = 8;
       return 0;
     } else if (name == "kern.cpumode") {
       // resolve to the real kern.14.42 mib handled above.
-      static_cast<uint32_t *>(oldp)[0] = 1;
-      static_cast<uint32_t *>(oldp)[1] = 14;
-      static_cast<uint32_t *>(oldp)[2] = 42;
+      static_cast<u32 *>(oldp)[0] = 1;
+      static_cast<u32 *>(oldp)[1] = 14;
+      static_cast<u32 *>(oldp)[2] = 42;
       *oldlenp = 12;
       return 0;
     }
@@ -521,7 +522,7 @@ int PS4ABI sys_sysctl(int *name, uint32_t namelen, void *oldp, size_t *oldlenp,
   // the guest can decide how to cope, and we can see what it queries next.
   base::String mib;
   base::FormatTo(mib, "UNHANDLED mib namelen={}:", namelen);
-  for (uint32_t i = 0; i < namelen && i < 8; i++)
+  for (u32 i = 0; i < namelen && i < 8; i++)
     base::FormatTo(mib, " {}", name[i]);
   BASE_LOGI("sysctl", "{}", mib.c_str());
   // The out buffer is usually a caller stack local, so scanning up from it finds

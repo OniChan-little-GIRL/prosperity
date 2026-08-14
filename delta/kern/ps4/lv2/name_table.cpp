@@ -8,10 +8,11 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace krnl {
 struct nameNode {
-  uint32_t id;
+  u32 id;
   const char *name;
 };
 
@@ -641,7 +642,7 @@ static const nameNode syscall_names[] = {
     {677, "get_phys_page_size"},
 };
 
-const char *syscall_getname(uint32_t idx) {
+const char *syscall_getname(u32 idx) {
   if (idx >= sizeof(syscall_names))
     return nullptr;
 

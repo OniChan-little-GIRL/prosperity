@@ -12,6 +12,7 @@
 #if defined(__ANDROID__) && defined(DELTA_ANDROID_APP)
 
 #include <algorithm>
+#include "base/arch.h"
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -42,7 +43,7 @@ namespace {
     }                                                                          \
   } while (0)
 
-constexpr uint32_t kFrameSlotCount = 2;
+constexpr u32 kFrameSlotCount = 2;
 
 struct FrameSlot {
   VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -62,7 +63,7 @@ struct State {
   VkInstance instance = VK_NULL_HANDLE;
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkPhysicalDevice phys = VK_NULL_HANDLE;
-  uint32_t queueFamily = 0;
+  u32 queueFamily = 0;
   VkDevice device = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
 
@@ -78,10 +79,10 @@ struct State {
   std::vector<VkSemaphore> renderSems;
   // Semaphores of a replaced swapchain; see retireRenderSemaphores.
   std::vector<VkSemaphore> retiredRenderSems;
-  uint32_t nextSlot = 0;
+  u32 nextSlot = 0;
 
   // Framebuffer dimensions shared by the per-slot upload resources.
-  uint32_t fbW = 0, fbH = 0;
+  u32 fbW = 0, fbH = 0;
   VkFormat fbFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
   bool needRecreate = false;
@@ -90,7 +91,7 @@ struct State {
 State g;
 std::atomic_bool g_presentFailed{false};
 std::atomic_bool g_presentStopRequested{false};
-constexpr uint64_t kPresentWaitSliceNs = 50'000'000;
+constexpr u64 kPresentWaitSliceNs = 50'000'000;
 
 void stopPresenting(const char *operation, VkResult result) {
   BASE_LOGI("gfx-android", "{} failed: VkResult={}", operation, (int)result);
@@ -119,7 +120,7 @@ bool g_windowChanged = false;
 constexpr int kMaxTouch = 8;
 Touch g_touches[kMaxTouch];
 int g_touchCount = 0;
-uint32_t g_surfaceW = 0, g_surfaceH = 0;
+u32 g_surfaceW = 0, g_surfaceH = 0;
 
 // On-screen virtual gamepad, in normalised [0,1] surface coords. The present
 // blit stretches the whole game framebuffer across the whole surface, so a
@@ -175,8 +176,8 @@ PadKeys computePad() {
     float dx = (nx - s.cx) / s.r, dy = (ny - s.cy) / s.r;
     dx = std::clamp(dx, -1.0f, 1.0f);
     dy = std::clamp(dy, -1.0f, 1.0f);
-    uint8_t vx = uint8_t(std::clamp(128.0f + dx * 127.0f, 0.0f, 255.0f));
-    uint8_t vy = uint8_t(std::clamp(128.0f + dy * 127.0f, 0.0f, 255.0f));
+    u8 vx = u8(std::clamp(128.0f + dx * 127.0f, 0.0f, 255.0f));
+    u8 vy = u8(std::clamp(128.0f + dy * 127.0f, 0.0f, 255.0f));
     if (nx < 0.5f) {
       k.lx = vx;
       k.ly = vy;
@@ -197,21 +198,21 @@ PadKeys computePad() {
 // whole surface, so normalised (fx,fy) lands at the same on-screen spot. Radii
 // are corrected by the surface aspect so glyphs stay round on screen.
 
-inline void blendPx(uint8_t *buf, int w, int h, bool bgra, int x, int y,
-                    uint8_t r, uint8_t g, uint8_t b, float a) {
+inline void blendPx(u8 *buf, int w, int h, bool bgra, int x, int y,
+                    u8 r, u8 g, u8 b, float a) {
   if (x < 0 || y < 0 || x >= w || y >= h || a <= 0.0f)
     return;
-  uint8_t *p = buf + (size_t)(y * w + x) * 4;
+  u8 *p = buf + (size_t)(y * w + x) * 4;
   int ri = bgra ? 2 : 0, bi = bgra ? 0 : 2;
-  p[ri] = uint8_t(p[ri] * (1 - a) + r * a);
-  p[1] = uint8_t(p[1] * (1 - a) + g * a);
-  p[bi] = uint8_t(p[bi] * (1 - a) + b * a);
+  p[ri] = u8(p[ri] * (1 - a) + r * a);
+  p[1] = u8(p[1] * (1 - a) + g * a);
+  p[bi] = u8(p[bi] * (1 - a) + b * a);
 }
 
 // Round-on-screen ellipse in the framebuffer. band<=0 => filled disc, else a
 // ring of that normalised-radius thickness.
-void glyph(uint8_t *buf, int w, int h, bool bgra, float xr, float yr, float fx,
-           float fy, float sr, float band, uint8_t r, uint8_t g, uint8_t b,
+void glyph(u8 *buf, int w, int h, bool bgra, float xr, float yr, float fx,
+           float fy, float sr, float band, u8 r, u8 g, u8 b,
            float a) {
   float cx = fx * w, cy = fy * h;
   float rx = sr * xr, ry = sr * yr; // px radii (round on screen)
@@ -228,10 +229,10 @@ void glyph(uint8_t *buf, int w, int h, bool bgra, float xr, float yr, float fx,
     }
 }
 
-void drawOverlay(uint8_t *buf, uint32_t w, uint32_t h, bool bgra) {
+void drawOverlay(u8 *buf, u32 w, u32 h, bool bgra) {
   Touch t[kMaxTouch];
   int n;
-  uint32_t sw, sh;
+  u32 sw, sh;
   {
     std::lock_guard<std::mutex> lk(g_inMutex);
     n = g_touchCount;
@@ -257,7 +258,7 @@ void drawOverlay(uint8_t *buf, uint32_t w, uint32_t h, bool bgra) {
   // Face buttons: PS4 colours, brighter when held.
   struct BC {
     const Btn &b;
-    uint8_t r, g, bl;
+    u8 r, g, bl;
   } bcs[] = {{kCross, 70, 130, 255},
              {kCircle, 240, 70, 70},
              {kBomb, 220, 220, 220},
@@ -291,10 +292,10 @@ void drawOverlay(uint8_t *buf, uint32_t w, uint32_t h, bool bgra) {
   }
 }
 
-uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) {
+u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
   VkPhysicalDeviceMemoryProperties mp;
   vkGetPhysicalDeviceMemoryProperties(g.phys, &mp);
-  for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+  for (u32 i = 0; i < mp.memoryTypeCount; i++)
     if ((typeBits & (1u << i)) &&
         (mp.memoryTypes[i].propertyFlags & props) == props)
       return i;
@@ -336,7 +337,7 @@ void retireRenderSemaphores() {
   g.renderSems.clear();
 }
 
-bool createRenderSemaphores(uint32_t count,
+bool createRenderSemaphores(u32 count,
                             std::vector<VkSemaphore> &semaphores) {
   VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   semaphores.resize(count);
@@ -357,7 +358,7 @@ bool createSwapchain() {
   VkSurfaceCapabilitiesKHR caps;
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.phys, g.surface, &caps);
 
-  uint32_t nfmt = 0;
+  u32 nfmt = 0;
   vkGetPhysicalDeviceSurfaceFormatsKHR(g.phys, g.surface, &nfmt, nullptr);
   std::vector<VkSurfaceFormatKHR> fmts(nfmt);
   vkGetPhysicalDeviceSurfaceFormatsKHR(g.phys, g.surface, &nfmt, fmts.data());
@@ -381,13 +382,13 @@ bool createSwapchain() {
           ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
           : caps.currentTransform;
   BASE_LOGI("gfx-android", "surface transform={:#x} supported={:#x} -> using {:#x}",
-            (uint32_t)caps.currentTransform, (uint32_t)caps.supportedTransforms,
-            (uint32_t)g.preTransform);
+            (u32)caps.currentTransform, (u32)caps.supportedTransforms,
+            (u32)g.preTransform);
 
   VkExtent2D ext = caps.currentExtent;
   if (ext.width == 0xFFFFFFFF) {
-    ext.width = (uint32_t)ANativeWindow_getWidth(g.window);
-    ext.height = (uint32_t)ANativeWindow_getHeight(g.window);
+    ext.width = (u32)ANativeWindow_getWidth(g.window);
+    ext.height = (u32)ANativeWindow_getHeight(g.window);
   }
   if (g.preTransform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR && preRotated)
     std::swap(ext.width, ext.height);
@@ -402,7 +403,7 @@ bool createSwapchain() {
     g_surfaceH = std::min(ext.width, ext.height);
   }
 
-  uint32_t imgCount = caps.minImageCount + 1;
+  u32 imgCount = caps.minImageCount + 1;
   if (caps.maxImageCount && imgCount > caps.maxImageCount)
     imgCount = caps.maxImageCount;
 
@@ -446,7 +447,7 @@ bool createSwapchain() {
     return false;
   }
 
-  uint32_t n = 0;
+  u32 n = 0;
   vkGetSwapchainImagesKHR(g.device, newSwap, &n, nullptr);
   std::vector<VkImage> newImages(n);
   vkGetSwapchainImagesKHR(g.device, newSwap, &n, newImages.data());
@@ -488,7 +489,7 @@ void destroyFrameResources(FrameSlot &slot) {
   slot.frameMem = VK_NULL_HANDLE;
 }
 
-bool createFrameResources(FrameSlot &slot, uint32_t w, uint32_t h,
+bool createFrameResources(FrameSlot &slot, u32 w, u32 h,
                           VkFormat fmt) {
   VkDeviceSize size = (VkDeviceSize)w * h * 4;
   VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -530,7 +531,7 @@ bool createFrameResources(FrameSlot &slot, uint32_t w, uint32_t h,
   return true;
 }
 
-bool ensureFrameResources(uint32_t w, uint32_t h, VkFormat fmt) {
+bool ensureFrameResources(u32 w, u32 h, VkFormat fmt) {
   bool ready = true;
   for (const FrameSlot &slot : g.slots)
     ready &= slot.staging != VK_NULL_HANDLE && slot.frameImg != VK_NULL_HANDLE;
@@ -566,7 +567,7 @@ bool bringUp() {
   si.window = g.window;
   VK_CHECK(vkCreateAndroidSurfaceKHR(g.instance, &si, nullptr, &g.surface));
 
-  uint32_t nphys = 0;
+  u32 nphys = 0;
   vkEnumeratePhysicalDevices(g.instance, &nphys, nullptr);
   if (!nphys) {
     BASE_LOGI("gfx-android", "no Vulkan physical devices");
@@ -576,11 +577,11 @@ bool bringUp() {
   vkEnumeratePhysicalDevices(g.instance, &nphys, phs.data());
   bool found = false;
   for (auto pd : phs) {
-    uint32_t nq = 0;
+    u32 nq = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, nullptr);
     std::vector<VkQueueFamilyProperties> qf(nq);
     vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, qf.data());
-    for (uint32_t i = 0; i < nq; i++) {
+    for (u32 i = 0; i < nq; i++) {
       VkBool32 present = VK_FALSE;
       vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, g.surface, &present);
       if ((qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
@@ -633,7 +634,7 @@ bool bringUp() {
   VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
   VkFenceCreateInfo acquireFi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  for (uint32_t i = 0; i < kFrameSlotCount; i++) {
+  for (u32 i = 0; i < kFrameSlotCount; i++) {
     g.slots[i].cmd = commands[i];
     VK_CHECK(
         vkCreateSemaphore(g.device, &si2, nullptr, &g.slots[i].acquireSem));
@@ -645,7 +646,7 @@ bool bringUp() {
   if (!createSwapchain())
     return false;
   BASE_LOGI("gfx-android", "swapchain {}x{}, {} images", g.swapExtent.width,
-            g.swapExtent.height, (uint32_t)g.swapImages.size());
+            g.swapExtent.height, (u32)g.swapImages.size());
   g.ready = true;
   return true;
 }
@@ -685,7 +686,7 @@ void teardown() {
 
 // --- public gfx API ---------------------------------------------------------
 
-bool init(const char *, uint32_t, uint32_t) {
+bool init(const char *, u32, u32) {
   if (available())
     return true;
   if (g.ready)
@@ -711,7 +712,7 @@ void requestPresentStop() {
   g_presentStopRequested.store(true, std::memory_order_release);
 }
 
-bool ensure(const char *, uint32_t, uint32_t) {
+bool ensure(const char *, u32, u32) {
   // Adopt any window change published by android_main (this thread owns
   // Vulkan).
   {
@@ -744,7 +745,7 @@ bool ensure(const char *, uint32_t, uint32_t) {
   return available();
 }
 
-void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
+void present(const void *pixels, u32 w, u32 h, u32 srcPitch,
              PixelFormat fmt) {
   if (g_presentFailed.load(std::memory_order_acquire) ||
       g_presentStopRequested.load(std::memory_order_acquire) || !g.device ||
@@ -765,15 +766,15 @@ void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
   if (!waitForPresentFence(slot.fence, "vkWaitForFences"))
     return;
 
-  auto *dst = static_cast<uint8_t *>(slot.stagingMap);
-  auto *src = static_cast<const uint8_t *>(pixels);
-  for (uint32_t y = 0; y < h; y++)
+  auto *dst = static_cast<u8 *>(slot.stagingMap);
+  auto *src = static_cast<const u8 *>(pixels);
+  for (u32 y = 0; y < h; y++)
     std::memcpy(dst + (size_t)y * w * 4, src + (size_t)y * srcPitch, w * 4);
 
   // Composite the virtual-gamepad helper over the frame.
   drawOverlay(dst, w, h, fmt == PixelFormat::bgra8);
 
-  uint32_t idx = 0;
+  u32 idx = 0;
   VkResult result = vkResetFences(g.device, 1, &slot.acquireFence);
   if (result != VK_SUCCESS) {
     stopPresenting("vkResetFences(acquire)", result);
@@ -833,10 +834,10 @@ void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch,
 
   VkImageBlit blit{};
   blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.srcOffsets[1] = {(int32_t)w, (int32_t)h, 1};
+  blit.srcOffsets[1] = {(i32)w, (i32)h, 1};
   blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  blit.dstOffsets[1] = {(int32_t)g.swapExtent.width,
-                        (int32_t)g.swapExtent.height, 1};
+  blit.dstOffsets[1] = {(i32)g.swapExtent.width,
+                        (i32)g.swapExtent.height, 1};
   vkCmdBlitImage(slot.cmd, slot.frameImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                  g.swapImages[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                  &blit, VK_FILTER_LINEAR);
@@ -896,11 +897,11 @@ bool pollKeyboardPad(PadKeys &out) {
 
 // Haptics on the touch-gamepad build would need a JNI call to the Vibrator
 // service; no-op until that's wired through the NativeActivity.
-void setRumble(uint8_t, uint8_t) {}
+void setRumble(u8, u8) {}
 
 void shutdown() { teardown(); }
 
-void queryVram(uint64_t &used, uint64_t &total) { used = total = 0; }
+void queryVram(u64 &used, u64 &total) { used = total = 0; }
 
 void setAndroidWindow(ANativeWindow *window) {
   std::lock_guard<std::mutex> lk(g_inMutex);

@@ -1,4 +1,5 @@
 #include "ctor_probe.h"
+#include "base/arch.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -27,21 +28,21 @@ void maybePrependCtor(proc &p) {
   const char *e = kCtorPrepend;
   if (!e || p.getPlatform() != proc::platform::ps5)
     return;
-  const uint64_t off = std::strtoull(e, nullptr, 16);
+  const u64 off = std::strtoull(e, nullptr, 16);
   auto &info = p.getModuleList()[0]->getInfo();
-  uint8_t *base = info.base;
+  u8 *base = info.base;
   if (!base || !off)
     return;
 
   // `lea rbx,[rip+disp32]` sits at module+0x45 in the stub (entry is +0x70).
-  uint8_t *lea = base + 0x45;
+  u8 *lea = base + 0x45;
   if (lea[0] != 0x48 || lea[1] != 0x8d || lea[2] != 0x1d) {
     BASE_LOGI("ctorprobe", "entry stub not recognised at +0x45");
     return;
   }
-  const int32_t disp = *reinterpret_cast<int32_t *>(lea + 3);
-  uint8_t *listTop = lea + 7 + disp;
-  uint64_t *slot = reinterpret_cast<uint64_t *>(listTop + 8);
+  const i32 disp = *reinterpret_cast<i32 *>(lea + 3);
+  u8 *listTop = lea + 7 + disp;
+  u64 *slot = reinterpret_cast<u64 *>(listTop + 8);
 
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(slot) & ~0xFFFull),
                   0x2000, utl::pageProtection::rwx);
@@ -53,10 +54,10 @@ void maybePrependCtor(proc &p) {
   // A ctor is called with no arguments, so rdi holds whatever the previous one
   // left. Park a shim that zeroes it first -- the init entry points we want to
   // probe are typically `f(0)`.
-  uint8_t *shim = krnl::allocLowGuest(0x40);
+  u8 *shim = krnl::allocLowGuest(0x40);
   if (!shim)
     return;
-  const uint64_t target = reinterpret_cast<uint64_t>(base + off);
+  const u64 target = reinterpret_cast<u64>(base + off);
   size_t i = 0;
   shim[i++] = 0x31; shim[i++] = 0xFF;              // xor edi, edi
   shim[i++] = 0x48; shim[i++] = 0xB8;              // movabs rax, target
@@ -64,11 +65,11 @@ void maybePrependCtor(proc &p) {
   shim[i++] = 0xFF; shim[i++] = 0xD0;              // call rax
   shim[i++] = 0xC3;                                // ret
   utl::protectMem(shim, 0x1000, utl::pageProtection::rwx);
-  *slot = reinterpret_cast<uint64_t>(shim);
+  *slot = reinterpret_cast<u64>(shim);
 
   utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(lea) & ~0xFFFull),
                   0x2000, utl::pageProtection::rwx);
-  *reinterpret_cast<int32_t *>(lea + 3) = disp + 8;
+  *reinterpret_cast<i32 *>(lea + 3) = disp + 8;
 
   BASE_LOGI("ctorprobe",
             "prepended module+{:#x} ({:p}) via shim {:p} at slot {:p}",

@@ -9,6 +9,7 @@
  */
 
 #include <capstone/capstone.h>
+#include "base/arch.h"
 
 namespace krnl {
 struct procEnv;
@@ -19,19 +20,19 @@ namespace runtime {
 // convert unsupported code
 class codeLift {
 public:
-  codeLift(uint8_t *&rip, uint8_t *ripEnd = nullptr);
+  codeLift(u8 *&rip, u8 *ripEnd = nullptr);
   ~codeLift();
 
   bool init();
-  bool transform(uint8_t *, size_t size, uint64_t base = 0);
+  bool transform(u8 *, size_t size, u64 base = 0);
 
 private:
-  void emit_syscall(uint8_t *base, uint32_t idx);
-  void emit_fsbase(uint8_t *base);
+  void emit_syscall(u8 *base, u32 idx);
+  void emit_fsbase(u8 *base);
 
   csh handle = 0;
   cs_insn *insn = nullptr;
-  uint8_t *&ripPointer;
-  uint8_t *ripEnd = nullptr;  // end of the rip-zone; stop emitting stubs past it
+  u8 *&ripPointer;
+  u8 *ripEnd = nullptr;  // end of the rip-zone; stop emitting stubs past it
 };
 }

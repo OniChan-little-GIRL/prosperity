@@ -11,6 +11,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 #include "services.h"
 
@@ -27,7 +28,7 @@ enum {
 // The state that means "the title is running in the foreground". 5 is the same
 // thing for a title that still owes the web API a one-time registration, so 4
 // is the one that needs no further daemon round trip.
-constexpr uint32_t kAppRunning = 4;
+constexpr u32 kAppRunning = 4;
 
 struct Lnc : Service {
   const char *name() const override { return "SceLncService"; }
@@ -40,7 +41,7 @@ struct Lnc : Service {
       // mismatch reads as "another app has focus" and GetStatus reports
       // isInBackgroundExecution, which titles answer by dropping pad input
       // (Tomb Raider: DE stops calling scePadReadState forever).
-      const uint32_t status[3] = {kForegroundAppId, 0, kAppRunning};
+      const u32 status[3] = {kForegroundAppId, 0, kAppRunning};
       inv.reply(0, status, sizeof(status));
       break;
     }

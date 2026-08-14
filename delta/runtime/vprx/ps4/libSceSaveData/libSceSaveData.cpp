@@ -6,6 +6,7 @@
  */
 
 #include <base/environment_variables.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include "libSceSaveData.h"
 
@@ -41,10 +42,10 @@ static void sdTrace(const char* fn) {
 }
 
 // Mount modes (SCE_SAVE_DATA_MOUNT_MODE_*).
-constexpr uint32_t kModeRdOnly = 1;
-constexpr uint32_t kModeRdWr = 2;
-constexpr uint32_t kModeCreate = 4;
-constexpr uint32_t kModeCreate2 = 32;
+constexpr u32 kModeRdOnly = 1;
+constexpr u32 kModeRdWr = 2;
+constexpr u32 kModeCreate = 4;
+constexpr u32 kModeCreate2 = 32;
 
 // Errors (SCE_SAVE_DATA_ERROR_*).
 constexpr int kOk = 0;
@@ -57,8 +58,8 @@ constexpr int kErrNotFound = static_cast<int>(0x809F0008u);
 // power of two: a title that converts blocks to bytes in 32 bits wraps any
 // multiple of 4 GiB to exactly zero and reads that as "no free space".
 // Minecraft's world creation is gated on exactly that check.
-constexpr uint64_t kTotalBlocks = 60000;  // ~1.83 GiB
-constexpr uint64_t kFreeBlocks = 50000;   // ~1.53 GiB
+constexpr u64 kTotalBlocks = 60000;  // ~1.83 GiB
+constexpr u64 kFreeBlocks = 50000;   // ~1.53 GiB
 
 // OrbisSaveDataParam sidecar layout.
 constexpr size_t kParamSize = 1328;
@@ -69,12 +70,12 @@ constexpr size_t kOffUserParam = 1280;
 constexpr size_t kOffMtime = 1288;
 
 // OrbisSaveDataParamType.
-constexpr uint32_t kParamAll = 0;
-constexpr uint32_t kParamTitle = 1;
-constexpr uint32_t kParamSubTitle = 2;
-constexpr uint32_t kParamDetail = 3;
-constexpr uint32_t kParamUserParam = 4;
-constexpr uint32_t kParamMtime = 5;
+constexpr u32 kParamAll = 0;
+constexpr u32 kParamTitle = 1;
+constexpr u32 kParamSubTitle = 2;
+constexpr u32 kParamDetail = 3;
+constexpr u32 kParamUserParam = 4;
+constexpr u32 kParamMtime = 5;
 
 std::mutex g_mtx;
 int g_nextSlot = 0;
@@ -205,17 +206,17 @@ int unmountPoint(const void *mountPoint) {
 // Read a guest pointer stored at byte offset `off` in `base`.
 const void *ptrAt(const void *base, size_t off) {
   const void *p = nullptr;
-  std::memcpy(&p, static_cast<const uint8_t *>(base) + off, sizeof(p));
+  std::memcpy(&p, static_cast<const u8 *>(base) + off, sizeof(p));
   return p;
 }
-uint32_t u32At(const void *base, size_t off) {
-  uint32_t v = 0;
-  std::memcpy(&v, static_cast<const uint8_t *>(base) + off, 4);
+u32 u32At(const void *base, size_t off) {
+  u32 v = 0;
+  std::memcpy(&v, static_cast<const u8 *>(base) + off, 4);
   return v;
 }
-uint64_t u64At(const void *base, size_t off) {
-  uint64_t v = 0;
-  std::memcpy(&v, static_cast<const uint8_t *>(base) + off, 8);
+u64 u64At(const void *base, size_t off) {
+  u64 v = 0;
+  std::memcpy(&v, static_cast<const u8 *>(base) + off, 8);
   return v;
 }
 
@@ -228,7 +229,7 @@ std::string paramPath(const std::string &host) {
   return host + "/.sce_param.bin";
 }
 
-void loadParam(const std::string &host, uint8_t *out /*kParamSize*/) {
+void loadParam(const std::string &host, u8 *out /*kParamSize*/) {
   std::memset(out, 0, kParamSize);
   if (FILE *f = std::fopen(paramPath(host).c_str(), "rb")) {
     size_t got = std::fread(out, 1, kParamSize, f);
@@ -237,7 +238,7 @@ void loadParam(const std::string &host, uint8_t *out /*kParamSize*/) {
   }
 }
 
-void storeParam(const std::string &host, const uint8_t *blob /*kParamSize*/) {
+void storeParam(const std::string &host, const u8 *blob /*kParamSize*/) {
   if (FILE *f = std::fopen(paramPath(host).c_str(), "wb")) {
     std::fwrite(blob, 1, kParamSize, f);
     std::fclose(f);
@@ -246,7 +247,7 @@ void storeParam(const std::string &host, const uint8_t *blob /*kParamSize*/) {
 
 // -------- SaveDataMemory backing --------
 
-std::string memoryPath(uint32_t slotId) {
+std::string memoryPath(u32 slotId) {
   std::string dir = titleRoot() + "/sce_sdmemory";
   makeHostDirs(dir);
   char name[64];
@@ -254,17 +255,17 @@ std::string memoryPath(uint32_t slotId) {
   return dir + name;
 }
 
-int memorySetup(uint64_t memorySize, uint32_t slotId, void *result) {
+int memorySetup(u64 memorySize, u32 slotId, void *result) {
   const std::string path = memoryPath(slotId);
-  uint64_t existed = 0;
+  u64 existed = 0;
   struct stat st;
   if (::stat(path.c_str(), &st) == 0)
-    existed = static_cast<uint64_t>(st.st_size);
+    existed = static_cast<u64>(st.st_size);
   // Create/extend the blob to memorySize (fill with zeros).
   if (existed < memorySize) {
     if (FILE *f = std::fopen(path.c_str(), existed ? "rb+" : "wb")) {
       if (std::fseek(f, static_cast<long>(memorySize) - 1, SEEK_SET) == 0) {
-        const uint8_t z = 0;
+        const u8 z = 0;
         std::fwrite(&z, 1, 1, f);
       }
       std::fclose(f);
@@ -280,7 +281,7 @@ int memorySetup(uint64_t memorySize, uint32_t slotId, void *result) {
   return kOk;
 }
 
-int memoryRead(uint32_t slotId, void *buf, uint64_t bufSize, int64_t offset) {
+int memoryRead(u32 slotId, void *buf, u64 bufSize, i64 offset) {
   if (buf && bufSize)
     std::memset(buf, 0, bufSize);
   if (!buf)
@@ -295,8 +296,8 @@ int memoryRead(uint32_t slotId, void *buf, uint64_t bufSize, int64_t offset) {
   return kOk;
 }
 
-int memoryWrite(uint32_t slotId, const void *buf, uint64_t bufSize,
-                int64_t offset) {
+int memoryWrite(u32 slotId, const void *buf, u64 bufSize,
+                i64 offset) {
   if (!buf || !bufSize)
     return kOk;
   const std::string path = memoryPath(slotId);
@@ -312,7 +313,7 @@ int memoryWrite(uint32_t slotId, const void *buf, uint64_t bufSize,
 }
 
 // Shared mount core.
-int doMount(const char *dir_name, uint32_t mode, void *result) {
+int doMount(const char *dir_name, u32 mode, void *result) {
   if (!dir_name || !dir_name[0])
     return kErrParameter;
   bool exists = false;
@@ -332,10 +333,10 @@ int doMount(const char *dir_name, uint32_t mode, void *result) {
   g_slots.push_back({point, host, readOnly});
 
   if (result) {
-    auto *r = static_cast<uint8_t *>(result);
+    auto *r = static_cast<u8 *>(result);
     std::memset(r, 0, 64);
     std::snprintf(reinterpret_cast<char *>(r), 16, "%s", point);
-    const uint32_t status = exists ? 0u : 1u;  // 1 = SAVE_DATA_CREATED
+    const u32 status = exists ? 0u : 1u;  // 1 = SAVE_DATA_CREATED
     std::memcpy(r + 28, &status, 4);            // mount_status@28
   }
   if (g_trace())
@@ -391,13 +392,13 @@ int PS4ABI sceSaveDataUmount(const void *mountPoint) {
 int PS4ABI sceSaveDataUmountWithBackup(const void *mountPoint) {
   sdTrace("sceSaveDataUmountWithBackup"); return unmountPoint(mountPoint); }
 
-int PS4ABI sceSaveDataUmount2(uint32_t, const void *mountPoint) {
+int PS4ABI sceSaveDataUmount2(u32, const void *mountPoint) {
   sdTrace("sceSaveDataUmount2"); return unmountPoint(mountPoint); }
 
 int PS4ABI sceSaveDataGetMountInfo(const void *, void *info) {
   sdTrace("sceSaveDataGetMountInfo");
   if (info) {
-    auto *i = static_cast<uint8_t *>(info);
+    auto *i = static_cast<u8 *>(info);
     std::memset(i, 0, 48);
     std::memcpy(i + 0, &kTotalBlocks, 8);  // total blocks
     std::memcpy(i + 8, &kFreeBlocks, 8);   // free blocks
@@ -405,13 +406,13 @@ int PS4ABI sceSaveDataGetMountInfo(const void *, void *info) {
   return kOk;
 }
 
-int PS4ABI sceSaveDataCreateTransactionResource(uint32_t) {
+int PS4ABI sceSaveDataCreateTransactionResource(u32) {
   sdTrace("sceSaveDataCreateTransactionResource");
   std::lock_guard<std::mutex> lk(g_mtx);
   return g_nextTransactionResource++;
 }
 
-int PS4ABI sceSaveDataDeleteTransactionResource(int32_t) {
+int PS4ABI sceSaveDataDeleteTransactionResource(i32) {
   sdTrace("sceSaveDataDeleteTransactionResource");
   return kOk;
 }
@@ -432,7 +433,7 @@ int PS4ABI sceSaveDataDirNameSearch(const void *cond, void *result) {
   sdTrace("sceSaveDataDirNameSearch");
   if (!result)
     return kErrParameter;
-  auto *r = static_cast<uint8_t *>(result);
+  auto *r = static_cast<u8 *>(result);
   std::string searchRoot = titleRoot();
   if (cond) {
     const void *titleId = ptrAt(cond, 8);
@@ -441,10 +442,10 @@ int PS4ABI sceSaveDataDirNameSearch(const void *cond, void *result) {
                    std::string(cstrOf(titleId), strnlen(cstrOf(titleId), 10));
   }
   // dirNamesNum@16 is the caller's array capacity (input).
-  const uint32_t capacity = u32At(result, 16);
-  auto *dirNames = static_cast<uint8_t *>(const_cast<void *>(ptrAt(result, 8)));
-  auto *params = static_cast<uint8_t *>(const_cast<void *>(ptrAt(result, 24)));
-  auto *infos = static_cast<uint8_t *>(const_cast<void *>(ptrAt(result, 32)));
+  const u32 capacity = u32At(result, 16);
+  auto *dirNames = static_cast<u8 *>(const_cast<void *>(ptrAt(result, 8)));
+  auto *params = static_cast<u8 *>(const_cast<void *>(ptrAt(result, 24)));
+  auto *infos = static_cast<u8 *>(const_cast<void *>(ptrAt(result, 32)));
 
   // Optional name filter from the search condition.
   const char *filter = nullptr;
@@ -475,26 +476,26 @@ int PS4ABI sceSaveDataDirNameSearch(const void *cond, void *result) {
   if (cond && u32At(cond, 28) == 1)
     std::reverse(hits.begin(), hits.end());
 
-  const uint32_t setNum =
-      capacity < hits.size() ? capacity : static_cast<uint32_t>(hits.size());
-  for (uint32_t i = 0; i < setNum; i++) {
+  const u32 setNum =
+      capacity < hits.size() ? capacity : static_cast<u32>(hits.size());
+  for (u32 i = 0; i < setNum; i++) {
     if (dirNames) {
       char *slot = reinterpret_cast<char *>(dirNames) + i * 32;
       std::memset(slot, 0, 32);
       std::snprintf(slot, 32, "%s", hits[i].c_str());
     }
     if (params) {
-      uint8_t *pslot = params + i * kParamSize;
+      u8 *pslot = params + i * kParamSize;
       loadParam(searchRoot + "/" + hits[i], pslot);
     }
     if (infos) {
-      uint8_t *islot = infos + i * 48;  // SearchInfo { u64 blocks; u64 free; }
+      u8 *islot = infos + i * 48;  // SearchInfo { u64 blocks; u64 free; }
       std::memset(islot, 0, 48);
       std::memcpy(islot + 0, &kTotalBlocks, 8);
       std::memcpy(islot + 8, &kFreeBlocks, 8);
     }
   }
-  const uint32_t hitNum = static_cast<uint32_t>(hits.size());
+  const u32 hitNum = static_cast<u32>(hits.size());
   std::memcpy(r + 0, &hitNum, 4);   // hitNum
   std::memcpy(r + 20, &setNum, 4);  // setNum
   // dirNamesNum stays the caller's capacity value; leave it untouched.
@@ -539,8 +540,8 @@ int PS4ABI sceSaveDataRestoreBackupData(const void *restore) {
 
 // ---------------- param / icon ----------------
 
-int PS4ABI sceSaveDataGetParam(const void *mountPoint, uint32_t paramType,
-                               void *buf, uint64_t size, uint64_t *result) {
+int PS4ABI sceSaveDataGetParam(const void *mountPoint, u32 paramType,
+                               void *buf, u64 size, u64 *result) {
   sdTrace("sceSaveDataGetParam");
   if (buf && size)
     std::memset(buf, 0, size);
@@ -552,7 +553,7 @@ int PS4ABI sceSaveDataGetParam(const void *mountPoint, uint32_t paramType,
   if (!buf || !size)
     return kOk;
 
-  uint8_t blob[kParamSize];
+  u8 blob[kParamSize];
   loadParam(host, blob);
   size_t off = 0, len = 0;
   switch (paramType) {
@@ -590,8 +591,8 @@ int PS4ABI sceSaveDataGetParam(const void *mountPoint, uint32_t paramType,
   return kOk;
 }
 
-int PS4ABI sceSaveDataSetParam(const void *mountPoint, uint32_t paramType,
-                               const void *buf, uint64_t size) {
+int PS4ABI sceSaveDataSetParam(const void *mountPoint, u32 paramType,
+                               const void *buf, u64 size) {
   sdTrace("sceSaveDataSetParam");
   const std::string host = hostForPoint(mountPoint);
   if (host.empty())
@@ -599,7 +600,7 @@ int PS4ABI sceSaveDataSetParam(const void *mountPoint, uint32_t paramType,
   if (!buf || !size)
     return kOk;
 
-  uint8_t blob[kParamSize];
+  u8 blob[kParamSize];
   loadParam(host, blob);
   size_t off = 0, len = 0;
   switch (paramType) {
@@ -646,9 +647,9 @@ int PS4ABI sceSaveDataSaveIcon(const void *mountPoint, const void *icon) {
     return kErrNotMounted;
   if (icon) {
     const void *iconBuf = ptrAt(icon, 0);
-    const uint64_t bufSize = u64At(icon, 8);
-    const uint64_t dataSize = u64At(icon, 16);
-    const uint64_t n = dataSize < bufSize ? dataSize : bufSize;
+    const u64 bufSize = u64At(icon, 8);
+    const u64 dataSize = u64At(icon, 16);
+    const u64 n = dataSize < bufSize ? dataSize : bufSize;
     if (iconBuf && n) {
       if (FILE *f = std::fopen((host + "/.sce_icon.bin").c_str(), "wb")) {
         std::fwrite(iconBuf, 1, static_cast<size_t>(n), f);
@@ -675,23 +676,23 @@ int PS4ABI sceSaveDataLoadIcon(const void *mountPoint, void *icon) {
     return kErrNotFound;
 
   void *iconBuf = const_cast<void *>(ptrAt(icon, 0));
-  const uint64_t bufSize = u64At(icon, 8);
-  const uint64_t dataSize = static_cast<uint64_t>(st.st_size);
+  const u64 bufSize = u64At(icon, 8);
+  const u64 dataSize = static_cast<u64>(st.st_size);
   if (iconBuf && bufSize) {
     FILE *f = std::fopen(path.c_str(), "rb");
     if (!f)
       return kErrNotFound;
-    const uint64_t copySize = dataSize < bufSize ? dataSize : bufSize;
+    const u64 copySize = dataSize < bufSize ? dataSize : bufSize;
     std::fread(iconBuf, 1, static_cast<size_t>(copySize), f);
     std::fclose(f);
   }
-  std::memcpy(static_cast<uint8_t *>(icon) + 16, &dataSize, sizeof(dataSize));
+  std::memcpy(static_cast<u8 *>(icon) + 16, &dataSize, sizeof(dataSize));
   return kOk;
 }
 
 // ---------------- SaveDataMemory ----------------
 
-int PS4ABI sceSaveDataSetupSaveDataMemory(uint32_t, uint64_t memorySize,
+int PS4ABI sceSaveDataSetupSaveDataMemory(u32, u64 memorySize,
                                           void *) {
   sdTrace("sceSaveDataSetupSaveDataMemory");
   return memorySetup(memorySize, 0, nullptr);
@@ -705,13 +706,13 @@ int PS4ABI sceSaveDataSetupSaveDataMemory2(const void *setupParam,
       std::memset(result, 0, 24);
     return kErrParameter;
   }
-  const uint64_t memorySize = u64At(setupParam, 8);
-  const uint32_t slotId = u32At(setupParam, 40);
+  const u64 memorySize = u64At(setupParam, 8);
+  const u32 slotId = u32At(setupParam, 40);
   return memorySetup(memorySize, slotId, result);
 }
 
-int PS4ABI sceSaveDataGetSaveDataMemory(uint32_t, void *buf, uint64_t bufSize,
-                                        int64_t offset) {
+int PS4ABI sceSaveDataGetSaveDataMemory(u32, void *buf, u64 bufSize,
+                                        i64 offset) {
   sdTrace("sceSaveDataGetSaveDataMemory");
   return memoryRead(0, buf, bufSize, offset);
 }
@@ -720,18 +721,18 @@ int PS4ABI sceSaveDataGetSaveDataMemory2(void *getParam) {
   sdTrace("sceSaveDataGetSaveDataMemory2");
   if (!getParam)
     return kErrParameter;
-  const uint32_t slotId = u32At(getParam, 32);
+  const u32 slotId = u32At(getParam, 32);
   const void *data = ptrAt(getParam, 8);
   if (!data)
     return kErrParameter;
   void *buf = const_cast<void *>(ptrAt(data, 0));
-  const uint64_t bufSize = u64At(data, 8);
-  const int64_t offset = static_cast<int64_t>(u64At(data, 16));
+  const u64 bufSize = u64At(data, 8);
+  const i64 offset = static_cast<i64>(u64At(data, 16));
   return memoryRead(slotId, buf, bufSize, offset);
 }
 
-int PS4ABI sceSaveDataSetSaveDataMemory(uint32_t, const void *buf,
-                                        uint64_t bufSize, int64_t offset) {
+int PS4ABI sceSaveDataSetSaveDataMemory(u32, const void *buf,
+                                        u64 bufSize, i64 offset) {
   sdTrace("sceSaveDataSetSaveDataMemory");
   return memoryWrite(0, buf, bufSize, offset);
 }
@@ -740,13 +741,13 @@ int PS4ABI sceSaveDataSetSaveDataMemory2(const void *setParam) {
   sdTrace("sceSaveDataSetSaveDataMemory2");
   if (!setParam)
     return kErrParameter;
-  const uint32_t slotId = u32At(setParam, 36);
+  const u32 slotId = u32At(setParam, 36);
   const void *data = ptrAt(setParam, 8);
   if (!data)
     return kOk;
   const void *buf = ptrAt(data, 0);
-  const uint64_t bufSize = u64At(data, 8);
-  const int64_t offset = static_cast<int64_t>(u64At(data, 16));
+  const u64 bufSize = u64At(data, 8);
+  const i64 offset = static_cast<i64>(u64At(data, 16));
   return memoryWrite(slotId, buf, bufSize, offset);
 }
 

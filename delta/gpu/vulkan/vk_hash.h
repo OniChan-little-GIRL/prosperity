@@ -7,13 +7,14 @@
 // a content fingerprint for a range of guest memory.
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu::vk {
 
-inline uint64_t HashWord(uint64_t h, uint64_t v) {
+inline u64 HashWord(u64 h, u64 v) {
   return (h ^ v) * 1099511628211ull;
 }
 
-uint64_t TexHash(uint64_t base, uint64_t bytes);
+u64 TexHash(u64 base, u64 bytes);
 
 }  // namespace gpu::vk

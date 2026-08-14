@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_backend.h"
+#include "base/arch.h"
 
 #include "gpu/rhi/renderer.h"
 
@@ -22,9 +23,9 @@ RecompiledPipelineCache& g_recomp_cache = g_backend.recompiled_pipelines;
 ImageMemoryPool& g_image_memory = g_backend.image_memory;
 TextureBindings& g_tex = g_backend.tex;
 RenderRegion& g_region = g_backend.region;
-std::unordered_map<uint64_t, RTarget>& g_rts = g_backend.rts;
-std::unordered_map<uint64_t, DepthTarget>& g_depths = g_backend.depths;
-std::unordered_map<uint64_t, std::vector<uint64_t>>& g_rt_pages =
+std::unordered_map<u64, RTarget>& g_rts = g_backend.rts;
+std::unordered_map<u64, DepthTarget>& g_depths = g_backend.depths;
+std::unordered_map<u64, std::vector<u64>>& g_rt_pages =
     g_backend.rt_pages;
 PFN_vkCmdBeginRenderingKHR& g_cmd_begin_rendering =
     g_backend.cmd_begin_rendering;

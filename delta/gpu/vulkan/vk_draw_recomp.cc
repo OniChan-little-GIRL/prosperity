@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_draw_recomp.h"
+#include "base/arch.h"
 
 #include "gpu/guest_memory.h"
 #include "gpu/gcn/gcn_translate.h"
@@ -37,7 +38,7 @@ DELTA_OPTION(bool, kNoWipe, "DELTA_GPU_NOWIPE", true);
 DELTA_OPTION(bool, kLazyClear2, "DELTA_GPU_LAZYCLEAR", true);
 DELTA_OPTION(int, kTexBindFrame, "DELTA_GPU_TEXBIND", -1);
 DELTA_OPTION(int, kSeqN, "DELTA_GPU_DRAWSEQ", 0);
-DELTA_OPTION(uint64_t, kWant, "DELTA_GPU_DRAWRT", 0);
+DELTA_OPTION(u64, kWant, "DELTA_GPU_DRAWRT", 0);
 DELTA_OPTION(int, kWantFrame, "DELTA_GPU_DRAWRT_FRAME", 0);
 DELTA_OPTION(int, kBusy, "DELTA_GPU_DRAWRT_BUSY", 0);
 // A COUNT, not a flag: as a bool this capped the trace at ONE line, so a
@@ -50,20 +51,20 @@ DELTA_OPTION(bool, kUiWatch, "DELTA_GPU_UIWATCH", false);
 DELTA_OPTION(bool, kClearRectScissor, "DELTA_GPU_CLEARRECT_SCISSOR", false);
 DELTA_OPTION(bool, kDrawTrace, "DELTA_GPU_DRAWTRACE", false);
 DELTA_OPTION(bool, kGpuDecltrace, "DELTA_GPU_DECLTRACE", false);
-DELTA_OPTION(uint64_t, kWhyDrop, "DELTA_GPU_WHYDROP", 0);
-DELTA_OPTION(uint64_t, kBindTrace, "DELTA_GPU_BINDTRACE", 0);
+DELTA_OPTION(u64, kWhyDrop, "DELTA_GPU_WHYDROP", 0);
+DELTA_OPTION(u64, kBindTrace, "DELTA_GPU_BINDTRACE", 0);
 DELTA_OPTION(bool, kRawBufTrace, "DELTA_GPU_RAWBUF", false);
 DELTA_OPTION(bool, kSelfTrace, "DELTA_GPU_SELFTRACE", false);
 DELTA_OPTION(bool, kTightCbuf, "DELTA_GPU_TIGHTCBUF", false);
 // DELTA_GPU_CBSTAGED=<vs addr> (or 1 for every draw): the bytes that reached
 // the ring slot the descriptor points at -- what the SPIR-V actually loads,
 // as opposed to the guest buffer the CPU-side trace prints.
-DELTA_OPTION(uint64_t, kCbInfo, "DELTA_GPU_CBSTAGED", 0);
+DELTA_OPTION(u64, kCbInfo, "DELTA_GPU_CBSTAGED", 0);
 // DELTA_GPU_TEXFORCE=<guest addr>: bind the 1x1 white default for exactly
 // this texture address. A diagnostic, not a setting -- it answers "is THIS
 // surface the one holding the frame back", which forcing every sampler
 // white cannot.
-DELTA_OPTION(uint64_t, kTexForce, "DELTA_GPU_TEXFORCE", 0);
+DELTA_OPTION(u64, kTexForce, "DELTA_GPU_TEXFORCE", 0);
 DELTA_OPTION(bool, kTint, "DELTA_GPU_RTTINT", false);
 }  // namespace
 
@@ -94,7 +95,7 @@ enum DeclineReason {
 };
 static const char* kDeclineName[kMaxDeclineReason] = {
     "norecomp", "notexpipe", "self", "ring", "guesttex", "midregion", "nopipe"};
-uint32_t g_decline[kMaxDeclineReason] = {0};
+u32 g_decline[kMaxDeclineReason] = {0};
 inline bool Decline(DeclineReason r) {
   g_decline[r]++;
   if (trace::Recording())
@@ -103,8 +104,8 @@ inline bool Decline(DeclineReason r) {
 }
 
 struct ReadableRangeKey {
-  uint64_t base;
-  uint32_t size;
+  u64 base;
+  u32 size;
   bool operator==(const ReadableRangeKey&) const = default;
 };
 
@@ -133,9 +134,9 @@ struct ReadableRangeKeyHash {
 // shipped this exact assumption since it grew its own `staged` map.
 // DELTA_GPU_RING_DEDUP=0 restores the copy-per-draw behaviour for A/B.
 struct StageCacheKey {
-  uint64_t base;
-  uint64_t bytes;
-  uint32_t salt;  // index type for the IB cache, 0 elsewhere
+  u64 base;
+  u64 bytes;
+  u32 salt;  // index type for the IB cache, 0 elsewhere
   bool operator==(const StageCacheKey&) const = default;
 };
 
@@ -149,7 +150,7 @@ struct StageCacheKeyHash {
 struct StageCache {
   struct Entry {
     VkDeviceSize off;
-    uint64_t gen;
+    u64 gen;
   };
   std::unordered_map<StageCacheKey, Entry, StageCacheKeyHash> map;
   int frame = -1;
@@ -161,7 +162,7 @@ struct StageCache {
     }
   }
   // Returns the cached ring offset, or -1 when absent/stale.
-  VkDeviceSize Find(uint64_t base, uint64_t bytes, uint32_t salt = 0) {
+  VkDeviceSize Find(u64 base, u64 bytes, u32 salt = 0) {
     RollFrame();
     const auto it = map.find({base, bytes, salt});
     if (it == map.end() || it->second.gen != rhi::CsWritebackGeneration() ||
@@ -171,7 +172,7 @@ struct StageCache {
   }
   // Record a copy made at the CURRENT generation -- call after the range was
   // flushed (or was never compute-written), never before.
-  void Insert(uint64_t base, uint64_t bytes, uint32_t salt, VkDeviceSize off) {
+  void Insert(u64 base, u64 bytes, u32 salt, VkDeviceSize off) {
     RollFrame();
     map[{base, bytes, salt}] = {off, rhi::CsWritebackGeneration()};
   }
@@ -181,7 +182,7 @@ StageCache g_vb_staged, g_ib_staged, g_ubo_staged, g_sbo_staged;
 
 DELTA_OPTION(bool, kRingDedup, "DELTA_GPU_RING_DEDUP", true);
 
-bool IsReadableThisFrame(uint64_t base, uint32_t size) {
+bool IsReadableThisFrame(u64 base, u32 size) {
   static int frame = -1;
   static std::unordered_map<ReadableRangeKey, bool, ReadableRangeKeyHash> cache;
   if (frame != g_frame.num) {
@@ -205,7 +206,7 @@ static_assert(rhi::DrawInfo::kMaxBuffers == kRawBufBindings,
 // draw that never reaches vkCmdDraw is invisible in every other trace, and the
 // paths that consume one all `return true`.
 static void WhyDrop(const rhi::DrawInfo& d, const char* where) {
-  if (!kWhyDrop || d.ps_addr != (uint64_t)kWhyDrop)
+  if (!kWhyDrop || d.ps_addr != (u64)kWhyDrop)
     return;
   BASE_LOGI("whydrop", "ps={:#x} exit={} rt={:#x} mrt={} depth={:#x}",
             (unsigned long)d.ps_addr, where, (unsigned long)d.rt_base,
@@ -235,7 +236,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
               d.mrt_count, (unsigned long)d.tex_base, d.prim_type,
               d.index_data ? d.index_count : d.vertex_count);
   bool indexed = d.index_data && d.index_count >= 3;
-  uint32_t draw_count = indexed ? d.index_count : d.vertex_count;
+  u32 draw_count = indexed ? d.index_count : d.vertex_count;
   if (kDrawTrace && draw_count >= 300) {
     static int n = 0;
     if (n++ < 40)
@@ -297,12 +298,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // (resource-model page-table lookup), so an RT-as-texture sample binds the
   // live image for cycled/aliased RT addresses instead of stale guest memory.
   // Additive: an exact RT base resolves to itself.
-  uint64_t tex_base = d.tex_base;
+  u64 tex_base = d.tex_base;
   // DELTA_GPU_TEXFORCE also has to cover the single-texture path, or it
   // silently does nothing for exactly the blit-shaped draws that path exists
   // for -- and a diagnostic that quietly no-ops reads as a negative result.
   const bool force_white_tex =
-      kTexForce && tex_base == (uint64_t)kTexForce;
+      kTexForce && tex_base == (u64)kTexForce;
   if (force_white_tex)
     tex_base = 0;
   // Render targets are plain 2D images, so only a plain 2D binding may resolve
@@ -312,7 +313,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   if (tex_base && tex_rt_eligible && !g_rts.count(tex_base) &&
       !g_depths.count(tex_base)) {
     bool depth_format = d.tex_dfmt == 4 && d.tex_nfmt == 7;
-    uint64_t r =
+    u64 r =
         depth_format ? ResolveSampledDepth(tex_base, d.tex_w, d.tex_h) : 0;
     if (!r)
       r = ResolveSampledRT(tex_base, d.tex_w, d.tex_h);
@@ -362,7 +363,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // These three all report as "norecomp", which lumps a vertex-count cap in
   // with a missing program; separate them, because only the cap is ours to
   // move.
-  const auto vtx_decline = [&](const char* why, uint32_t n) {
+  const auto vtx_decline = [&](const char* why, u32 n) {
     if (kGpuDecltrace) {
       static int t = 0;
       if (t++ < 32)
@@ -375,9 +376,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     }
     return Decline(kNoRecomp);
   };
-  uint32_t nv = d.vertex_count;
+  u32 nv = d.vertex_count;
   if (indexed) {
-    const uint32_t max_index =
+    const u32 max_index =
         MaxGuestIndex(d.index_data, d.index_count, d.index_type);
     if (max_index >= 200000u)
       return vtx_decline("max-index", max_index);
@@ -386,8 +387,8 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   if (nv > 200000u || (d.num_vattrs && (!d.vertex_data || !d.vertex_stride)))
     return vtx_decline(nv > 200000u ? "nv-cap" : "no-vertex-data", nv);
   if (d.vertex_data && d.vertex_stride &&
-      !FlushCsWritesRange(renderer, reinterpret_cast<uint64_t>(d.vertex_data),
-                          static_cast<uint64_t>(nv) * d.vertex_stride))
+      !FlushCsWritesRange(renderer, reinterpret_cast<u64>(d.vertex_data),
+                          static_cast<u64>(nv) * d.vertex_stride))
     return vtx_decline("cs-flush", nv);
 
   // GNM's fast clear (see DrawInfo::is_clear_rect): a RECT_LIST draw with no
@@ -417,7 +418,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // right before the tonemap pass samples that same target through a
     // feedback copy. Taking them for clears wiped the scene a draw before it
     // was read, which is why the game presented black.
-    const uint32_t cb_mode = (d.color_control >> 4) & 7u;
+    const u32 cb_mode = (d.color_control >> 4) & 7u;
     if (cb_mode != 1) {
       if (kClearTrace) {
         static int n = 0;
@@ -439,8 +440,8 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // reads, so taking each of them as "clear everything" erases the deferred
     // lighting that was rendered into it. Skip the ones that do not cover the
     // target; leaving old content is recoverable, erasing live content is not.
-    const uint32_t cx0 = d.clear_tl & 0x7FFF, cy0 = (d.clear_tl >> 16) & 0x7FFF;
-    const uint32_t cx1 = d.clear_br & 0x7FFF, cy1 = (d.clear_br >> 16) & 0x7FFF;
+    const u32 cx0 = d.clear_tl & 0x7FFF, cy0 = (d.clear_tl >> 16) & 0x7FFF;
+    const u32 cx1 = d.clear_br & 0x7FFF, cy1 = (d.clear_br >> 16) & 0x7FFF;
     const bool covers_target =
         !kClearRectScissor ||
         (cx0 == 0 && cy0 == 0 && cx1 >= d.rt_w && cy1 >= d.rt_h);
@@ -458,7 +459,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       g_frame.draws++;
       return true;
     }
-    for (uint32_t i = 0; i < d.mrt_count && i < 8; i++) {
+    for (u32 i = 0; i < d.mrt_count && i < 8; i++) {
       auto it = g_rts.find(d.mrt_base[i]);
       if (it == g_rts.end())
         continue;
@@ -506,17 +507,17 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   if (kUiWatch) {
     static bool armed = false;
     if (!armed) {
-      for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
+      for (u32 a = 0; a < d.num_vattrs && a < 8; a++) {
         const auto& attr = d.vattrs[a];
         if (attr.dfmt != 10 || attr.nfmt != 0 || attr.num_comps != 4)
           continue;  // not an RGBA8 colour
         if (attr.binding >= d.num_vbufs)
           continue;
         const auto& vb = d.vbufs[attr.binding];
-        const auto* p = static_cast<const uint8_t*>(vb.data);
+        const auto* p = static_cast<const u8*>(vb.data);
         if (!p || !utl::isMemoryRangeMapped(p + attr.offset, 4))
           continue;
-        uint32_t c0 = 0;
+        u32 c0 = 0;
         std::memcpy(&c0, p + attr.offset, 4);
         if (c0 != 0)
           continue;  // only the faded-out ones are interesting
@@ -559,7 +560,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // pixel-shader address, to prove what a single pass contributes to the
   // presented frame. Guest shader addresses are stable per build.
   {
-    static const uint64_t kSkipPs = [] {
+    static const u64 kSkipPs = [] {
       const char* e = std::getenv("DELTA_GPU_SKIP_PS");
       return e ? std::strtoull(e, nullptr, 0) : 0ull;
     }();
@@ -578,8 +579,8 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // pixels at all" gets separated from "it covers them and contributes nothing",
   // which no amount of reading an accumulation buffer can do.
   {
-    static const std::vector<uint64_t> kOnlyPs = [] {
-      std::vector<uint64_t> out;
+    static const std::vector<u64> kOnlyPs = [] {
+      std::vector<u64> out;
       if (const char* e = std::getenv("DELTA_GPU_ONLY_PS"))
         for (const char* p = e; *p;) {
           while (*p == ',' || *p == ' ')
@@ -593,7 +594,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       if (!out.empty()) {
         base::String list;
         base::FormatTo(list, "keeping only {} shader(s):", out.size());
-        for (uint64_t v : out)
+        for (u64 v : out)
           base::FormatTo(list, " {:#x}", (unsigned long long)v);
         BASE_LOGI("onlyps", "{}", list.c_str());
       }
@@ -601,13 +602,13 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     }();
     if (!kOnlyPs.empty()) {
       bool keep = false;
-      for (uint64_t v : kOnlyPs)
+      for (u64 v : kOnlyPs)
         keep |= (v == d.ps_addr);
       if (!keep) {
         g_frame.draws++;
         return true;
       }
-      static std::vector<uint64_t> said;
+      static std::vector<u64> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
         BASE_LOGI("onlyps", "keeping ps={:#x} rt={:#x} {}x{}",
@@ -624,7 +625,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // recorded target content can be checked against the guest's own data
   // instead of guessed at.
   {
-    static const uint64_t kVtxRt = [] {
+    static const u64 kVtxRt = [] {
       const char* e = std::getenv("DELTA_GPU_VTXTRACE_RT");
       return e ? std::strtoull(e, nullptr, 0) : 0ull;
     }();
@@ -644,17 +645,17 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       base::FormatTo(line, "f{} draw#{} rt={:#x} nv={} stride={} attrs={}",
                      g_frame.num, g_frame.draws, (unsigned long)d.rt_base, nv,
                      d.vertex_stride, d.num_vattrs);
-      for (uint32_t a = 0; a < d.num_vattrs && a < 8; a++) {
+      for (u32 a = 0; a < d.num_vattrs && a < 8; a++) {
         const auto& va = d.vattrs[a];
         base::FormatTo(line, " |loc={} dfmt={} nfmt={} nc={} off={} bind={}",
                        va.location, va.dfmt, va.nfmt, va.num_comps, va.offset,
                        va.binding);
         const auto& vb = d.vbufs[va.binding];
-        const uint64_t avail =
-            static_cast<uint64_t>(vb.stride) * vb.num_records;
-        if (vb.data && avail >= va.offset + sizeof(uint32_t) * 4) {
-          const auto* p = static_cast<const uint8_t*>(vb.data) + va.offset;
-          uint32_t w[4] = {};
+        const u64 avail =
+            static_cast<u64>(vb.stride) * vb.num_records;
+        if (vb.data && avail >= va.offset + sizeof(u32) * 4) {
+          const auto* p = static_cast<const u8*>(vb.data) + va.offset;
+          u32 w[4] = {};
           std::memcpy(w, p, sizeof(w));
           base::FormatTo(line, " raw={:08x} {:08x} {:08x} {:08x} f={:g} {:g} {:g} {:g}",
                          w[0], w[1], w[2], w[3],
@@ -681,29 +682,29 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // swallowed as a "clear" -- which is exactly what turned its whole frame
   // black. Only consider draws whose position really is float.
   bool float_pos = false;
-  for (uint32_t a = 0; a < d.num_vattrs; a++) {
+  for (u32 a = 0; a < d.num_vattrs; a++) {
     if (d.vattrs[a].location != 0)
       continue;
-    const uint32_t df = d.vattrs[a].dfmt;
+    const u32 df = d.vattrs[a].dfmt;
     float_pos =
         d.vattrs[a].nfmt == 7 && (df == 4 || df == 11 || df == 13 || df == 14);
     break;
   }
   if (kNoWipe && float_pos && d.vertex_data && d.num_vattrs &&
       d.recomp->ps_texs.empty() && nv <= 8) {
-    uint32_t cdst = (d.blend_control >> 8) & 0x1F,
+    u32 cdst = (d.blend_control >> 8) & 0x1F,
              csrc = d.blend_control & 0x1F;
     bool replace = d.blend_enable && csrc == 1 && cdst == 0;
     if (replace) {
-      const auto* vb = static_cast<const uint8_t*>(d.vertex_data);
+      const auto* vb = static_cast<const u8*>(d.vertex_data);
       bool near_black = true;
       float clear_color[4] = {0, 0, 0, 0};
-      for (uint32_t a = 0; a < d.num_vattrs; a++) {
+      for (u32 a = 0; a < d.num_vattrs; a++) {
         if (d.vattrs[a].num_comps == 4 && d.vattrs[a].offset != 0) {
           // Colour may live in its own binding; read from that binding's base.
           const auto* cbuf =
-              static_cast<const uint8_t*>(d.vbufs[d.vattrs[a].binding].data);
-          const uint8_t* cb0 = cbuf + d.vattrs[a].offset;  // vertex 0's colour
+              static_cast<const u8*>(d.vbufs[d.vattrs[a].binding].data);
+          const u8* cb0 = cbuf + d.vattrs[a].offset;  // vertex 0's colour
           if (d.vattrs[a].dfmt == 10) {
             for (int i = 0; i < 4; i++)
               clear_color[i] = cb0[i] / 255.f;
@@ -720,7 +721,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       }
       const float* m = d.mvp;
       float nx0 = 1e9f, ny0 = 1e9f, nx1 = -1e9f, ny1 = -1e9f;
-      for (uint32_t v = 0; v < nv; v++) {
+      for (u32 v = 0; v < nv; v++) {
         const float* p =
             reinterpret_cast<const float*>(vb + (size_t)v * d.vertex_stride);
         float cw = m[3] * p[0] + m[7] * p[1] + m[15];
@@ -742,7 +743,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         if (rt) {
           // Counted, not sampled.
           if (kClearTrace) {
-            static std::atomic<uint64_t> n{0};
+            static std::atomic<u64> n{0};
             if ((n.fetch_add(1) % 500) == 0)
               BASE_LOGI("clear",
                         "lazyclear-heuristic #{} rt={:#x} mrt={} "
@@ -805,19 +806,19 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // bindings are 16-byte aligned so no attribute straddles a coarse boundary.
   // A binding whose guest range is already staged this frame reuses that copy
   // (vb_cached[j]) and takes no ring space at all.
-  const uint32_t nbind = d.num_vattrs ? std::min(d.num_vbufs, 8u) : 0;
+  const u32 nbind = d.num_vattrs ? std::min(d.num_vbufs, 8u) : 0;
   VkDeviceSize bind_off[8] = {}, bind_size[8] = {};
   VkDeviceSize vb_cached[8] = {};
   VkDeviceSize vneed = 0;
-  for (uint32_t j = 0; j < nbind; j++) {
+  for (u32 j = 0; j < nbind; j++) {
     if (d.vbufs[j].stride) {
       bind_size[j] = (VkDeviceSize)nv * d.vbufs[j].stride;
     } else {
       // Stride-0 (constant) binding: upload a single record large enough to
       // cover every attribute that reads it; the pipeline binds it with stride
       // 0 so all vertices fetch this one record.
-      uint32_t rec = 0;
-      for (uint32_t a = 0; a < d.num_vattrs; a++)
+      u32 rec = 0;
+      for (u32 a = 0; a < d.num_vattrs; a++)
         if (d.vattrs[a].binding == j)
           rec = std::max(
               rec, d.vattrs[a].offset + VertexFormatBytes(d.vattrs[a].dfmt));
@@ -825,7 +826,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     }
     vb_cached[j] =
         kRingDedup && bind_size[j]
-            ? g_vb_staged.Find(reinterpret_cast<uint64_t>(d.vbufs[j].data),
+            ? g_vb_staged.Find(reinterpret_cast<u64>(d.vbufs[j].data),
                                bind_size[j])
             : VkDeviceSize(-1);
     if (vb_cached[j] != VkDeviceSize(-1))
@@ -854,7 +855,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // sources, so the same guest bytes at two types are two different uploads.
   const VkDeviceSize ib_cached =
       kRingDedup && indexed
-          ? g_ib_staged.Find(reinterpret_cast<uint64_t>(d.index_data),
+          ? g_ib_staged.Find(reinterpret_cast<u64>(d.index_data),
                              index_bytes, 1u + d.index_type)
           : VkDeviceSize(-1);
   const VkDeviceSize index_align = d.index_type == 1 ? 4 : 2;
@@ -903,33 +904,33 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       return Decline(kGuestTex);
   }
 
-  uint64_t multi_color[kMaxTex] = {};
-  uint64_t multi_depth[kMaxTex] = {};
+  u64 multi_color[kMaxTex] = {};
+  u64 multi_depth[kMaxTex] = {};
   // The depth target whose STENCIL plane a binding names (see
   // ResolveSampledStencil): a separate guest surface sharing one host image.
-  uint64_t multi_stencil_src[kMaxTex] = {};
-  uint64_t multi_feedback[kMaxTex] = {};
-  uint64_t multi_storage[kMaxTex] = {};
+  u64 multi_stencil_src[kMaxTex] = {};
+  u64 multi_feedback[kMaxTex] = {};
+  u64 multi_storage[kMaxTex] = {};
   VkImageView multi_views[kMaxTex] = {};
   VkImageLayout multi_layouts[kMaxTex];
   bool multi_transition_source = false;
-  uint32_t multi_n = std::min(d.num_texs, kMaxTex);
+  u32 multi_n = std::min(d.num_texs, kMaxTex);
   if (rp->multi_tex) {
-    auto is_bound_target = [&](uint64_t base) {
-      uint32_t count = std::min(d.mrt_count, 8u);
-      for (uint32_t m = 0; m < count; m++)
+    auto is_bound_target = [&](u64 base) {
+      u32 count = std::min(d.mrt_count, 8u);
+      for (u32 m = 0; m < count; m++)
         if (d.mrt_base[m] == base)
           return true;
       return false;
     };
-    for (uint32_t i = 0; i < kMaxTex; i++)
+    for (u32 i = 0; i < kMaxTex; i++)
       multi_layouts[i] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    for (uint32_t i = 0; i < multi_n; i++) {
+    for (u32 i = 0; i < multi_n; i++) {
       const auto& t = d.texs[i];
-      uint64_t base = t.base;
+      u64 base = t.base;
       if (t.storage) {
         if (base && !g_rts.count(base)) {
-          uint64_t resolved = ResolveSampledRT(base, t.w, t.h);
+          u64 resolved = ResolveSampledRT(base, t.w, t.h);
           if (resolved)
             base = resolved;
         }
@@ -963,7 +964,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       }
       if (base && rt_eligible && !g_rts.count(base) && !g_depths.count(base)) {
         bool depth_format = t.dfmt == 4 && t.nfmt == 7;
-        uint64_t resolved =
+        u64 resolved =
             depth_format ? ResolveSampledDepth(base, t.w, t.h) : 0;
         if (!resolved)
           resolved = ResolveSampledRT(base, t.w, t.h);
@@ -977,7 +978,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
             ActivateSampledDepthVariant(base, t.w, t.h);
         }
       }
-      if (kTexForce && t.base == (uint64_t)kTexForce) {
+      if (kTexForce && t.base == (u64)kTexForce) {
         static int forced = 0;
         if (forced++ < 6)
           BASE_LOGI("texforce", "ps={:#x} bind={} base={:#x} -> white",
@@ -995,7 +996,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       // texture cache.
       if (base && g_rts.count(base))
         FlushCsWritesRange(renderer, base,
-                           uint64_t(g_rts[base].w) * g_rts[base].h * 8);
+                           u64(g_rts[base].w) * g_rts[base].h * 8);
       if (base && rt_eligible && is_bound_target(base) && g_rts.count(base) &&
           g_rts[base].ever_rendered) {
         multi_feedback[i] = base;
@@ -1034,10 +1035,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // draw landed in. A binding that falls through to the guest-texture path
     // reads memory that draws never write, i.e. black, and nothing else in the
     // pipeline reports it.
-    if (kBindTrace && d.ps_addr == (uint64_t)kBindTrace) {
+    if (kBindTrace && d.ps_addr == (u64)kBindTrace) {
       static int n = 0;
       if (n++ < 24) {
-        for (uint32_t i = 0; i < multi_n; i++)
+        for (u32 i = 0; i < multi_n; i++)
           BASE_LOGI("bind",
                     "ps={:#x} b{} base={:#x} {}x{} -> {}",
                     (unsigned long)d.ps_addr, i,
@@ -1051,10 +1052,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     }
     // A shader may sample an image through one binding and write the same image
     // through another storage binding. Both descriptors must use GENERAL.
-    for (uint32_t i = 0; i < multi_n; i++) {
+    for (u32 i = 0; i < multi_n; i++) {
       if (!multi_color[i])
         continue;
-      for (uint32_t j = 0; j < multi_n; j++)
+      for (u32 j = 0; j < multi_n; j++)
         if (multi_storage[j] == multi_color[i]) {
           multi_layouts[i] = VK_IMAGE_LAYOUT_GENERAL;
           break;
@@ -1087,7 +1088,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       base::String line;
       base::FormatTo(line, "draw#{} rt={:#x} {}x{} ntex={}:", g_frame.draws,
                      (unsigned long)d.rt_base, d.rt_w, d.rt_h, multi_n);
-      for (uint32_t i = 0; i < multi_n; i++) {
+      for (u32 i = 0; i < multi_n; i++) {
         const char* how = multi_color[i]      ? "RT"
                           : multi_feedback[i] ? "feedback"
                           : multi_depth[i]    ? "depth"
@@ -1116,7 +1117,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // cannot be recorded inside dynamic rendering; consecutive layer composites
   // often keep the same target while switching sources, so that source change
   // must also close/reopen the region.
-  uint32_t mrt_n = std::min(d.mrt_count, 8u);
+  u32 mrt_n = std::min(d.mrt_count, 8u);
   bool transition_source =
       rp->multi_tex
           ? multi_transition_source
@@ -1132,7 +1133,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // attachment read-only for the whole region, so the sampled view and the
   // attachment agree on one layout.
   bool samples_bound_depth = depth_self_read;
-  for (uint32_t i = 0; i < multi_n && !samples_bound_depth; i++)
+  for (u32 i = 0; i < multi_n && !samples_bound_depth; i++)
     samples_bound_depth = multi_depth[i] && multi_depth[i] == d.depth_base;
   bool restart_region = g_region.cur_rt != d.rt_base ||
                          g_region.cur_mrt_count != mrt_n ||
@@ -1182,7 +1183,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         return Decline(kMidRegion);
     }
     if (rp->multi_tex) {
-      for (uint32_t i = 0; i < multi_n; i++) {
+      for (u32 i = 0; i < multi_n; i++) {
         if (multi_storage[i]) {
           auto& dst = g_rts[multi_storage[i]];
           if (dst.layout != VK_IMAGE_LAYOUT_GENERAL) {
@@ -1218,7 +1219,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
                                  &range);
           }
           const VkImageLayout desired = multi_layouts[i];
-          if (kBindTrace && d.ps_addr == (uint64_t)kBindTrace) {
+          if (kBindTrace && d.ps_addr == (u64)kBindTrace) {
             static int bn = 0;
             if (bn++ < 8)
               BASE_LOGI("bindbar",
@@ -1258,7 +1259,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           }
         } else if (multi_feedback[i]) {
           bool already_copied = false;
-          for (uint32_t prior = 0; prior < i; prior++)
+          for (u32 prior = 0; prior < i; prior++)
             already_copied |= multi_feedback[prior] == multi_feedback[i];
           if (!already_copied && !SnapshotRT(g_rts[multi_feedback[i]]))
             return Decline(kMidRegion);
@@ -1266,7 +1267,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       }
     }
     if (rp->multi_tex) {
-      for (uint32_t i = 0; i < multi_n; i++) {
+      for (u32 i = 0; i < multi_n; i++) {
         if (multi_storage[i]) {
           multi_views[i] = g_rts[multi_storage[i]].view;
           multi_layouts[i] = VK_IMAGE_LAYOUT_GENERAL;
@@ -1335,7 +1336,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   }
   if (rp->multi_tex) {
     if (!tex_set) {
-      for (uint32_t i = 0; i < multi_n; i++) {
+      for (u32 i = 0; i < multi_n; i++) {
         if (multi_storage[i]) {
           multi_views[i] = g_rts[multi_storage[i]].view;
           multi_layouts[i] = VK_IMAGE_LAYOUT_GENERAL;
@@ -1389,7 +1390,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     VkImageLayout layouts[kMaxTex] = {};
     views[0] = SampledView(src, d.tex_swizzle);
     layouts[0] = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
-    const uint64_t depth_only[kMaxTex] = {tex_base};
+    const u64 depth_only[kMaxTex] = {tex_base};
     tex_set = GetMultiTexSet(d, g_tex.ds_layout, views, layouts, depth_only);
     if (!tex_set)
       return Decline(kMidRegion);
@@ -1408,10 +1409,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // content, so the address cannot live in the SPIR-V, and VS and PS live at
     // different addresses so each stage gets its own words (the shared-offset
     // mistake the user-data pushes already made once).
-    const uint32_t vs_base[2] = {static_cast<uint32_t>(d.vs_addr),
-                                 static_cast<uint32_t>(d.vs_addr >> 32)};
-    const uint32_t ps_base[2] = {static_cast<uint32_t>(d.ps_addr),
-                                 static_cast<uint32_t>(d.ps_addr >> 32)};
+    const u32 vs_base[2] = {static_cast<u32>(d.vs_addr),
+                                 static_cast<u32>(d.vs_addr >> 32)};
+    const u32 ps_base[2] = {static_cast<u32>(d.ps_addr),
+                                 static_cast<u32>(d.ps_addr >> 32)};
     vkCmdPushConstants(g_frame.cmd, rp->layout, kPcStages, 128,
                        8, vs_base);
     vkCmdPushConstants(g_frame.cmd, rp->layout, kPcStages, 136, 8,
@@ -1433,12 +1434,12 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     }
     return Decline(kRing);
   }
-  uint32_t dyn_off[kCbufBindings];
-  uint32_t cbuf_mask = 0;
+  u32 dyn_off[kCbufBindings];
+  u32 cbuf_mask = 0;
   VkDeviceSize next = cb_off;
-  for (uint32_t i = 0; i < kCbufBindings; i++) {
+  for (u32 i = 0; i < kCbufBindings; i++) {
     const auto& cb = d.cbufs[i];
-    const uint32_t readable = std::min(cb.size, kCbufWindow);
+    const u32 readable = std::min(cb.size, kCbufWindow);
     const bool have_cbuf = readable && IsReadableThisFrame(cb.base, readable);
     if (have_cbuf)
       cbuf_mask |= 1u << i;
@@ -1450,23 +1451,23 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // widened to the page unless DELTA_GPU_TIGHTCBUF), so it doubles as the
     // cache key: a window of the same guest bytes at the same length staged
     // earlier this frame is byte-identical, and the draw just rebinds it.
-    uint32_t cache_n = 0;
+    u32 cache_n = 0;
     if (have_cbuf) {
-      const uint32_t planned = cb.size < kCbufWindow ? cb.size : kCbufWindow;
-      const uint64_t page_end = (cb.base + 0x1000) & ~uint64_t{0xFFF};
-      const uint32_t avail = static_cast<uint32_t>(
-          std::min<uint64_t>(kCbufWindow, page_end - cb.base));
+      const u32 planned = cb.size < kCbufWindow ? cb.size : kCbufWindow;
+      const u64 page_end = (cb.base + 0x1000) & ~u64{0xFFF};
+      const u32 avail = static_cast<u32>(
+          std::min<u64>(kCbufWindow, page_end - cb.base));
       cache_n = kTightCbuf ? planned : std::max(planned, avail);
       if (kRingDedup) {
         const VkDeviceSize cached = g_ubo_staged.Find(cb.base, cache_n);
         if (cached != VkDeviceSize(-1)) {
-          dyn_off[i] = static_cast<uint32_t>(cached);
+          dyn_off[i] = static_cast<u32>(cached);
           continue;
         }
       }
     }
-    uint8_t* cb_dst = g_ring.ubo_map + next;
-    uint32_t n;
+    u8* cb_dst = g_ring.ubo_map + next;
+    u32 n;
     if (have_cbuf && !FlushCsWritesRange(renderer, cb.base, kCbufWindow))
       return Decline(kNoRecomp);
     if (have_cbuf) {
@@ -1491,7 +1492,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     // and reads as the very corruption being looked for.
     if (kCbInfo && have_cbuf && n >= 16 &&
         (!kWantFrame || g_frame.num == kWantFrame) &&
-        (kCbInfo == 1 || d.vs_addr == (uint64_t)kCbInfo)) {
+        (kCbInfo == 1 || d.vs_addr == (u64)kCbInfo)) {
       static int shown = 0;
       if (shown++ < 40) {
         const float* f = reinterpret_cast<const float*>(cb_dst);
@@ -1500,14 +1501,14 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
                        (unsigned long)d.vs_addr, i, (unsigned long)cb.base, n);
         // Sixteen, for the same reason as the drawrt dump: the window walk
         // below starts at 0x40, so eight left bytes 32..63 unprintable.
-        for (uint32_t k = 0; k < 16 && k * 4 < n; k++)
+        for (u32 k = 0; k < 16 && k * 4 < n; k++)
           base::FormatTo(line, " {:g}", f[k]);
         // Every 0x40 window, not a chosen few: the value a shader actually
         // multiplies by is as likely to sit at byte 376 (P.T.'s light pass
         // scales every light colour by a scalar there) as at 0x40 or 0xc0.
-        for (uint32_t off = 0x40u; off + 4 <= n; off += 0x40u) {
+        for (u32 off = 0x40u; off + 4 <= n; off += 0x40u) {
           base::FormatTo(line, " | @{:#x}:", off);
-          for (uint32_t k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= n; k++)
+          for (u32 k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= n; k++)
             base::FormatTo(line, " {:g}", f[k]);
         }
         BASE_LOGI("cbinfo", "{}", line.c_str());
@@ -1516,13 +1517,13 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
     const size_t window = static_cast<size_t>(next / cb_stride);
     if (window >= g_ring.ubo_written.size())
       return Decline(kRing);
-    const uint32_t previous = g_ring.ubo_written[window];
+    const u32 previous = g_ring.ubo_written[window];
     if (n < previous)
       std::memset(cb_dst + n, 0, previous - n);
     g_ring.ubo_written[window] = n;
     if (have_cbuf && kRingDedup)
       g_ubo_staged.Insert(cb.base, cache_n, 0, next);
-    dyn_off[i] = static_cast<uint32_t>(next);
+    dyn_off[i] = static_cast<u32>(next);
     next += cb_stride;
   }
   g_ring.ubo_offset = next;
@@ -1534,14 +1535,14 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // static bound, so there is no "planned size" to copy exactly -- and the
   // recompiled shader clamps into that window. Repeats within a frame (the
   // same skinning palette across a character's draws) reuse one upload.
-  uint32_t rawbuf_mask = 0;
+  u32 rawbuf_mask = 0;
   if (rp->raw_bufs) {
     if (!EnsureRawBufferRing())
       return Decline(kRing);
-    uint32_t sbo_dyn[kRawBufBindings] = {};
-    for (uint32_t i = 0; i < kRawBufBindings; i++) {
+    u32 sbo_dyn[kRawBufBindings] = {};
+    for (u32 i = 0; i < kRawBufBindings; i++) {
       const auto& rb = d.bufs[i];
-      const uint32_t want = std::min(rb.size, kRawBufWindow);
+      const u32 want = std::min(rb.size, kRawBufWindow);
       if (!want || !IsReadableThisFrame(rb.base, want))
         continue;  // unresolved descriptor: the shared zero window at offset 0
       // Same per-frame cache as the vertex/index/cbuffer rings -- and unlike
@@ -1550,7 +1551,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       // is re-copied instead of served stale.
       const VkDeviceSize cached = g_sbo_staged.Find(rb.base, want);
       if (cached != VkDeviceSize(-1)) {
-        sbo_dyn[i] = static_cast<uint32_t>(cached);
+        sbo_dyn[i] = static_cast<u32>(cached);
         rawbuf_mask |= 1u << i;
         continue;
       }
@@ -1562,16 +1563,16 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         return Decline(kRing);
       if (!FlushCsWritesRange(renderer, rb.base, want))
         return Decline(kNoRecomp);
-      uint8_t* dst = g_ring.sbo_map + off;
+      u8* dst = g_ring.sbo_map + off;
       std::memcpy(dst, reinterpret_cast<const void*>(rb.base), want);
       // Zero whatever an earlier draw left past this window's payload, so a
       // read past the descriptor's own extent cannot pick up another buffer.
-      const uint32_t previous = g_ring.sbo_written[window];
+      const u32 previous = g_ring.sbo_written[window];
       if (want < previous)
         std::memset(dst + want, 0, previous - want);
       g_ring.sbo_written[window] = want;
       g_ring.sbo_offset = off + g_ring.sbo_stride;
-      sbo_dyn[i] = static_cast<uint32_t>(off);
+      sbo_dyn[i] = static_cast<u32>(off);
       g_sbo_staged.Insert(rb.base, want, 0, off);
       rawbuf_mask |= 1u << i;
     }
@@ -1601,30 +1602,30 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   // Commit ring uploads only after every fallible pipeline, texture, region and
   // cbuffer decision has succeeded. Bindings served by the per-frame cache
   // were copied by an earlier draw and only rebind.
-  for (uint32_t j = 0; j < nbind; j++) {
+  for (u32 j = 0; j < nbind; j++) {
     if (!bind_size[j] || vb_cached[j] != VkDeviceSize(-1))
       continue;
     if (!FlushCsWritesRange(renderer,
-                            reinterpret_cast<uint64_t>(d.vbufs[j].data),
+                            reinterpret_cast<u64>(d.vbufs[j].data),
                             bind_size[j]))
       return Decline(kNoRecomp);
     std::memcpy(g_ring.vb_map + voff + bind_off[j], d.vbufs[j].data,
                 (size_t)bind_size[j]);
     if (kRingDedup)
-      g_vb_staged.Insert(reinterpret_cast<uint64_t>(d.vbufs[j].data),
+      g_vb_staged.Insert(reinterpret_cast<u64>(d.vbufs[j].data),
                          bind_size[j], 0, voff + bind_off[j]);
   }
   if (indexed && ib_cached == VkDeviceSize(-1)) {
     CopyGuestIndices(g_ring.ib_map + ioff, d.index_data, d.index_count,
                      d.index_type);
     if (kRingDedup)
-      g_ib_staged.Insert(reinterpret_cast<uint64_t>(d.index_data), index_bytes,
+      g_ib_staged.Insert(reinterpret_cast<u64>(d.index_data), index_bytes,
                          1u + d.index_type, ioff);
   }
   if (nbind) {
     VkBuffer bufs[8];
     VkDeviceSize offs[8];
-    for (uint32_t j = 0; j < nbind; j++) {
+    for (u32 j = 0; j < nbind; j++) {
       bufs[j] = g_ring.vb;
       offs[j] = vb_cached[j] != VkDeviceSize(-1) ? vb_cached[j]
                                                  : voff + bind_off[j];
@@ -1708,7 +1709,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       // Every bound target's own CB_COLORn_INFO. The colour FORMAT and
       // NUMBER_TYPE decide whether the hardware clamps a write at 1.0 or keeps
       // it, which is the difference between a highlight and a blown one.
-      for (uint32_t m = 0; m < d.mrt_count && m < 8; m++)
+      for (u32 m = 0; m < d.mrt_count && m < 8; m++)
         BASE_LOGI("drawrt",
                   " mrt{} base={:#x} info={:#x} fmt={} ntype={}", m,
                   (unsigned long)d.mrt_base[m], d.mrt_info[m],
@@ -1717,7 +1718,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       // attachment blends differently from its first is invisible in the
       // single-target line above, and a wrong enable there accumulates over a
       // pass that draws the same target dozens of times.
-      for (uint32_t m = 1; m < d.mrt_count && m < 8; m++)
+      for (u32 m = 1; m < d.mrt_count && m < 8; m++)
         BASE_LOGI("drawrt", " blend{} en={} ctrl={:#x} base={:#x}", m,
                   (int)((d.mrt_blend_mask >> m) & 1u), d.mrt_blend[m],
                   (unsigned long)d.mrt_base[m]);
@@ -1743,20 +1744,20 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
           tex_set != g_tex.white_array_set && tex_set != g_tex.white_3d_set &&
           tex_set != g_tex.zero_set && tex_set != g_tex.zero_array_set &&
           tex_set != g_tex.zero_3d_set;
-      const uint64_t shown_color[1] = {color_as_tex ? tex_base : 0};
-      const uint64_t shown_feedback[1] = {feedback_as_tex ? tex_base : 0};
-      const uint64_t shown_depth[1] = {depth_as_tex ? tex_base : 0};
-      const uint64_t* rc = rp->multi_tex ? multi_color : shown_color;
-      const uint64_t* rf = rp->multi_tex ? multi_feedback : shown_feedback;
-      const uint64_t* rd = rp->multi_tex ? multi_depth : shown_depth;
-      const uint32_t shown_n = rp->multi_tex ? multi_n : std::min(multi_n, 1u);
+      const u64 shown_color[1] = {color_as_tex ? tex_base : 0};
+      const u64 shown_feedback[1] = {feedback_as_tex ? tex_base : 0};
+      const u64 shown_depth[1] = {depth_as_tex ? tex_base : 0};
+      const u64* rc = rp->multi_tex ? multi_color : shown_color;
+      const u64* rf = rp->multi_tex ? multi_feedback : shown_feedback;
+      const u64* rd = rp->multi_tex ? multi_depth : shown_depth;
+      const u32 shown_n = rp->multi_tex ? multi_n : std::min(multi_n, 1u);
       // How many textures the recompiler found vs how many are being reported:
       // a shader with several image_samples that took the single-texture path
       // reads only the first, and the trace would look identical to a genuine
       // one-texture blit.
       BASE_LOGI("drawrt", " texs={} multi={} n={}",
                 d.recomp->ps_texs.size(), (int)rp->multi_tex, multi_n);
-      for (uint32_t i = 0; i < shown_n; i++) {
+      for (u32 i = 0; i < shown_n; i++) {
         const auto& t = d.texs[i];
         if (!t.base)
           continue;
@@ -1770,7 +1771,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
                   (int)t.sampler_valid, t.sampler[0], t.sampler[1],
                   t.sampler[2], t.sampler[3]);
         if (t.src && gpu::IsReadableRange(t.src, 32)) {
-          const uint32_t* tw = reinterpret_cast<const uint32_t*>(t.src);
+          const u32* tw = reinterpret_cast<const u32*>(t.src);
           BASE_LOGI("drawrt",
                     " tex{} T# src={:#x} [{:08x} {:08x} {:08x} {:08x} "
                     "{:08x} {:08x} {:08x} {:08x}]",
@@ -1825,7 +1826,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       }
       // Only the slots this draw actually declared: the rest are unused
       // array entries, and reporting them buries the one that matters.
-      for (uint32_t c = 0; c < std::min<uint32_t>(d.num_cbufs, kCbufBindings);
+      for (u32 c = 0; c < std::min<u32>(d.num_cbufs, kCbufBindings);
            c++) {
         const auto& cb = d.cbufs[c];
         if (!gpu::IsReadableRange(cb.base, std::min(cb.size, 192u))) {
@@ -1839,14 +1840,14 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
             BASE_LOGI("drawrt", " cb{} UNBOUND", c);
           continue;
         }
-        const uint32_t* w = reinterpret_cast<const uint32_t*>(cb.base);
+        const u32* w = reinterpret_cast<const u32*>(cb.base);
         base::String line;
         base::FormatTo(line, " cb{} {:#x} sz={}:", c,
                        (unsigned long)cb.base, cb.size);
         // Sixteen, not eight: with the window walk below starting at 0x40,
         // eight left bytes 32..63 unprintable -- and P.T.'s draw #38 scales its
         // whole extinction by a scalar at byte 44.
-        for (uint32_t k = 0; k < 16 && k * 4 < cb.size; k++)
+        for (u32 k = 0; k < 16 && k * 4 < cb.size; k++)
           base::FormatTo(line, " {:g}", *reinterpret_cast<const float*>(&w[k]));
         // A shader loads its constants with s_buffer_load at whatever offset
         // the compiler chose, so show EVERY 4x4-sized window the binding is big
@@ -1857,9 +1858,9 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         // Including the final PARTIAL window: P.T.'s light pass decides whether
         // to alpha-test its cookie on a scalar at byte 200 of a 208-byte
         // buffer, which every whole-window walk stops just short of.
-        for (uint32_t off = 0x40u; off + 4 <= cb.size; off += 0x40u) {
+        for (u32 off = 0x40u; off + 4 <= cb.size; off += 0x40u) {
           base::FormatTo(line, "\n  @{:#x}:", off);
-          for (uint32_t k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= cb.size;
+          for (u32 k = off / 4; k < off / 4 + 16 && k * 4 + 4 <= cb.size;
                k++)
             base::FormatTo(line, " {:g}", *reinterpret_cast<const float*>(&w[k]));
         }
@@ -1867,7 +1868,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
       }
     }
   }
-  for (uint32_t i = 0; i < multi_n; i++) {
+  for (u32 i = 0; i < multi_n; i++) {
     if (!multi_storage[i])
       continue;
     RTarget& target = g_rts[multi_storage[i]];
@@ -1879,7 +1880,7 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
   if (indexed && ib_cached == VkDeviceSize(-1))
     g_ring.ib_offset = ioff + index_bytes;
   g_frame.draws++;
-  for (uint32_t i = 0; i < g_region.cur_mrt_count; i++) {
+  for (u32 i = 0; i < g_region.cur_mrt_count; i++) {
     if (!g_region.cur_mrt[i])
       continue;
     auto& rt = g_rts[g_region.cur_mrt[i]];
@@ -1909,10 +1910,10 @@ bool DrawRecomp(rhi::Renderer& renderer, const DrawInfo& d) {
         tex_set == g_tex.white_array_set || tex_set == g_tex.white_3d_set ||
         tex_set == g_tex.zero_set || tex_set == g_tex.zero_array_set ||
         tex_set == g_tex.zero_3d_set;
-    const uint64_t legacy_color = color_as_tex ? tex_base : 0;
-    const uint64_t legacy_feedback = feedback_as_tex ? tex_base : 0;
-    const uint64_t legacy_depth = depth_as_tex ? tex_base : 0;
-    const uint64_t legacy_storage = 0;
+    const u64 legacy_color = color_as_tex ? tex_base : 0;
+    const u64 legacy_feedback = feedback_as_tex ? tex_base : 0;
+    const u64 legacy_depth = depth_as_tex ? tex_base : 0;
+    const u64 legacy_storage = 0;
     const void* legacy_view =
         (!rt_as_tex && !legacy_default) ? tex_set : nullptr;
     trace::DrawBindings bindings;

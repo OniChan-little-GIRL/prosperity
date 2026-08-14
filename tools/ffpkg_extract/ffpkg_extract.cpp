@@ -3,6 +3,7 @@
 //   ffpkg_extract <game.ffpkg>                     list every file
 //   ffpkg_extract <game.ffpkg> <relpath> <out>     extract one file
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -31,8 +32,8 @@ int main(int argc, char **argv) {
       std::printf("%s: not found\n", argv[2]);
       return 1;
     }
-    std::vector<uint8_t> buf(node->size);
-    int64_t n = fs.read(*node, buf.data(), 0, static_cast<int64_t>(node->size));
+    std::vector<u8> buf(node->size);
+    i64 n = fs.read(*node, buf.data(), 0, static_cast<i64>(node->size));
     if (n < 0) {
       std::printf("read failed\n");
       return 1;
@@ -46,10 +47,10 @@ int main(int argc, char **argv) {
   std::vector<std::string> paths;
   fs.paths(paths);
   std::sort(paths.begin(), paths.end());
-  uint64_t total = 0;
+  u64 total = 0;
   for (const auto &p : paths) {
     const auto *node = fs.find(p.c_str());
-    uint64_t sz = node ? node->size : 0;
+    u64 sz = node ? node->size : 0;
     total += sz;
     std::printf("%12llu  %s\n", (unsigned long long)sz, p.c_str());
   }

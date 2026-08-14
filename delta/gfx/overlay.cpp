@@ -9,6 +9,7 @@
 #ifndef __ANDROID__
 
 #include <algorithm>
+#include "base/arch.h"
 #include <cfloat>
 #include <cstdint>
 #include <cstdio>
@@ -101,8 +102,8 @@ void overlaySetPerf(float fps, float gpuMs, float frameMs) {
   g_frameMs = frameMs;
 }
 
-void overlayBuildFrame(uint32_t w, uint32_t h, uint64_t vramUsed,
-                       uint64_t vramTotal) {
+void overlayBuildFrame(u32 w, u32 h, u64 vramUsed,
+                       u64 vramTotal) {
   overlayEnsureImGui();
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = ImVec2((float)w, (float)h);

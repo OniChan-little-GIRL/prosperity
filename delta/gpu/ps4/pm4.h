@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace gpu {
 
@@ -17,26 +18,26 @@ namespace gpu {
 // https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/amd/amdgpu/cikd.h
 
 // PM4 packet type is the top 2 bits of the header dword.
-enum class Pm4Type : uint32_t {
+enum class Pm4Type : u32 {
   kType0 = 0,
   kType1 = 1,
   kType2 = 2,
   kType3 = 3
 };
 
-inline Pm4Type Pm4TypeOf(uint32_t hdr) {
+inline Pm4Type Pm4TypeOf(u32 hdr) {
   return static_cast<Pm4Type>(hdr >> 30);
 }
 // Dword count of the packet body (after the header).
-inline uint32_t Pm4Count(uint32_t hdr) {
+inline u32 Pm4Count(u32 hdr) {
   return ((hdr >> 16) & 0x3FFF) + 1;
 }
 // Type-3 IT opcode.
-inline uint32_t Pm4Opcode(uint32_t hdr) {
+inline u32 Pm4Opcode(u32 hdr) {
   return (hdr >> 8) & 0xFF;
 }
 // Type-0 base register (dword offset).
-inline uint32_t Pm4Type0Reg(uint32_t hdr) {
+inline u32 Pm4Type0Reg(u32 hdr) {
   return hdr & 0xFFFF;
 }
 
@@ -44,7 +45,7 @@ inline uint32_t Pm4Type0Reg(uint32_t hdr) {
 // Deliberate naming exception: these keep AMD's canonical mnemonics so they
 // can be grepped against cikd.h and radeon docs.
 // NOLINTBEGIN(readability-identifier-naming)
-enum Pm4It : uint32_t {
+enum Pm4It : u32 {
   IT_NOP = 0x10,
   IT_SET_BASE = 0x11,
   IT_CLEAR_STATE = 0x12,
@@ -98,14 +99,14 @@ enum Pm4It : uint32_t {
 // Base dword offsets the SET_*_REG packets are relative to (the register at
 // payload[0] is `base + payload[0]`). These index the unified Liverpool
 // register file (see liverpool.h).
-enum Pm4RegBase : uint32_t {
+enum Pm4RegBase : u32 {
   kConfigRegBase = 0x2000,
   kShRegBase = 0x2C00,
   kContextRegBase = 0xA000,
   kUConfigRegBase = 0xC000,
 };
 
-constexpr uint32_t Pm4SetRegAddress(uint32_t base, uint32_t offset_and_index) {
+constexpr u32 Pm4SetRegAddress(u32 base, u32 offset_and_index) {
   return base + (offset_and_index & 0xffff);
 }
 
@@ -114,7 +115,7 @@ constexpr uint32_t Pm4SetRegAddress(uint32_t base, uint32_t offset_and_index) {
 // list of these packets. Both the DCB (0xC0023F00) and CNST (0xC0023300)
 // variants carry count-field 2 on the wire (kernel gc_insert_indirect_buffer
 // builds both as {hdr, base_lo, base_hi, vmid<<24|ib_size}).
-inline uint32_t Pm4IbHeader(uint32_t op) {
+inline u32 Pm4IbHeader(u32 op) {
   return (3u << 30) | (2u << 16) | (op << 8);
 }
 

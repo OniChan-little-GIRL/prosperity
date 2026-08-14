@@ -18,6 +18,7 @@
  */
 
 #include "libSceSaveDataDialog.h"
+#include "base/arch.h"
 
 #include <atomic>
 #include <cstdint>
@@ -78,9 +79,9 @@ int PS4ABI sceSaveDataDialogUpdateStatus() { return g_status.load(); }
 // assert the accepted/OK outcome so the game proceeds as if the user confirmed.
 int PS4ABI sceSaveDataDialogGetResult(void *result) {
   if (result) {
-    auto *r = static_cast<uint8_t *>(result);
-    const uint32_t ok = 0;         // result = OK
-    const uint32_t buttonOk = 1;   // buttonId = OK/YES
+    auto *r = static_cast<u8 *>(result);
+    const u32 ok = 0;         // result = OK
+    const u32 buttonOk = 1;   // buttonId = OK/YES
     std::memcpy(r + 4, &ok, 4);
     std::memcpy(r + 8, &buttonOk, 4);
   }
@@ -89,13 +90,13 @@ int PS4ABI sceSaveDataDialogGetResult(void *result) {
 
 int PS4ABI sceSaveDataDialogIsReadyToDisplay() { return 1; }
 
-int PS4ABI sceSaveDataDialogProgressBarSetValue(uint32_t target, uint32_t rate) {
+int PS4ABI sceSaveDataDialogProgressBarSetValue(u32 target, u32 rate) {
   (void)target;
   (void)rate;
   return 0;
 }
 
-int PS4ABI sceSaveDataDialogProgressBarInc(uint32_t target, uint32_t delta) {
+int PS4ABI sceSaveDataDialogProgressBarInc(u32 target, u32 delta) {
   (void)target;
   (void)delta;
   return 0;

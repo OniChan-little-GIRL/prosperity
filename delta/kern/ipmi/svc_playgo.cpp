@@ -7,6 +7,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdlib>
 
 #include <base.h>
@@ -16,7 +17,7 @@
 #include <utl/options.h>
 
 namespace {
-DELTA_OPTION(uint32_t, kPlaygoChunks, "DELTA_PLAYGO_CHUNKS", 0);
+DELTA_OPTION(u32, kPlaygoChunks, "DELTA_PLAYGO_CHUNKS", 0);
 }  // namespace
 
 namespace krnl::ipmi {
@@ -39,8 +40,8 @@ enum { kLocusNotDownloaded = 0, kLocusLocalSlow = 2, kLocusLocalFast = 3 };
 // ~4-billion-iteration loop that smashes the stack. Default to 0x50, the value
 // such titles treat as "the standard set, fully installed"; the pkgs we run
 // mostly ship no playgo-chunk.dat. DELTA_PLAYGO_CHUNKS overrides.
-uint32_t chunkCount() {
-  static uint32_t cached = 0;
+u32 chunkCount() {
+  static u32 cached = 0;
   if (cached)
     return cached;
   if (kPlaygoChunks > 0) {
@@ -50,10 +51,10 @@ uint32_t chunkCount() {
   cached = 0x50;
   utl::File f = vfs::openRead("/app0/sce_sys/playgo-chunk.dat");
   if (f.Exists()) {
-    uint8_t hdr[0x10] = {};
+    u8 hdr[0x10] = {};
     if (f.Read(hdr, sizeof(hdr)) == sizeof(hdr) && hdr[0] == 'p' &&
         hdr[1] == 'g' && hdr[2] == 'd') {
-      uint32_t cc = static_cast<uint32_t>(hdr[0x0a] | (hdr[0x0b] << 8));
+      u32 cc = static_cast<u32>(hdr[0x0a] | (hdr[0x0b] << 8));
       if (cc > 0)
         cached = cc;
     }
@@ -76,7 +77,7 @@ struct PlayGo : Service {
       inv.replyFill(0, kLocusLocalFast);
       break;
     case kGetProgress: { // { uint64 progressSize; uint64 totalSize }
-      const uint64_t done[2] = {1, 1}; // == 100%
+      const u64 done[2] = {1, 1}; // == 100%
       inv.reply(0, done, sizeof(done));
       break;
     }

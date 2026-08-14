@@ -7,6 +7,7 @@
  */
 
 #include "gpu/gcn/gcn_disasm.h"
+#include "base/arch.h"
 
 #include <cstdio>
 
@@ -15,7 +16,7 @@
 namespace gpu::gcn {
 namespace {
 
-std::string Hex(uint32_t v) {
+std::string Hex(u32 v) {
   char buf[16];
   std::snprintf(buf, sizeof(buf), "0x%x", v);
   return buf;
@@ -24,7 +25,7 @@ std::string Hex(uint32_t v) {
 // ---- register / operand naming ---------------------------------------------
 
 // Scalar register name for a plain 7-bit SGPR-file index (SDST fields).
-std::string SName(uint32_t i) {
+std::string SName(u32 i) {
   if (i <= 103)
     return "s" + std::to_string(i);
   switch (i) {
@@ -51,7 +52,7 @@ std::string SName(uint32_t i) {
 }
 
 // Aligned scalar range (64-bit pairs, V#/T#/S# quads and up).
-std::string SRange(uint32_t base, uint32_t count) {
+std::string SRange(u32 base, u32 count) {
   if (count <= 1)
     return SName(base);
   if (count == 2) {
@@ -66,7 +67,7 @@ std::string SRange(uint32_t base, uint32_t count) {
          "]";
 }
 
-std::string VRange(uint32_t base, uint32_t count) {
+std::string VRange(u32 base, u32 count) {
   if (count <= 1)
     return "v" + std::to_string(base);
   return "v[" + std::to_string(base) + ":" + std::to_string(base + count - 1) +
@@ -75,9 +76,9 @@ std::string VRange(uint32_t base, uint32_t count) {
 
 // Full source-operand field (SSRC/SRC encoding: SGPRs, inline constants,
 // literal, VGPRs).
-std::string Src(uint32_t field,
+std::string Src(u32 field,
                 const Inst& inst,
-                uint32_t count = 1,
+                u32 count = 1,
                 bool allow_lds_direct = false,
                 bool allow_literal = false) {
   if (field <= 127)
@@ -136,11 +137,11 @@ bool Is64(const std::string& name) {
   return name.size() >= 2 && name.compare(name.size() - 2, 2, "64") == 0;
 }
 
-std::string Fallback(const char* enc, uint32_t op) {
+std::string Fallback(const char* enc, u32 op) {
   return std::string(enc) + "_op" + Hex(op);
 }
 
-const char* Lookup(const char* const* table, uint32_t n, uint32_t op) {
+const char* Lookup(const char* const* table, u32 n, u32 op) {
   return op < n ? table[op] : nullptr;
 }
 
@@ -184,7 +185,7 @@ const char* const kSop2[] = {
     // clang-format on
 };
 
-const char* NeoSop2Name(uint32_t op) {
+const char* NeoSop2Name(u32 op) {
   switch (op) {
     case 0x32:
       return "s_pack_ll_b32_b16";
@@ -271,7 +272,7 @@ const char* const kVop1[] = {
     // clang-format on
 };
 
-const char* NeoVop1Name(uint32_t op) {
+const char* NeoVop1Name(u32 op) {
   static const char* const kNeo[] = {
       // clang-format off
       "v_cvt_f16_u16", "v_cvt_f16_i16", "v_cvt_u16_f16",
@@ -307,7 +308,7 @@ const char* const kVop2[] = {
     // clang-format on
 };
 
-const char* NeoVop2Name(uint32_t op) {
+const char* NeoVop2Name(u32 op) {
   switch (op) {
     case 0x32:
       return "v_add_f16";
@@ -355,7 +356,7 @@ const char* const kVop3Only[] = {
     // clang-format on
 };
 
-std::string VopcName(uint32_t op, IsaMode isa) {
+std::string VopcName(u32 op, IsaMode isa) {
   if (isa == IsaMode::kNeo) {
     static const char* const kIntCond[6] = {"lt", "eq", "le", "gt", "ne", "ge"};
     if ((op >= 0x89 && op <= 0x8e) || (op >= 0x99 && op <= 0x9e)) {
@@ -378,7 +379,7 @@ std::string VopcName(uint32_t op, IsaMode isa) {
           "f", "lt",  "eq",  "le",  "gt",  "lg",  "ge",  "o",
           "u", "nge", "nlg", "ngt", "nle", "neq", "nlt", "tru"};
       const bool cmpx = (op & 0x10) != 0;
-      const uint32_t cond = (op & 7) | ((op >= 0xe0) ? 8 : 0);
+      const u32 cond = (op & 7) | ((op >= 0xe0) ? 8 : 0);
       return std::string(cmpx ? "v_cmpx_" : "v_cmp_") + kFloatCond[cond] +
              "_f16";
     }
@@ -415,14 +416,14 @@ std::string VopcName(uint32_t op, IsaMode isa) {
       {"v_cmp_", "_u32", false}, {"v_cmpx_", "_u32", false},
       {"v_cmp_", "_u64", false}, {"v_cmpx_", "_u64", false},
   };
-  const uint32_t row = (op >> 4) & 15, cond = op & 15;
+  const u32 row = (op >> 4) & 15, cond = op & 15;
   if (!kRow[row].is_float && cond >= 8)
     return Fallback("vopc", op);
   const char* c = kRow[row].is_float ? kFloatCond[cond] : kIntCond[cond];
   return std::string(kRow[row].prefix) + c + kRow[row].type;
 }
 
-const char* NeoVop3Name(uint32_t op) {
+const char* NeoVop3Name(u32 op) {
   switch (op) {
     case 0x303:
       return "v_add_u16";
@@ -511,7 +512,7 @@ const char* NeoVop3Name(uint32_t op) {
   }
 }
 
-std::string Vop3Name(uint32_t op, IsaMode isa) {
+std::string Vop3Name(u32 op, IsaMode isa) {
   if (isa == IsaMode::kNeo) {
     if (const char* n = NeoVop3Name(op))
       return n;
@@ -522,7 +523,7 @@ std::string Vop3Name(uint32_t op, IsaMode isa) {
     if (op == 0x120 || op == 0x121)
       return Fallback("vop3", op);  // compact-only literal forms
     if (isa == IsaMode::kNeo) {
-      const uint32_t reflected = op - 0x100;
+      const u32 reflected = op - 0x100;
       if (reflected != 0x37 && reflected != 0x38)
         if (const char* n = NeoVop2Name(reflected))
           return n;
@@ -548,7 +549,7 @@ std::string Vop3Name(uint32_t op, IsaMode isa) {
   return Fallback("vop3", op);
 }
 
-std::string Vop3pName(uint32_t op) {
+std::string Vop3pName(u32 op) {
   static const char* const kLow[] = {
       // clang-format off
       "v_pk_mad_i16", "v_pk_mul_lo_u16", "v_pk_add_i16", "v_pk_sub_i16",
@@ -572,7 +573,7 @@ std::string Vop3pName(uint32_t op) {
   }
 }
 
-std::string DsName(uint32_t op) {
+std::string DsName(u32 op) {
   static const char* const kDs[] = {
       // clang-format off
       "ds_add_u32", "ds_sub_u32", "ds_rsub_u32", "ds_inc_u32", "ds_dec_u32",
@@ -726,7 +727,7 @@ std::string DsName(uint32_t op) {
   }
 }
 
-std::string MubufName(uint32_t op) {
+std::string MubufName(u32 op) {
   static const char* const kFmt[] = {"x", "xy", "xyz", "xyzw"};
   if (op <= 0x03)
     return std::string("buffer_load_format_") + kFmt[op];
@@ -779,7 +780,7 @@ std::string MubufName(uint32_t op) {
   return Fallback("mubuf", op);
 }
 
-std::string FlatName(uint32_t op) {
+std::string FlatName(u32 op) {
   switch (op) {
     case 0x08:
       return "flat_load_ubyte";
@@ -823,7 +824,7 @@ std::string FlatName(uint32_t op) {
   return Fallback("flat", op);
 }
 
-std::string MimgName(uint32_t op) {
+std::string MimgName(u32 op) {
   static const char* const kLoadStore[] = {
       // clang-format off
       "image_load", "image_load_mip", "image_load_pck", "image_load_pck_sgn",
@@ -872,7 +873,7 @@ std::string MimgName(uint32_t op) {
   return Fallback("mimg", op);
 }
 
-std::string ExpTarget(uint32_t target) {
+std::string ExpTarget(u32 target) {
   if (target <= 7)
     return "mrt" + std::to_string(target);
   if (target == 8)
@@ -887,7 +888,7 @@ std::string ExpTarget(uint32_t target) {
 }
 
 // SMRD destination width in dwords (from the opcode's x2/x4/... suffix).
-uint32_t SmrdCount(uint32_t op) {
+u32 SmrdCount(u32 op) {
   switch (op & 7) {
     case 0:
       return 1;
@@ -905,7 +906,7 @@ uint32_t SmrdCount(uint32_t op) {
 }
 
 // MUBUF data-register count.
-uint32_t MubufCount(uint32_t op) {
+u32 MubufCount(u32 op) {
   if (op <= 0x07)
     return (op & 3) + 1;  // format x..xyzw
   switch (op) {
@@ -928,7 +929,7 @@ uint32_t MubufCount(uint32_t op) {
   return 1;
 }
 
-uint32_t PopCount4(uint32_t v) {
+u32 PopCount4(u32 v) {
   v &= 0xF;
   v = (v & 5) + ((v >> 1) & 5);
   return (v & 3) + ((v >> 2) & 3);
@@ -942,33 +943,33 @@ std::string SourceMods(std::string src, bool neg, bool abs) {
   return src;
 }
 
-const char* SdwaSelName(uint32_t sel) {
+const char* SdwaSelName(u32 sel) {
   static const char* const kSel[] = {"BYTE_0", "BYTE_1", "BYTE_2", "BYTE_3",
                                      "WORD_0", "WORD_1", "DWORD"};
   return sel < sizeof(kSel) / sizeof(kSel[0]) ? kSel[sel] : "RESERVED";
 }
 
-const char* SdwaUnusedName(uint32_t value) {
+const char* SdwaUnusedName(u32 value) {
   static const char* const kUnused[] = {"UNUSED_PAD", "UNUSED_SEXT",
                                         "UNUSED_PRESERVE", "RESERVED"};
   return kUnused[value & 3];
 }
 
 std::string CompactSource(const Inst& inst,
-                          uint32_t index,
-                          uint32_t vsrc1,
-                          uint32_t count) {
-  const uint32_t m = inst.raw[1];
+                          u32 index,
+                          u32 vsrc1,
+                          u32 count) {
+  const u32 m = inst.raw[1];
   if (inst.extension == InstExtension::kSdwa) {
     const bool scalar = index == 0 ? ((m >> 23) & 1) : ((m >> 31) & 1);
-    const uint32_t reg = index == 0 ? (m & 0xff) : vsrc1;
-    const uint32_t field = reg + (scalar ? 0 : 256);
+    const u32 reg = index == 0 ? (m & 0xff) : vsrc1;
+    const u32 field = reg + (scalar ? 0 : 256);
     const bool neg = (m >> (index == 0 ? 20 : 28)) & 1;
     const bool abs = (m >> (index == 0 ? 21 : 29)) & 1;
     return SourceMods(Src(field, inst, count), neg, abs);
   }
   if (inst.extension == InstExtension::kDpp) {
-    const uint32_t field = (index == 0 ? (m & 0xff) : vsrc1) + 256;
+    const u32 field = (index == 0 ? (m & 0xff) : vsrc1) + 256;
     const bool neg = (m >> (index == 0 ? 20 : 22)) & 1;
     const bool abs = (m >> (index == 0 ? 21 : 23)) & 1;
     return SourceMods(Src(field, inst, count), neg, abs);
@@ -980,7 +981,7 @@ std::string CompactSource(const Inst& inst,
 }
 
 std::string SdwaControls(const Inst& inst, bool has_src1, bool is_vopc) {
-  const uint32_t m = inst.raw[1];
+  const u32 m = inst.raw[1];
   std::string s;
   if (!is_vopc) {
     s += " dst_sel:";
@@ -989,7 +990,7 @@ std::string SdwaControls(const Inst& inst, bool has_src1, bool is_vopc) {
     s += SdwaUnusedName((m >> 11) & 3);
     if ((m >> 13) & 1)
       s += " clamp";
-    const uint32_t omod = (m >> 14) & 3;
+    const u32 omod = (m >> 14) & 3;
     if (omod)
       s += omod == 1 ? " mul:2" : omod == 2 ? " mul:4" : " div:2";
   }
@@ -1006,7 +1007,7 @@ std::string SdwaControls(const Inst& inst, bool has_src1, bool is_vopc) {
   return s;
 }
 
-std::string DppControlName(uint32_t ctrl) {
+std::string DppControlName(u32 ctrl) {
   if (ctrl <= 0xff) {
     return "quad_perm:[" + std::to_string(ctrl & 3) + "," +
            std::to_string((ctrl >> 2) & 3) + "," +
@@ -1042,7 +1043,7 @@ std::string DppControlName(uint32_t ctrl) {
 }
 
 std::string DppControls(const Inst& inst) {
-  const uint32_t m = inst.raw[1];
+  const u32 m = inst.raw[1];
   std::string s = " " + DppControlName((m >> 8) & 0x1ff) +
                   " row_mask:" + Hex((m >> 28) & 0xf) +
                   " bank_mask:" + Hex((m >> 24) & 0xf);
@@ -1065,16 +1066,16 @@ std::string CompactControls(const Inst& inst, bool has_src1, bool is_vopc) {
 // ------------------------------------------
 
 std::string OperandsSop1(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t sdst = (w >> 16) & 0x7F, ssrc = w & 0xFF;
+  const u32 w = inst.raw[0];
+  const u32 sdst = (w >> 16) & 0x7F, ssrc = w & 0xFF;
   if (inst.opcode == 0x1f)  // s_getpc_b64
     return SRange(sdst, 2);
   if (inst.opcode == 0x20 || inst.opcode == 0x22)  // setpc/rfe
     return Src(ssrc, inst, 2, false, true);
   if (inst.opcode == 0x32)  // s_cbranch_join
     return Src(ssrc, inst, 1, false, true);
-  uint32_t dst_count = Is64(name) ? 2 : 1;
-  uint32_t src_count = dst_count;
+  u32 dst_count = Is64(name) ? 2 : 1;
+  u32 src_count = dst_count;
   switch (inst.opcode) {
     case 0x0e:
     case 0x10:
@@ -1093,13 +1094,13 @@ std::string OperandsSop1(const Inst& inst, const std::string& name) {
 }
 
 std::string OperandsSop2(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t sdst = (w >> 16) & 0x7F;
+  const u32 w = inst.raw[0];
+  const u32 sdst = (w >> 16) & 0x7F;
   if (inst.opcode == 0x2b)  // s_cbranch_g_fork
     return Src(w & 0xff, inst, 2, false, true) + ", " +
            Src((w >> 8) & 0xff, inst, 2, false, true);
-  const uint32_t dst_count = Is64(name) ? 2 : 1;
-  uint32_t src0_count = dst_count, src1_count = dst_count;
+  const u32 dst_count = Is64(name) ? 2 : 1;
+  u32 src0_count = dst_count, src1_count = dst_count;
   switch (inst.opcode) {
     case 0x1f:
     case 0x21:
@@ -1121,19 +1122,19 @@ std::string OperandsSop2(const Inst& inst, const std::string& name) {
 }
 
 std::string OperandsSopc(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t src0_count = Is64(name) ? 2 : 1;
-  const uint32_t src1_count =
+  const u32 w = inst.raw[0];
+  const u32 src0_count = Is64(name) ? 2 : 1;
+  const u32 src1_count =
       inst.opcode == 0x0e || inst.opcode == 0x0f ? 1 : src0_count;
   return Src(w & 0xFF, inst, src0_count, false, true) + ", " +
          Src((w >> 8) & 0xFF, inst, src1_count, false, true);
 }
 
 std::string OperandsSopk(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
+  const u32 w = inst.raw[0];
   if (inst.opcode == 0x11) {
-    const int32_t rel = static_cast<int16_t>(w & 0xffff);
-    const int64_t target = static_cast<int64_t>(inst.pc) + inst.size + rel;
+    const i32 rel = static_cast<i16>(w & 0xffff);
+    const i64 target = static_cast<i64>(inst.pc) + inst.size + rel;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%s, pc%+d -> %04llx",
                   SRange((w >> 16) & 0x7f, 2).c_str(), rel,
@@ -1146,8 +1147,8 @@ std::string OperandsSopk(const Inst& inst) {
 }
 
 std::string OperandsSopp(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t simm = w & 0xFFFF;
+  const u32 w = inst.raw[0];
+  const u32 simm = w & 0xFFFF;
   switch (inst.opcode) {
     case 0x01:  // s_endpgm
       return "";
@@ -1158,8 +1159,8 @@ std::string OperandsSopp(const Inst& inst) {
     case 0x07:
     case 0x08:
     case 0x09: {  // branches: render the absolute dword target
-      const int32_t rel = static_cast<int16_t>(simm);
-      const int64_t target = static_cast<int64_t>(inst.pc) + inst.size + rel;
+      const i32 rel = static_cast<i16>(simm);
+      const i64 target = static_cast<i64>(inst.pc) + inst.size + rel;
       char buf[32];
       std::snprintf(buf, sizeof(buf), "pc%+d -> %04llx", rel,
                     static_cast<unsigned long long>(target));
@@ -1169,8 +1170,8 @@ std::string OperandsSopp(const Inst& inst) {
     case 0x18:
     case 0x19:
     case 0x1a: {
-      const int32_t rel = static_cast<int16_t>(simm);
-      const int64_t target = static_cast<int64_t>(inst.pc) + inst.size + rel;
+      const i32 rel = static_cast<i16>(simm);
+      const i64 target = static_cast<i64>(inst.pc) + inst.size + rel;
       char buf[32];
       std::snprintf(buf, sizeof(buf), "pc%+d -> %04llx", rel,
                     static_cast<unsigned long long>(target));
@@ -1188,14 +1189,14 @@ std::string OperandsSopp(const Inst& inst) {
 }
 
 std::string OperandsSmrd(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t sdst = (w >> 15) & 0x7F, sbase = ((w >> 9) & 0x3F) * 2;
+  const u32 w = inst.raw[0];
+  const u32 sdst = (w >> 15) & 0x7F, sbase = ((w >> 9) & 0x3F) * 2;
   if (inst.opcode == 0x1d || inst.opcode == 0x1f)
     return "";
   if (inst.opcode == 0x1e)
     return SRange(sdst, 2);
   const bool imm = (w >> 8) & 1;
-  const uint32_t off = w & 0xFF;
+  const u32 off = w & 0xFF;
   const bool buffer = inst.opcode >= 8;
   std::string s = SRange(sdst, SmrdCount(inst.opcode)) + ", " +
                   SRange(sbase, buffer ? 4 : 2) + ", ";
@@ -1209,11 +1210,11 @@ std::string OperandsSmrd(const Inst& inst) {
 }
 
 std::string OperandsVop1(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0];
+  const u32 w = inst.raw[0];
   if (inst.opcode == 0x00 || inst.opcode == 0x41)
     return "";  // v_nop / v_clrexcp
-  uint32_t dst_count = Is64(name) ? 2 : 1;
-  uint32_t src_count = dst_count;
+  u32 dst_count = Is64(name) ? 2 : 1;
+  u32 src_count = dst_count;
   switch (inst.opcode) {
     case 0x03:
     case 0x0f:
@@ -1231,7 +1232,7 @@ std::string OperandsVop1(const Inst& inst, const std::string& name) {
     default:
       break;
   }
-  const uint32_t vdst = (w >> 17) & 0xff;
+  const u32 vdst = (w >> 17) & 0xff;
   const std::string dst =
       inst.opcode == 0x02 ? SName(vdst) : VRange(vdst, dst_count);
   return dst + ", " + CompactSource(inst, 0, 0, src_count) +
@@ -1239,8 +1240,8 @@ std::string OperandsVop1(const Inst& inst, const std::string& name) {
 }
 
 std::string OperandsVop2(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t vsrc1 = (w >> 9) & 0xff;
+  const u32 w = inst.raw[0];
+  const u32 vsrc1 = (w >> 9) & 0xff;
   const std::string src0 = CompactSource(inst, 0, vsrc1, 1);
   // The lane operand of the read/writelane pair is an 8-bit SSRC field, so it
   // takes inline constants too: printing it as a register name turns "lane 4"
@@ -1248,7 +1249,7 @@ std::string OperandsVop2(const Inst& inst) {
   const std::string src1 = inst.opcode == 0x01 || inst.opcode == 0x02
                                ? Src(vsrc1, inst, 1)
                                : CompactSource(inst, 1, vsrc1, 1);
-  const uint32_t vdst = (w >> 17) & 0xff;
+  const u32 vdst = (w >> 17) & 0xff;
   std::string s = (inst.opcode == 0x01 ? SName(vdst) : VRange(vdst, 1)) + ", ";
   if (inst.opcode >= 0x25 && inst.opcode <= 0x2a)
     s += "vcc, ";
@@ -1268,11 +1269,11 @@ std::string OperandsVop2(const Inst& inst) {
 }
 
 std::string OperandsVopc(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t src0_count = Is64(name) ? 2 : 1;
-  const uint32_t src1_count =
+  const u32 w = inst.raw[0];
+  const u32 src0_count = Is64(name) ? 2 : 1;
+  const u32 src1_count =
       inst.opcode == 0xa8 || inst.opcode == 0xb8 ? 1 : src0_count;
-  const uint32_t vsrc1 = (w >> 9) & 0xff;
+  const u32 vsrc1 = (w >> 9) & 0xff;
   std::string dst = "vcc";
   if (inst.extension == InstExtension::kSdwa && ((inst.raw[1] >> 15) & 1))
     dst = SRange((inst.raw[1] >> 8) & 0x7f, 2);
@@ -1281,7 +1282,7 @@ std::string OperandsVopc(const Inst& inst, const std::string& name) {
          CompactControls(inst, true, true);
 }
 
-uint32_t Vop3NumSources(uint32_t op) {
+u32 Vop3NumSources(u32 op) {
   if (op >= 0x300)
     return op < 0x340 ? 2 : 3;
   if (op == 0x180 || op == 0x1c1)
@@ -1295,14 +1296,14 @@ uint32_t Vop3NumSources(uint32_t op) {
   return 3;
 }
 
-bool IsVop3bOpcode(uint32_t op) {
+bool IsVop3bOpcode(u32 op) {
   return (op >= 0x125 && op <= 0x12a) || op == 0x16d || op == 0x16e;
 }
 
-void Vop3OperandWidths(uint32_t op,
+void Vop3OperandWidths(u32 op,
                        const std::string& name,
-                       uint32_t& dst_count,
-                       uint32_t (&src_count)[3]) {
+                       u32& dst_count,
+                       u32 (&src_count)[3]) {
   dst_count = Is64(name) ? 2 : 1;
   src_count[0] = src_count[1] = src_count[2] = dst_count;
   if (op < 0x100 && (op == 0xa8 || op == 0xb8)) {
@@ -1310,7 +1311,7 @@ void Vop3OperandWidths(uint32_t op,
     return;
   }
   if (op >= 0x180 && op < 0x200) {
-    const uint32_t reflected = op - 0x180;
+    const u32 reflected = op - 0x180;
     switch (reflected) {
       case 0x03:
       case 0x0f:
@@ -1366,11 +1367,11 @@ void Vop3OperandWidths(uint32_t op,
 }
 
 std::string OperandsVop3(const Inst& inst, const std::string& name) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t op = inst.opcode;
-  const uint32_t neg = (w1 >> 29) & 7;
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 op = inst.opcode;
+  const u32 neg = (w1 >> 29) & 7;
   const bool vop3b = IsVop3bOpcode(op);
-  uint32_t dst_count, src_count[3];
+  u32 dst_count, src_count[3];
   Vop3OperandWidths(op, name, dst_count, src_count);
   std::string s;
   if (op < 0x100) {  // VOPC via VOP3: destination is an SGPR pair
@@ -1380,16 +1381,16 @@ std::string OperandsVop3(const Inst& inst, const std::string& name) {
   } else {
     s = VRange(w & 0xFF, dst_count);
     // VOP3b (carry ops, div_scale): explicit scalar carry destination.
-    const uint32_t sdst = (w >> 8) & 0x7F;
+    const u32 sdst = (w >> 8) & 0x7F;
     if (vop3b)
       s += ", " + SRange(sdst, 2);
     else if (op == 0x176 || op == 0x177)
       s += ", vcc";
   }
-  const uint32_t srcs[3] = {w1 & 0x1FF, (w1 >> 9) & 0x1FF, (w1 >> 18) & 0x1FF};
-  const uint32_t abs = vop3b ? 0 : (w >> 8) & 7;
-  const uint32_t num_srcs = Vop3NumSources(op);
-  for (uint32_t i = 0; i < num_srcs; i++) {
+  const u32 srcs[3] = {w1 & 0x1FF, (w1 >> 9) & 0x1FF, (w1 >> 18) & 0x1FF};
+  const u32 abs = vop3b ? 0 : (w >> 8) & 7;
+  const u32 num_srcs = Vop3NumSources(op);
+  for (u32 i = 0; i < num_srcs; i++) {
     std::string v =
         Src(srcs[i], inst, src_count[i], false, inst.isa == IsaMode::kNeo);
     if (abs & (1u << i))
@@ -1399,10 +1400,10 @@ std::string OperandsVop3(const Inst& inst, const std::string& name) {
     s += ", " + v;
   }
   if (inst.isa == IsaMode::kNeo && !vop3b) {
-    const uint32_t op_sel = (w >> 12) & 0xf;
+    const u32 op_sel = (w >> 12) & 0xf;
     if (op_sel) {
       s += " op_sel:[";
-      for (uint32_t i = 0; i < num_srcs; i++) {
+      for (u32 i = 0; i < num_srcs; i++) {
         if (i)
           s += ",";
         s += std::to_string((op_sel >> i) & 1);
@@ -1412,13 +1413,13 @@ std::string OperandsVop3(const Inst& inst, const std::string& name) {
   }
   if (!vop3b && ((w >> 11) & 1))
     s += " clamp";
-  const uint32_t omod = (w1 >> 27) & 3;
+  const u32 omod = (w1 >> 27) & 3;
   if (omod)
     s += omod == 1 ? " mul:2" : omod == 2 ? " mul:4" : " div:2";
   return s;
 }
 
-uint32_t Vop3pNumSources(uint32_t op) {
+u32 Vop3pNumSources(u32 op) {
   switch (op) {
     case 0x00:
     case 0x09:
@@ -1432,11 +1433,11 @@ uint32_t Vop3pNumSources(uint32_t op) {
   }
 }
 
-std::string PackedControl(const char* name, uint32_t value, uint32_t count) {
+std::string PackedControl(const char* name, u32 value, u32 count) {
   std::string s = " ";
   s += name;
   s += ":[";
-  for (uint32_t i = 0; i < count; i++) {
+  for (u32 i = 0; i < count; i++) {
     if (i)
       s += ",";
     s += std::to_string((value >> i) & 1);
@@ -1445,21 +1446,21 @@ std::string PackedControl(const char* name, uint32_t value, uint32_t count) {
 }
 
 std::string OperandsVop3p(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t num_srcs = Vop3pNumSources(inst.opcode);
-  const uint32_t srcs[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff, (w1 >> 18) & 0x1ff};
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 num_srcs = Vop3pNumSources(inst.opcode);
+  const u32 srcs[3] = {w1 & 0x1ff, (w1 >> 9) & 0x1ff, (w1 >> 18) & 0x1ff};
   std::string s = VRange(w & 0xff, 1);
-  for (uint32_t i = 0; i < num_srcs; i++)
+  for (u32 i = 0; i < num_srcs; i++)
     s += ", " + Src(srcs[i], inst, 1, false, true);
 
-  const uint32_t op_sel = (w >> 11) & 7;
-  const uint32_t op_sel_hi = ((w1 >> 27) & 3) | (((w >> 14) & 1) << 2);
-  const uint32_t neg_lo = (w1 >> 29) & 7;
-  const uint32_t neg_hi = (w >> 8) & 7;
-  const uint32_t mask = (1u << num_srcs) - 1;
+  const u32 op_sel = (w >> 11) & 7;
+  const u32 op_sel_hi = ((w1 >> 27) & 3) | (((w >> 14) & 1) << 2);
+  const u32 neg_lo = (w1 >> 29) & 7;
+  const u32 neg_hi = (w >> 8) & 7;
+  const u32 mask = (1u << num_srcs) - 1;
   if (op_sel & mask)
     s += PackedControl("op_sel", op_sel, num_srcs);
-  const uint32_t default_hi = inst.opcode < 0x20 ? mask : 0;
+  const u32 default_hi = inst.opcode < 0x20 ? mask : 0;
   if ((op_sel_hi & mask) != default_hi)
     s += PackedControl("op_sel_hi", op_sel_hi, num_srcs);
   if (neg_lo & mask)
@@ -1472,9 +1473,9 @@ std::string OperandsVop3p(const Inst& inst) {
 }
 
 std::string OperandsVintrp(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t vsrc = w & 0xFF, chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
-  const uint32_t vdst = (w >> 18) & 0xFF;
+  const u32 w = inst.raw[0];
+  const u32 vsrc = w & 0xFF, chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
+  const u32 vdst = (w >> 18) & 0xFF;
   static const char kChan[4] = {'x', 'y', 'z', 'w'};
   std::string s = VRange(vdst, 1) + ", ";
   if (inst.opcode == 2) {  // v_interp_mov: source is P10/P20/P0 selector
@@ -1488,15 +1489,15 @@ std::string OperandsVintrp(const Inst& inst) {
 }
 
 std::string OperandsDs(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t off0 = w & 0xFF, off1 = (w >> 8) & 0xFF, gds = (w >> 17) & 1;
-  const uint32_t addr = w1 & 0xFF, d0 = (w1 >> 8) & 0xFF,
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 off0 = w & 0xFF, off1 = (w >> 8) & 0xFF, gds = (w >> 17) & 1;
+  const u32 addr = w1 & 0xFF, d0 = (w1 >> 8) & 0xFF,
                  d1 = (w1 >> 16) & 0xFF, vdst = (w1 >> 24) & 0xFF;
-  const uint32_t op = inst.opcode;
+  const u32 op = inst.opcode;
   if (op == 0x14)
     return gds ? "gds" : "";
 
-  uint32_t dst_count = 0, data0_count = 0, data1_count = 0;
+  u32 dst_count = 0, data0_count = 0, data1_count = 0;
   bool has_addr = true, split_offsets = false, src2_offset = false;
   if (op <= 0x13) {
     data0_count = 1;
@@ -1563,11 +1564,11 @@ std::string OperandsDs(const Inst& inst) {
     s +=
         " offset0:" + std::to_string(off0) + " offset1:" + std::to_string(off1);
   } else if (src2_offset) {
-    const int32_t offset = static_cast<int16_t>(off0 | (off1 << 8));
+    const i32 offset = static_cast<i16>(off0 | (off1 << 8));
     if (offset)
       s += " offset:" + std::to_string(offset);
   } else {
-    const uint32_t offset = off0 | (off1 << 8);
+    const u32 offset = off0 | (off1 << 8);
     if (offset)
       s += " offset:" + Hex(offset);
   }
@@ -1576,18 +1577,18 @@ std::string OperandsDs(const Inst& inst) {
   return s;
 }
 
-std::string OperandsMubuf(const Inst& inst, uint32_t count, bool typed) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t offset = w & 0xFFF;
+std::string OperandsMubuf(const Inst& inst, u32 count, bool typed) {
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 offset = w & 0xFFF;
   const bool offen = (w >> 12) & 1, idxen = (w >> 13) & 1, glc = (w >> 14) & 1;
   const bool addr64 = (w >> 15) & 1;
   // Only MUBUF encodes an LDS destination at bit 16; in MTBUF that bit is
   // OP[0], so reading it there hides the real destination register.
   const bool lds = !typed && ((w >> 16) & 1);
-  const uint32_t vaddr = w1 & 0xFF, vdata = (w1 >> 8) & 0xFF;
-  const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
+  const u32 vaddr = w1 & 0xFF, vdata = (w1 >> 8) & 0xFF;
+  const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
   const bool slc = (w1 >> 22) & 1, tfe = (w1 >> 23) & 1;
-  const uint32_t soffset = (w1 >> 24) & 0xFF;
+  const u32 soffset = (w1 >> 24) & 0xFF;
   if (inst.opcode == 0x70 || inst.opcode == 0x71)
     return "";
   const bool load =
@@ -1623,8 +1624,8 @@ std::string OperandsMubuf(const Inst& inst, uint32_t count, bool typed) {
 }
 
 std::string OperandsMtbuf(const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  uint32_t count = (inst.opcode & 3) + 1;
+  const u32 w = inst.raw[0];
+  u32 count = (inst.opcode & 3) + 1;
   if (inst.isa == IsaMode::kNeo && inst.opcode >= 8)
     count = (count + 1) / 2;
   std::string s = OperandsMubuf(inst, count, true);
@@ -1634,15 +1635,15 @@ std::string OperandsMtbuf(const Inst& inst) {
 }
 
 std::string OperandsMimg(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t dmask = (w >> 8) & 0xF;
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 dmask = (w >> 8) & 0xF;
   const bool unorm = (w >> 12) & 1, glc = (w >> 13) & 1, da = (w >> 14) & 1;
   const bool r128 = (w >> 15) & 1, tfe = (w >> 16) & 1, lwe = (w >> 17) & 1,
              slc = (w >> 25) & 1;
-  const uint32_t vaddr = w1 & 0xFF, vdata = (w1 >> 8) & 0xFF;
-  const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
-  const uint32_t ssamp = ((w1 >> 21) & 0x1F) * 4;
-  uint32_t n =
+  const u32 vaddr = w1 & 0xFF, vdata = (w1 >> 8) & 0xFF;
+  const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
+  const u32 ssamp = ((w1 >> 21) & 0x1F) * 4;
+  u32 n =
       inst.opcode >= 0x40 && inst.opcode <= 0x5f ? 4 : PopCount4(dmask);
   if (!n)
     n = 1;
@@ -1671,14 +1672,14 @@ std::string OperandsMimg(const Inst& inst) {
 }
 
 std::string OperandsExp(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
-  const uint32_t en = w & 0xF, target = (w >> 4) & 0x3F;
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
+  const u32 en = w & 0xF, target = (w >> 4) & 0x3F;
   const bool compr = (w >> 10) & 1, done = (w >> 11) & 1, vm = (w >> 12) & 1;
   std::string s = ExpTarget(target);
-  const uint32_t num_sources = compr ? 2 : 4;
-  for (uint32_t i = 0; i < num_sources; i++) {
+  const u32 num_sources = compr ? 2 : 4;
+  for (u32 i = 0; i < num_sources; i++) {
     s += i == 0 ? " " : ", ";
-    const uint32_t mask = compr ? (i == 0 ? 0x3 : 0xc) : (1u << i);
+    const u32 mask = compr ? (i == 0 ? 0x3 : 0xc) : (1u << i);
     s += (en & mask) ? "v" + std::to_string((w1 >> (8 * i)) & 0xFF)
                      : std::string("off");
   }
@@ -1692,11 +1693,11 @@ std::string OperandsExp(const Inst& inst) {
 }
 
 std::string OperandsFlat(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
+  const u32 w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
   const bool glc = (w >> 16) & 1, slc = (w >> 17) & 1, tfe = (w1 >> 23) & 1;
-  const uint32_t addr = w1 & 0xff, data = (w1 >> 8) & 0xff,
+  const u32 addr = w1 & 0xff, data = (w1 >> 8) & 0xff,
                  vdst = (w1 >> 24) & 0xff;
-  const uint32_t count = MubufCount(op);
+  const u32 count = MubufCount(op);
   const bool load = op >= 0x08 && op <= 0x0f;
   const bool store = op == 0x18 || op == 0x1a || (op >= 0x1c && op <= 0x1f);
   const bool atomic = (op >= 0x30 && op <= 0x40 && op != 0x34) ||
@@ -1721,7 +1722,7 @@ std::string OperandsFlat(const Inst& inst) {
 }  // namespace
 
 std::string Mnemonic(const Inst& inst) {
-  const uint32_t op = inst.opcode;
+  const u32 op = inst.opcode;
   const char* n = nullptr;
   switch (inst.enc) {
     case Enc::kSop1:
@@ -1891,7 +1892,7 @@ std::string DisasmLine(const Inst& inst) {
   return std::string(head) + DisasmInst(inst);
 }
 
-void Disassemble(const uint32_t* code, uint32_t max_dwords, const char* tag) {
+void Disassemble(const u32* code, u32 max_dwords, const char* tag) {
   const Program program = Decode(code, max_dwords);
   BASE_LOGI("gcn", "{}: {} instructions", tag, program.size());
   for (const Inst& inst : program)

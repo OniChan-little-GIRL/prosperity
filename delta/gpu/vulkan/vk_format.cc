@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_format.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,11 +26,11 @@ DELTA_OPTION(bool, kNoSwizzle, "DELTA_GPU_NOSWIZZLE", false);
 namespace gpu::vk {
 namespace {
 
-float HalfToFloat(uint16_t value) {
-  uint32_t sign = static_cast<uint32_t>(value & 0x8000) << 16;
-  uint32_t exponent = (value >> 10) & 0x1F;
-  uint32_t mantissa = value & 0x3FF;
-  uint32_t bits;
+float HalfToFloat(u16 value) {
+  u32 sign = static_cast<u32>(value & 0x8000) << 16;
+  u32 exponent = (value >> 10) & 0x1F;
+  u32 mantissa = value & 0x3FF;
+  u32 bits;
   if (!exponent) {
     if (!mantissa) {
       bits = sign;
@@ -39,7 +40,7 @@ float HalfToFloat(uint16_t value) {
         mantissa <<= 1;
         unbiased--;
       }
-      bits = sign | static_cast<uint32_t>(unbiased + 127) << 23 |
+      bits = sign | static_cast<u32>(unbiased + 127) << 23 |
              (mantissa & 0x3FF) << 13;
     }
   } else if (exponent == 0x1F) {
@@ -52,17 +53,17 @@ float HalfToFloat(uint16_t value) {
   return result;
 }
 
-uint8_t Unorm8(float value) {
+u8 Unorm8(float value) {
   if (!std::isfinite(value))
     return 0;
-  return static_cast<uint8_t>(
+  return static_cast<u8>(
       std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
 }
 
-float PackedUfloat(uint32_t value, uint32_t mantissa_bits) {
-  uint32_t mantissa_mask = (1u << mantissa_bits) - 1;
-  uint32_t mantissa = value & mantissa_mask;
-  uint32_t exponent = value >> mantissa_bits;
+float PackedUfloat(u32 value, u32 mantissa_bits) {
+  u32 mantissa_mask = (1u << mantissa_bits) - 1;
+  u32 mantissa = value & mantissa_mask;
+  u32 exponent = value >> mantissa_bits;
   if (!exponent)
     return std::ldexp(static_cast<float>(mantissa),
                       -14 - static_cast<int>(mantissa_bits));
@@ -72,13 +73,13 @@ float PackedUfloat(uint32_t value, uint32_t mantissa_bits) {
                     static_cast<int>(exponent) - 15);
 }
 
-int32_t SignExtend(uint32_t value, uint32_t bits) {
-  return static_cast<int32_t>(value << (32 - bits)) >> (32 - bits);
+i32 SignExtend(u32 value, u32 bits) {
+  return static_cast<i32>(value << (32 - bits)) >> (32 - bits);
 }
 
 }  // namespace
 
-VkFormat GuestTextureFormat(uint32_t dfmt, uint32_t nfmt) {
+VkFormat GuestTextureFormat(u32 dfmt, u32 nfmt) {
   // Narrow and float channel counts: RDNA2 titles sample single-channel masks
   // and packed HDR buffers that the PS4 titles never used.
   if (dfmt == 1 && nfmt == 0)
@@ -150,11 +151,11 @@ VkFormat GuestTextureFormat(uint32_t dfmt, uint32_t nfmt) {
 
 // Block-compressed guest formats: 4x4-texel blocks of 8 or 16 bytes. The
 // detiler and upload then work in block ("element") space.
-bool GuestFormatBlockCompressed(uint32_t dfmt) {
+bool GuestFormatBlockCompressed(u32 dfmt) {
   return dfmt >= 35 && dfmt <= 41;
 }
 
-uint32_t GuestFormatElemBytes(uint32_t dfmt) {
+u32 GuestFormatElemBytes(u32 dfmt) {
   switch (dfmt) {
     case 1:
       return 1;  // 8
@@ -207,9 +208,9 @@ bool IsIntegerColorFormat(VkFormat format) {
   }
 }
 
-VkFormat ColorTargetFormat(uint32_t info) {
-  uint32_t dfmt = (info >> 2) & 0x1F;
-  uint32_t nfmt = (info >> 8) & 0x7;
+VkFormat ColorTargetFormat(u32 info) {
+  u32 dfmt = (info >> 2) & 0x1F;
+  u32 nfmt = (info >> 8) & 0x7;
   if (nfmt == 7) {
     switch (dfmt) {
       case 2:
@@ -283,11 +284,11 @@ VkFormat ColorTargetFormat(uint32_t info) {
 // in R,G,B,A component order and applies the format's channel order itself, so
 // the guest components map straight across even though ColorTargetFormat picks
 // a BGRA host format for 8_8_8_8.
-VkClearColorValue ColorTargetClearValue(uint32_t info,
-                                        uint32_t word0,
-                                        uint32_t word1) {
-  const uint32_t dfmt = (info >> 2) & 0x1F;
-  const uint32_t nfmt = (info >> 8) & 0x7;
+VkClearColorValue ColorTargetClearValue(u32 info,
+                                        u32 word0,
+                                        u32 word1) {
+  const u32 dfmt = (info >> 2) & 0x1F;
+  const u32 nfmt = (info >> 8) & 0x7;
   const auto unmapped = [&](const char* what) {
     static int n = 0;
     if (n++ < 8)
@@ -296,7 +297,7 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
                 what, info, dfmt, nfmt, word0, word1);
     return VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}};
   };
-  uint32_t width[4] = {0, 0, 0, 0};
+  u32 width[4] = {0, 0, 0, 0};
   switch (dfmt) {
     case 1:  // 8
       width[0] = 8;
@@ -339,8 +340,8 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
     default:
       return unmapped("colour format");
   }
-  const uint64_t packed =
-      static_cast<uint64_t>(word0) | static_cast<uint64_t>(word1) << 32;
+  const u64 packed =
+      static_cast<u64>(word0) | static_cast<u64>(word1) << 32;
   VkClearColorValue out{};
   // Seed opaque: a format with fewer than four components never writes alpha,
   // and a transparent target is a hole in a deferred composite.
@@ -348,11 +349,11 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
     out.uint32[3] = 1;
   else
     out.float32[3] = 1.0f;
-  uint32_t shift = 0;
-  for (uint32_t i = 0; i < 4 && width[i]; i++) {
-    const uint32_t bits = width[i];
-    const uint64_t mask = bits == 32 ? 0xFFFFFFFFull : (1ull << bits) - 1;
-    const uint32_t raw = static_cast<uint32_t>((packed >> shift) & mask);
+  u32 shift = 0;
+  for (u32 i = 0; i < 4 && width[i]; i++) {
+    const u32 bits = width[i];
+    const u64 mask = bits == 32 ? 0xFFFFFFFFull : (1ull << bits) - 1;
+    const u32 raw = static_cast<u32>((packed >> shift) & mask);
     shift += bits;
     switch (nfmt) {
       case 0:  // UNORM
@@ -376,7 +377,7 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
         if (bits == 32)
           std::memcpy(&out.float32[i], &raw, sizeof(raw));
         else if (bits == 16)
-          out.float32[i] = HalfToFloat(static_cast<uint16_t>(raw));
+          out.float32[i] = HalfToFloat(static_cast<u16>(raw));
         else if (bits == 11 || bits == 10)
           out.float32[i] = PackedUfloat(raw, bits - 5);
         else
@@ -389,10 +390,10 @@ VkClearColorValue ColorTargetClearValue(uint32_t info,
   return out;
 }
 
-VkComponentMapping TextureComponents(uint32_t swizzle) {
+VkComponentMapping TextureComponents(u32 swizzle) {
   if (!swizzle || kNoSwizzle)
     return {};
-  const auto comp = [](uint32_t sel) {
+  const auto comp = [](u32 sel) {
     switch (sel) {
       case 0:
         return VK_COMPONENT_SWIZZLE_ZERO;
@@ -414,7 +415,7 @@ VkComponentMapping TextureComponents(uint32_t swizzle) {
           comp((swizzle >> 9) & 7)};
 }
 
-uint32_t FormatBytes(VkFormat fmt) {
+u32 FormatBytes(VkFormat fmt) {
   switch (fmt) {
     case VK_FORMAT_R8_UNORM:
     case VK_FORMAT_R8_UINT:
@@ -449,7 +450,7 @@ uint32_t FormatBytes(VkFormat fmt) {
 }
 
 // GNM blend multiplier (CB_BLENDn_CONTROL factor field) -> Vulkan blend factor.
-VkBlendFactor BlendFactor(uint32_t f) {
+VkBlendFactor BlendFactor(u32 f) {
   switch (f) {
     case 0:
       return VK_BLEND_FACTOR_ZERO;
@@ -501,7 +502,7 @@ VkBlendFactor BlendFactor(uint32_t f) {
 }
 
 // GNM blend function (combine fcn) -> Vulkan blend op.
-VkBlendOp BlendOp(uint32_t f) {
+VkBlendOp BlendOp(u32 f) {
   switch (f) {
     case 0:
       return VK_BLEND_OP_ADD;
@@ -522,7 +523,7 @@ VkBlendOp BlendOp(uint32_t f) {
 // per-target blend enable (bit 30). Falls back to a sensible src-alpha blend
 // when the guest enables blend but the control word is zero (default state, not
 // yet set).
-VkPipelineColorBlendAttachmentState BlendAttachment(uint32_t bc, bool en) {
+VkPipelineColorBlendAttachmentState BlendAttachment(u32 bc, bool en) {
   VkPipelineColorBlendAttachmentState cba{};
   cba.colorWriteMask = 0xF;
   // DELTA_GPU_NOBLEND: force opaque (diagnostic) to test whether a draw
@@ -535,11 +536,11 @@ VkPipelineColorBlendAttachmentState BlendAttachment(uint32_t bc, bool en) {
     return cba;
   }
   cba.blendEnable = VK_TRUE;
-  uint32_t cs = bc & 0x1F, cf = (bc >> 5) & 0x7, cd = (bc >> 8) & 0x1F;
+  u32 cs = bc & 0x1F, cf = (bc >> 5) & 0x7, cd = (bc >> 8) & 0x1F;
   bool sep = (bc >> 29) & 1;
-  uint32_t as = sep ? (bc >> 16) & 0x1F : cs;
-  uint32_t af = sep ? (bc >> 21) & 0x7 : cf;
-  uint32_t ad = sep ? (bc >> 24) & 0x1F : cd;
+  u32 as = sep ? (bc >> 16) & 0x1F : cs;
+  u32 af = sep ? (bc >> 21) & 0x7 : cf;
+  u32 ad = sep ? (bc >> 24) & 0x1F : cd;
   cba.srcColorBlendFactor = BlendFactor(cs);
   cba.dstColorBlendFactor = BlendFactor(cd);
   cba.colorBlendOp = BlendOp(cf);
@@ -550,7 +551,7 @@ VkPipelineColorBlendAttachmentState BlendAttachment(uint32_t bc, bool en) {
 }
 
 // GCN data format -> Vulkan vertex format.
-VkFormat VertexFormat(uint32_t dfmt, uint32_t nfmt) {
+VkFormat VertexFormat(u32 dfmt, u32 nfmt) {
   // The recompiled vertex shader declares every attribute as a float vector,
   // so an integer attribute format is a type mismatch and the attribute reads
   // undefined (VUID-VkGraphicsPipelineCreateInfo-Input-08733). The SCALED
@@ -684,7 +685,7 @@ VkFormat VertexFormat(uint32_t dfmt, uint32_t nfmt) {
 // the VkFormat VertexFormat() selects. Used to size a stride-0 (constant)
 // binding's upload, where there is no source stride to derive the record extent
 // from.
-uint32_t VertexFormatBytes(uint32_t dfmt) {
+u32 VertexFormatBytes(u32 dfmt) {
   switch (dfmt) {
     case 1:
       return 1;  // R8
@@ -718,7 +719,7 @@ uint32_t VertexFormatBytes(uint32_t dfmt) {
 
 // VGT_PRIMITIVE_TYPE -> Vulkan topology. Unknown/2D types fall back to triangle
 // list (the previous hardcoded topology), so the 2D path is unchanged.
-VkPrimitiveTopology PrimitiveTopology(uint32_t prim) {
+VkPrimitiveTopology PrimitiveTopology(u32 prim) {
   switch (prim) {
     case 1:
       return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
@@ -736,7 +737,7 @@ VkPrimitiveTopology PrimitiveTopology(uint32_t prim) {
   }
 }
 
-void ReadbackPixelBgra(const uint8_t* src, VkFormat fmt, uint8_t* dst) {
+void ReadbackPixelBgra(const u8* src, VkFormat fmt, u8* dst) {
   float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
   switch (fmt) {
     case VK_FORMAT_B8G8R8A8_UNORM:
@@ -750,40 +751,40 @@ void ReadbackPixelBgra(const uint8_t* src, VkFormat fmt, uint8_t* dst) {
       rgba[1] = src[1] / 255.0f;
       break;
     case VK_FORMAT_R16_UNORM: {
-      uint16_t v;
+      u16 v;
       std::memcpy(&v, src, sizeof(v));
       rgba[0] = v / 65535.0f;
       break;
     }
     case VK_FORMAT_R16_SFLOAT: {
-      uint16_t v;
+      u16 v;
       std::memcpy(&v, src, sizeof(v));
       rgba[0] = HalfToFloat(v);
       break;
     }
     case VK_FORMAT_R16G16_UNORM: {
-      uint16_t v[2];
+      u16 v[2];
       std::memcpy(v, src, sizeof(v));
       rgba[0] = v[0] / 65535.0f;
       rgba[1] = v[1] / 65535.0f;
       break;
     }
     case VK_FORMAT_R16G16_SFLOAT: {
-      uint16_t v[2];
+      u16 v[2];
       std::memcpy(v, src, sizeof(v));
       rgba[0] = HalfToFloat(v[0]);
       rgba[1] = HalfToFloat(v[1]);
       break;
     }
     case VK_FORMAT_R16G16B16A16_UNORM: {
-      uint16_t v[4];
+      u16 v[4];
       std::memcpy(v, src, sizeof(v));
       for (int i = 0; i < 4; i++)
         rgba[i] = v[i] / 65535.0f;
       break;
     }
     case VK_FORMAT_R16G16B16A16_SFLOAT: {
-      uint16_t v[4];
+      u16 v[4];
       std::memcpy(v, src, sizeof(v));
       for (int i = 0; i < 4; i++)
         rgba[i] = HalfToFloat(v[i]);
@@ -802,7 +803,7 @@ void ReadbackPixelBgra(const uint8_t* src, VkFormat fmt, uint8_t* dst) {
       std::memcpy(rgba, src, sizeof(rgba));
       break;
     case VK_FORMAT_B10G11R11_UFLOAT_PACK32: {
-      uint32_t packed;
+      u32 packed;
       std::memcpy(&packed, src, sizeof(packed));
       rgba[0] = PackedUfloat(packed & 0x7FF, 6);
       rgba[1] = PackedUfloat((packed >> 11) & 0x7FF, 6);

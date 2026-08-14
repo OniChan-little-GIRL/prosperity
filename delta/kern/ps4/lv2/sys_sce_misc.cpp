@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 
 #include <atomic>
@@ -41,11 +42,11 @@ static void logOnce(std::atomic<bool> &flag, const char *msg) {
 // syscall returns an fd; we return an RWX anonymous region instead, so a guest
 // that maps the result by fd (mmap(fd)) will NOT see this region. Loud once
 // because that mismatch breaks runtime code generation if a title relies on it.
-int64_t PS4ABI sys_jitshm_create(size_t len, uint32_t flags) {
+i64 PS4ABI sys_jitshm_create(size_t len, u32 flags) {
   (void)flags;
   static std::atomic<bool> once{false};
   logOnce(once, "jitshm_create returns a raw RWX region, not an fd; JIT may break");
-  return (int64_t)sys_mmap(nullptr, len, 7 /*rwx*/, 0x1000 /*anon*/, -1, 0);
+  return (i64)sys_mmap(nullptr, len, 7 /*rwx*/, 0x1000 /*anon*/, -1, 0);
 }
 
 int PS4ABI sys_jitshm_alias() { return -SysError::eOPNOTSUPP; }
@@ -187,7 +188,7 @@ int PS4ABI sys_get_self_auth_info(const char *path, void *out) {
   if (!out)
     return 0;
   std::memset(out, 0, 136);
-  auto *p = reinterpret_cast<uint64_t *>(out);
+  auto *p = reinterpret_cast<u64 *>(out);
   p[0] = 0x3100000000000001ull; // auth_id: regular application
   p[2] = 0x2000038000000000ull; // capability bits
   p[4] = 0x4000400040000000ull; // attributes / shared
@@ -239,19 +240,19 @@ int PS4ABI sys_app_state_change() { return 0; }
 // Carve a mapping out of a block pool. We don't model pools, so back it with a
 // plain anonymous RW region of the requested length. Logged once because the
 // pool handle and any accounting it implies are ignored.
-int64_t PS4ABI sys_blockpool_map(int64_t pool, size_t len, uint32_t prot,
-                                 uint32_t flags) {
+i64 PS4ABI sys_blockpool_map(i64 pool, size_t len, u32 prot,
+                                 u32 flags) {
   (void)pool;
   (void)prot;
   (void)flags;
   static std::atomic<bool> once{false};
   logOnce(once, "blockpool_map backs the pool with a plain anon region");
-  return (int64_t)sys_mmap(nullptr, len, 3 /*rw*/, 0x1000 /*anon*/, -1, 0);
+  return (i64)sys_mmap(nullptr, len, 3 /*rw*/, 0x1000 /*anon*/, -1, 0);
 }
 
 int PS4ABI sys_blockpool_unmap() { return 0; }
-int64_t PS4ABI sys_blockpool_batch(uint64_t a0, uint64_t a1, uint64_t a2,
-                                   uint64_t a3, uint64_t a4, uint64_t a5) {
+i64 PS4ABI sys_blockpool_batch(u64 a0, u64 a1, u64 a2,
+                                   u64 a3, u64 a4, u64 a5) {
   if (kBlockpoolTrace) {
     BASE_LOGI("blockpool_batch",
               "a0={:#x} a1={:#x} a2={:#x} a3={:#x} a4={:#x} a5={:#x}",
@@ -260,7 +261,7 @@ int64_t PS4ABI sys_blockpool_batch(uint64_t a0, uint64_t a1, uint64_t a2,
               (unsigned long long)a4, (unsigned long long)a5);
     // a1 commonly points at the command array; dump a few 64-bit words.
     if (a1 > 0x10000) {
-      auto *w = reinterpret_cast<uint64_t *>(a1);
+      auto *w = reinterpret_cast<u64 *>(a1);
       BASE_LOGI("blockpool_batch",
                 "  cmd[0..7]: {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
                 (unsigned long long)w[0], (unsigned long long)w[1],
@@ -298,7 +299,7 @@ int PS4ABI sys_aio_init() { return 0; }
 
 // Report membership in a single group (gid 1). A zero-length query returns just
 // the count.
-int PS4ABI sys_getgroups(int gidsetlen, uint32_t *gidset) {
+int PS4ABI sys_getgroups(int gidsetlen, u32 *gidset) {
   if (gidsetlen >= 1 && gidset)
     gidset[0] = 1;
   return 1;
@@ -312,7 +313,7 @@ int PS4ABI sys_getpriority() { return 0; }
 int PS4ABI sys_setsockopt() { return 0; }
 
 int PS4ABI sys_getsockopt(int fd, int level, int name, void *val,
-                          uint32_t *len) {
+                          u32 *len) {
   (void)fd;
   (void)level;
   (void)name;
@@ -336,7 +337,7 @@ int PS4ABI sys_futimes() { return 0; }
 // rax is indistinguishable from an errno under the syscall return convention, so
 // a caller sizing a buffer against it would misread a failure. Values match
 // FreeBSD's defaults for a UFS-like filesystem.
-static int64_t pathconf_value(int name) {
+static i64 pathconf_value(int name) {
   switch (name) {
   case 1:  return 32767; // _PC_LINK_MAX
   case 2:  return 255;   // _PC_MAX_CANON

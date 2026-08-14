@@ -8,6 +8,7 @@
  */
 
 #include "../../proc.h"
+#include "base/arch.h"
 #include "error_table.h"
 #include <base.h>
 #include <base/logging.h>
@@ -66,7 +67,7 @@ int PS4ABI sys_sigaction(int sig, const void *act, void *oact) {
 // namedobj type tag for the id table). Returns the allocated id in rax.
 // We return 0 (success, id 0): the only known caller (debug instrumentation)
 // ignores the id.
-int PS4ABI sys_namedobj_create(const char *name, void *arg2, uint32_t arg3) {
+int PS4ABI sys_namedobj_create(const char *name, void *arg2, u32 arg3) {
   (void)name;
   (void)arg2;
   (void)arg3;
@@ -90,7 +91,7 @@ int PS4ABI sys_sysarch(int num, void *args) {
   case AMD64_SET_FSBASE: {
     auto fsbase = *static_cast<void **>(args);
     env.fsBase = fsbase;
-    setThreadFsBase(reinterpret_cast<uint64_t>(fsbase));
+    setThreadFsBase(reinterpret_cast<u64>(fsbase));
     return 0;
   }
   case AMD64_GET_GSBASE:
@@ -107,28 +108,28 @@ int PS4ABI sys_sysarch(int num, void *args) {
 
 struct nonsys_int {
   union {
-    uint64_t encoded_id;
+    u64 encoded_id;
     struct {
-      uint8_t data[4];
-      uint8_t table;
-      uint8_t index;
-      uint16_t checksum;
+      u8 data[4];
+      u8 table;
+      u8 index;
+      u16 checksum;
     } encoded_id_parts;
   };
-  uint32_t unknown;
-  uint32_t value;
+  u32 unknown;
+  u32 value;
 };
 
 struct nonsys_bin {
-  uint64_t encoded_id;
-  uint64_t unknown;
-  uint64_t size;
-  uint8_t data[];
+  u64 encoded_id;
+  u64 unknown;
+  u64 size;
+  u8 data[];
 };
 
 /*TODO: clearly does not belong here*/
-int PS4ABI sys_regmgr_call(uint32_t op, uint32_t id, void *result, void *value,
-                           uint64_t type) {
+int PS4ABI sys_regmgr_call(u32 op, u32 id, void *result, void *value,
+                           u64 type) {
   if (op == 25) // non-system get int
   {
     auto int_value = static_cast<nonsys_int *>(value);
@@ -215,7 +216,7 @@ int PS4ABI sys_dynlib_do_copy_relocations() { return 0; }
 
 int PS4ABI sys_getpid() { return 0x1337; }
 
-int PS4ABI sys_write(uint32_t fd, const void *buf, size_t nbytes) {
+int PS4ABI sys_write(u32 fd, const void *buf, size_t nbytes) {
   if (fd == 1 || fd == 2) // stdout, stderr
   {
     // DELTA_QUIET_GUEST: the game's debug prints (per-frame message-pump chatter)
@@ -233,7 +234,7 @@ int PS4ABI sys_write(uint32_t fd, const void *buf, size_t nbytes) {
   if (auto *proc = proc::getActive()) {
     auto *obj = proc->getObjTable().get(fd);
     if (obj && obj->type() == kObject::oType::device) {
-      int64_t r = static_cast<device *>(obj)->write(buf, nbytes);
+      i64 r = static_cast<device *>(obj)->write(buf, nbytes);
       if (r >= 0)
         return static_cast<int>(r);
     }

@@ -1,6 +1,7 @@
 // Synthetic SELF -> ELF round trip for crypto::self2elf. Mirrors the layout the
 // real fake-pkg eboots use, without needing a pkg fixture.
 #include <cstdint>
+#include "base/arch.h"
 #include <cstring>
 #include <vector>
 
@@ -11,7 +12,7 @@
 #include <sce_types.h>
 
 TEST(UnSELF, RebuildsElfFromFakeSelf) {
-  std::vector<uint8_t> buf(0x400, 0);
+  std::vector<u8> buf(0x400, 0);
 
   auto *sh = reinterpret_cast<SELFHeader *>(buf.data());
   sh->magic = SELF_MAGIC;
@@ -19,7 +20,7 @@ TEST(UnSELF, RebuildsElfFromFakeSelf) {
 
   // One block segment mapping to program header 0.
   auto *seg = reinterpret_cast<SELFSegmentTable *>(buf.data() + 0x20);
-  seg->flags = SF_BFLG | (uint64_t(0) << 20);
+  seg->flags = SF_BFLG | (u64(0) << 20);
   seg->offset = 0x200;
   seg->fileSize = 8;
   seg->memSize = 8;
@@ -41,14 +42,14 @@ TEST(UnSELF, RebuildsElfFromFakeSelf) {
   ph->filesz = 8;
   ph->memsz = 8;
 
-  const uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  const u8 payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
   std::memcpy(buf.data() + 0x200, payload, sizeof(payload));
 
   auto elf = crypto::self2elf(buf.data(), buf.size());
   ASSERT_FALSE(elf.empty());
   ASSERT_EQ(elf.size(), 0x108u); // phdr offset 0x100 + filesz 8
 
-  uint32_t magic = 0;
+  u32 magic = 0;
   std::memcpy(&magic, elf.data(), 4);
   EXPECT_EQ(magic, ELF_MAGIC);
 
@@ -61,8 +62,8 @@ TEST(UnSELF, RebuildsElfFromFakeSelf) {
 }
 
 TEST(UnSELF, RejectsNonSelf) {
-  std::vector<uint8_t> buf(0x100, 0);
-  uint32_t notMagic = 0xDEADBEEF;
+  std::vector<u8> buf(0x100, 0);
+  u32 notMagic = 0xDEADBEEF;
   std::memcpy(buf.data(), &notMagic, 4);
   EXPECT_TRUE(crypto::self2elf(buf.data(), buf.size()).empty());
 }

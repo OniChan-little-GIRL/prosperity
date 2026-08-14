@@ -1,8 +1,9 @@
 // Auto-generated from im.vert/im.frag via glslangValidator. Standard ImGui shaders.
 #pragma once
 #include <cstdint>
+#include "base/arch.h"
 
-static const uint32_t kImguiVertSpv[] = {
+static const u32 kImguiVertSpv[] = {
     0x07230203, 0x00010000, 0x0008000b, 0x0000002e, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
     0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
     0x000b000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000b, 0x0000000f,
@@ -50,7 +51,7 @@ static const uint32_t kImguiVertSpv[] = {
     0x0000002c, 0x000100fd, 0x00010038,
 };
 
-static const uint32_t kImguiFragSpv[] = {
+static const u32 kImguiFragSpv[] = {
     0x07230203, 0x00010000, 0x0008000b, 0x00000018, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
     0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
     0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000b, 0x00000014,

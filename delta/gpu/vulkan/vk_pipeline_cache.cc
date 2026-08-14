@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_pipeline_cache.h"
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"
 #include "gpu/shaders/quad_frag_spv.h"
@@ -34,7 +35,7 @@ DELTA_OPTION(bool, kDoCull, "DELTA_GPU_CULL", false);
 // only that shader's. Pipelines are built in load order, so a flat cap only
 // ever shows the loading screens -- a negative from it says nothing about the
 // draw you care about.
-DELTA_OPTION(uint64_t, kGpuPipetrace, "DELTA_GPU_PIPETRACE", 0);
+DELTA_OPTION(u64, kGpuPipetrace, "DELTA_GPU_PIPETRACE", 0);
 DELTA_OPTION(bool, kNoMaskDiag, "DELTA_GPU_NOMASK", false);
 DELTA_OPTION(bool, kNoRectGs, "DELTA_GPU_NORECTGS", false);
 // A depth prepass leaves the shaded pass testing ZFUNC=EQUAL against depth we
@@ -70,8 +71,8 @@ DELTA_OPTION(const char*, kZWritePs, "DELTA_GPU_ZWRITE_PS", nullptr);
 // Comma-separated list, because a target is routinely written by more than one
 // pass: P.T.'s light buffers take 34 draws from one shader and 28 from another,
 // and disabling the depth test on either alone proves nothing about the pair.
-std::vector<uint64_t> ParsePsList(const char* e, const char* tag) {
-  std::vector<uint64_t> out;
+std::vector<u64> ParsePsList(const char* e, const char* tag) {
+  std::vector<u64> out;
   if (e)
     for (const char* p = e; *p;) {
       while (*p == ',' || *p == ' ')
@@ -85,38 +86,38 @@ std::vector<uint64_t> ParsePsList(const char* e, const char* tag) {
   if (!out.empty()) {
     base::String armed;
     base::FormatTo(armed, "armed for {} shader(s):", out.size());
-    for (uint64_t v : out)
+    for (u64 v : out)
       base::FormatTo(armed, " {:#x}", (unsigned long long)v);
     BASE_LOGI(tag, "{}", armed.c_str());
   }
   return out;
 }
 
-bool NoZTestForPs(uint64_t ps) {
-  static const std::vector<uint64_t> list = ParsePsList(kNoZTestPs, "nozps");
+bool NoZTestForPs(u64 ps) {
+  static const std::vector<u64> list = ParsePsList(kNoZTestPs, "nozps");
   if (list.empty() || !ps)
     return false;
-  for (uint64_t v : list)
+  for (u64 v : list)
     if (v == ps)
       return true;
   return false;
 }
 
-bool NoZWriteForPs(uint64_t ps) {
-  static const std::vector<uint64_t> list = ParsePsList(kNoZWritePs, "nozwps");
+bool NoZWriteForPs(u64 ps) {
+  static const std::vector<u64> list = ParsePsList(kNoZWritePs, "nozwps");
   if (list.empty() || !ps)
     return false;
-  for (uint64_t v : list)
+  for (u64 v : list)
     if (v == ps)
       return true;
   return false;
 }
 
-bool ForceZWriteForPs(uint64_t ps) {
-  static const std::vector<uint64_t> list = ParsePsList(kZWritePs, "zwps");
+bool ForceZWriteForPs(u64 ps) {
+  static const std::vector<u64> list = ParsePsList(kZWritePs, "zwps");
   if (list.empty() || !ps)
     return false;
-  for (uint64_t v : list)
+  for (u64 v : list)
     if (v == ps)
       return true;
   return false;
@@ -127,7 +128,7 @@ namespace gpu::vk {
 
 using rhi::DrawInfo;
 
-VkStencilOp StencilOp(uint32_t op) {
+VkStencilOp StencilOp(u32 op) {
   switch (op & 0xF) {
     case 1:
       return VK_STENCIL_OP_ZERO;
@@ -151,8 +152,8 @@ VkStencilOp StencilOp(uint32_t op) {
 }
 
 VkStencilOpState StencilState(const DrawInfo& d, bool back) {
-  const uint32_t shift = back ? 12 : 0;
-  const uint32_t refmask = back ? d.stencil_refmask_bf : d.stencil_refmask;
+  const u32 shift = back ? 12 : 0;
+  const u32 refmask = back ? d.stencil_refmask_bf : d.stencil_refmask;
   VkStencilOpState state{};
   state.failOp = StencilOp(d.stencil_control >> shift);
   state.passOp = StencilOp(d.stencil_control >> (shift + 4));
@@ -165,12 +166,12 @@ VkStencilOpState StencilState(const DrawInfo& d, bool back) {
   return state;
 }
 
-RecompPipe* RecompiledPipelineCache::Find(uint64_t key) {
+RecompPipe* RecompiledPipelineCache::Find(u64 key) {
   const auto it = pipelines_.find(key);
   return it == pipelines_.end() ? nullptr : &it->second;
 }
 
-RecompPipe* RecompiledPipelineCache::Store(uint64_t key, RecompPipe pipeline) {
+RecompPipe* RecompiledPipelineCache::Store(u64 key, RecompPipe pipeline) {
   return &pipelines_.emplace(key, std::move(pipeline)).first->second;
 }
 
@@ -270,11 +271,11 @@ VkPipeline BuildPipeline(bool textured,
 // Pipeline for a draw's blend state, cached. Returns the default src-alpha
 // pipeline when the per-state build fails so a draw never silently drops.
 VkPipeline GetPipeline(bool textured,
-                       uint32_t bc,
+                       u32 bc,
                        bool en,
                        VkFormat color_format) {
-  uint64_t key = (textured ? 1ull : 0) | (en ? 2ull : 0) |
-                 ((uint64_t)(en ? (bc & 0x7FFFFFFFu) : 0u) << 2);
+  u64 key = (textured ? 1ull : 0) | (en ? 2ull : 0) |
+                 ((u64)(en ? (bc & 0x7FFFFFFFu) : 0u) << 2);
   key = HashWord(key, color_format);
   auto it = g_quad.cache.find(key);
   if (it != g_quad.cache.end())
@@ -351,20 +352,20 @@ bool CreateTexPipeline() {
 RecompPipe* GetRecompPipe(const DrawInfo& d) {
   if (d.recomp->ps_texs.size() > kMaxTex)
     return nullptr;
-  uint32_t mrt_n = std::min(d.mrt_count, 8u);
+  u32 mrt_n = std::min(d.mrt_count, 8u);
   // Depth + primitive-setup state folded into the pipeline key (mixed through
   // an FNV prime so it spreads across the whole 64-bit space, away from the
   // blend/stride bits).
-  uint32_t dstate = (d.depth_base ? 1u : 0u) | (d.depth_test_enable ? 2u : 0u) |
+  u32 dstate = (d.depth_base ? 1u : 0u) | (d.depth_test_enable ? 2u : 0u) |
                     (d.depth_write_enable ? 4u : 0u) |
                     ((d.depth_func & 7u) << 3) | ((d.prim_type & 0x1Fu) << 6) |
                     ((d.cull_mode & 3u) << 11) |
                     (d.front_ccw ? 0u : (1u << 13));
-  uint64_t key =
+  u64 key =
       d.vs_addr * 0x9e3779b97f4a7c15ull ^ d.ps_addr ^
-      ((uint64_t)(d.blend_enable ? (d.blend_control & 0x7FFFFFFFu) : 0) << 1) ^
-      ((uint64_t)d.vertex_stride << 33) ^ ((uint64_t)mrt_n << 60) ^
-      ((uint64_t)dstate * 0x100000001b3ull);
+      ((u64)(d.blend_enable ? (d.blend_control & 0x7FFFFFFFu) : 0) << 1) ^
+      ((u64)d.vertex_stride << 33) ^ ((u64)mrt_n << 60) ^
+      ((u64)dstate * 0x100000001b3ull);
   key = HashWord(key, d.ps4_neo ? 1 : 0);
   key = HashWord(key, d.stencil_enable ? d.depth_control : 0);
   key = HashWord(key, d.stencil_enable ? d.stencil_control : 0);
@@ -375,8 +376,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   key = HashWord(key, d.num_vattrs);
   // A sampler reading a volume image translates the same PS address to a
   // different module, whose image types the pipeline layout has to match.
-  uint32_t tex_3d_mask = 0, tex_1d_mask = 0;
-  for (uint32_t i = 0; i < d.num_texs && i < kMaxTex; i++) {
+  u32 tex_3d_mask = 0, tex_1d_mask = 0;
+  for (u32 i = 0; i < d.num_texs && i < kMaxTex; i++) {
     if (d.texs[i].is_3d)
       tex_3d_mask |= 1u << i;
     if (d.texs[i].is_1d)
@@ -386,16 +387,16 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   key = HashWord(key, tex_1d_mask);
   key = HashWord(key, d.target_mask);
   key = HashWord(key, d.shader_mask);
-  for (uint32_t i = 0; i < mrt_n; i++)
+  for (u32 i = 0; i < mrt_n; i++)
     key = HashWord(key, ColorTargetFormat(d.mrt_info[i]));
   // The vertex-input layout (binding count + per-binding strides + per-attr
   // binding assignment) is baked into the pipeline, so it must be part of the
   // key or a later multi-stream draw would reuse a single-stream pipeline (or
   // vice versa) for the same shader pair.
   key = HashWord(key, d.num_vbufs);
-  for (uint32_t j = 0; j < d.num_vbufs; j++)
+  for (u32 j = 0; j < d.num_vbufs; j++)
     key = HashWord(key, d.vbufs[j].stride);
-  for (uint32_t i = 0; i < d.num_vattrs; i++) {
+  for (u32 i = 0; i < d.num_vattrs; i++) {
     key = HashWord(key, d.vattrs[i].location);
     key = HashWord(key, d.vattrs[i].binding);
     key = HashWord(key, d.vattrs[i].offset);
@@ -422,8 +423,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       !rp.textured ? g_ring.empty_layout : g_tex.ds_layout;
   if (rp.multi_tex) {
     VkDescriptorSetLayoutBinding bindings[kMaxTex];
-    const uint32_t n_bind = static_cast<uint32_t>(std::min(n_tex, size_t(kMaxTex)));
-    for (uint32_t i = 0; i < n_bind; i++) {
+    const u32 n_bind = static_cast<u32>(std::min(n_tex, size_t(kMaxTex)));
+    for (u32 i = 0; i < n_bind; i++) {
       const bool is_vs = i >= d.recomp->ps_texs.size();
       const bool storage =
           !is_vs && d.recomp->ps_texs[i].storage;
@@ -487,7 +488,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   VkShaderModule gs =
       rect_list ? MakeModuleVec(d.recomp->gs_spirv) : VK_NULL_HANDLE;
   VkPipelineShaderStageCreateInfo stages[3]{};
-  uint32_t stage_count = 0;
+  u32 stage_count = 0;
   stages[stage_count] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
   stages[stage_count].stage = VK_SHADER_STAGE_VERTEX_BIT;
   stages[stage_count].module = vs;
@@ -505,12 +506,12 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
 
   // One Vulkan binding per resolved vertex buffer (single-stream draws stay a
   // single binding, identical to before); attributes reference their binding.
-  uint32_t nbind = d.num_vattrs ? std::min(d.num_vbufs, 8u) : 0;
+  u32 nbind = d.num_vattrs ? std::min(d.num_vbufs, 8u) : 0;
   VkVertexInputBindingDescription binds[8];
-  for (uint32_t j = 0; j < nbind; j++)
+  for (u32 j = 0; j < nbind; j++)
     binds[j] = {j, d.vbufs[j].stride, VK_VERTEX_INPUT_RATE_VERTEX};
   VkVertexInputAttributeDescription attrs[8];
-  for (uint32_t i = 0; i < d.num_vattrs; i++)
+  for (u32 i = 0; i < d.num_vattrs; i++)
     attrs[i] = {d.vattrs[i].location, d.vattrs[i].binding,
                 VertexFormat(d.vattrs[i].dfmt, d.vattrs[i].nfmt),
                 d.vattrs[i].offset};
@@ -560,7 +561,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
     // produces a null result indistinguishable from a real one, and this
     // title's record is full of exactly that mistake.
     if (per_ps) {
-      static std::vector<uint64_t> said;
+      static std::vector<u64> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
         BASE_LOGI("nozps",
@@ -573,7 +574,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
         (d.depth_test_enable && !skip_ztest) ? VK_TRUE : VK_FALSE;
     const bool no_write = NoZWriteForPs(d.ps_addr);
     if (no_write) {
-      static std::vector<uint64_t> said;
+      static std::vector<u64> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
         BASE_LOGI("nozwps", "depth write disabled for ps={:#x} (was {})",
@@ -582,7 +583,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
     }
     const bool force_write = ForceZWriteForPs(d.ps_addr);
     if (force_write) {
-      static std::vector<uint64_t> said;
+      static std::vector<u64> said;
       if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
         said.push_back(d.ps_addr);
         BASE_LOGI("zwps", "depth write FORCED for ps={:#x} (was {})",
@@ -619,8 +620,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   // PS does not export to are write-masked off so they keep their loaded
   // content.
   VkPipelineColorBlendAttachmentState cb_att[8];
-  for (uint32_t i = 0; i < mrt_n; i++) {
-    uint32_t bc = i == 0 ? d.blend_control : d.mrt_blend[i];
+  for (u32 i = 0; i < mrt_n; i++) {
+    u32 bc = i == 0 ? d.blend_control : d.mrt_blend[i];
     bool en = i == 0 ? d.blend_enable : ((d.mrt_blend_mask >> i) & 1u);
     // Vulkan forbids blending on an integer attachment, and the hardware
     // agrees: CB_COLORn_INFO sets BLEND_BYPASS on exactly these targets.
@@ -669,7 +670,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   dy.dynamicStateCount = 2;
   dy.pDynamicStates = dyns;
   VkFormat fmts[8];
-  for (uint32_t i = 0; i < mrt_n; i++)
+  for (u32 i = 0; i < mrt_n; i++)
     fmts[i] = ColorTargetFormat(d.mrt_info[i]);
   VkPipelineRenderingCreateInfo rci{
       VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
@@ -703,7 +704,7 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
     BASE_LOGI("gpuvk", "recomp pipeline failed: {}", (int)r);
     return nullptr;
   }
-  NameObject(VK_OBJECT_TYPE_PIPELINE, (uint64_t)rp.pipe,
+  NameObject(VK_OBJECT_TYPE_PIPELINE, (u64)rp.pipe,
              "recomp vs=%#llx ps=%#llx", (unsigned long long)d.vs_addr,
              (unsigned long long)d.ps_addr);
   return g_recomp_cache.Store(key, std::move(rp));

@@ -9,8 +9,8 @@ glslangValidator -V -S "$STAGE" "$SRC" -o "$TMP"
 {
   echo "// Generated."
   echo "#pragma once"
-  echo "#include <cstdint>"
-  printf 'static const uint32_t %s[]={' "$VAR"
+  echo "#include \"base/arch.h\""
+  printf 'static const u32 %s[]={' "$VAR"
   python3 - "$TMP" <<'PY'
 import sys,struct
 d=open(sys.argv[1],'rb').read()

@@ -9,16 +9,17 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 
 namespace krnl {
 // Thread lifecycle / signalling.
-int PS4ABI sys_thr_exit(int64_t *state);
-int PS4ABI sys_thr_kill(uint32_t tid, int sig);
-int PS4ABI sys_thr_kill2(uint32_t pid, uint32_t tid, int sig);
+int PS4ABI sys_thr_exit(i64 *state);
+int PS4ABI sys_thr_kill(u32 tid, int sig);
+int PS4ABI sys_thr_kill2(u32 pid, u32 tid, int sig);
 int PS4ABI sys_thr_suspend(const void *timeout);
-int PS4ABI sys_thr_wake(uint32_t tid);
-int PS4ABI sys_thr_set_name(uint32_t tid, const char *name);
-int PS4ABI sys_thr_get_name(uint32_t tid, char *buf);
+int PS4ABI sys_thr_wake(u32 tid);
+int PS4ABI sys_thr_set_name(u32 tid, const char *name);
+int PS4ABI sys_thr_get_name(u32 tid, char *buf);
 
 // Scheduling.
 int PS4ABI sys_yield();
@@ -33,13 +34,13 @@ int PS4ABI sys_sched_rr_get_interval(int pid, void *interval);
 
 // cpuset (484 sys_cpuset is owned elsewhere; not declared here).
 int PS4ABI sys_cpuset_setid(int which, int level, void *id, int setid);
-int PS4ABI sys_cpuset_getid(int level, int which, int64_t id, int *setid);
-int PS4ABI sys_cpuset_setaffinity(int level, int which, int64_t id, size_t cpusetsize,
+int PS4ABI sys_cpuset_getid(int level, int which, i64 id, int *setid);
+int PS4ABI sys_cpuset_setaffinity(int level, int which, i64 id, size_t cpusetsize,
                                   const void *mask);
 
 // ucontext-based suspend/resume (not exposed).
-int PS4ABI sys_thr_suspend_ucontext(uint32_t tid);
-int PS4ABI sys_thr_resume_ucontext(uint32_t tid);
-int PS4ABI sys_thr_get_ucontext(uint32_t tid, void *ucontext);
-int PS4ABI sys_thr_set_ucontext(uint32_t tid, void *ucontext);
+int PS4ABI sys_thr_suspend_ucontext(u32 tid);
+int PS4ABI sys_thr_resume_ucontext(u32 tid);
+int PS4ABI sys_thr_get_ucontext(u32 tid, void *ucontext);
+int PS4ABI sys_thr_set_ucontext(u32 tid, void *ucontext);
 }

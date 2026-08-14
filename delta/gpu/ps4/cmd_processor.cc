@@ -6,6 +6,7 @@
  */
 
 #include "gpu/ps4/cmd_processor.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <atomic>
@@ -35,9 +36,9 @@ DELTA_OPTION(bool, kNoCopy, "DELTA_GPU_NODMACOPY", false);
 
 namespace gpu::rhi {
 // Declared in rhi/command.h; the frame-time overlay reports them.
-uint64_t g_ns_dcb = 0;
-uint64_t g_ns_dcb_lock = 0;
-uint32_t g_dcb_n = 0;
+u64 g_ns_dcb = 0;
+u64 g_ns_dcb_lock = 0;
+u32 g_dcb_n = 0;
 }  // namespace gpu::rhi
 
 namespace gpu::ps4 {
@@ -49,18 +50,18 @@ std::mutex g_mutex;
 // Persistent across submits: Gnm programs a register once and relies on it
 // holding for every later submission.
 Regs g_regs;
-std::atomic<uint64_t> g_total_submits{0};
-std::atomic<uint64_t> g_total_draws{0};
+std::atomic<u64> g_total_submits{0};
+std::atomic<u64> g_total_draws{0};
 bool g_renderer_started = false;
 bool g_frame_active = false;
-uint32_t g_presented_frames = 0;
+u32 g_presented_frames = 0;
 
 // Latched by the IT_* packets that precede a draw and consumed by it.
 struct IndexState {
-  uint32_t type = 0;  // VGT_DMA_INDEX_TYPE[1:0]: 0 = 16-bit, 1 = 32-bit
-  uint64_t base = 0;  // IT_INDEX_BASE (DRAW_INDEX_2 carries its own)
-  uint64_t indirect_base = 0;  // IT_SET_BASE(1): where indirect args live
-  uint32_t num_instances = 1;  // IT_NUM_INSTANCES, for the following draw(s)
+  u32 type = 0;  // VGT_DMA_INDEX_TYPE[1:0]: 0 = 16-bit, 1 = 32-bit
+  u64 base = 0;  // IT_INDEX_BASE (DRAW_INDEX_2 carries its own)
+  u64 indirect_base = 0;  // IT_SET_BASE(1): where indirect args live
+  u32 num_instances = 1;  // IT_NUM_INSTANCES, for the following draw(s)
 };
 IndexState g_index;
 
@@ -69,12 +70,12 @@ IndexState g_index;
 // work) always runs before the DCB (DE work), so WAIT_ON_CE_COUNTER is always
 // already satisfied; the counters are tracked so the stream state matches and
 // the packets are never mistaken for a desync.
-uint64_t g_ce_counter = 0;
-uint64_t g_de_counter = 0;
+u64 g_ce_counter = 0;
+u64 g_de_counter = 0;
 
 // A cycle in the IB chain would recurse until the stack overflowed. Real
 // submissions are flat or a couple of levels deep.
-constexpr uint32_t kMaxIbDepth = 8;
+constexpr u32 kMaxIbDepth = 8;
 
 // --- completion labels -----------------------------------------------------
 
@@ -84,28 +85,28 @@ constexpr uint32_t kMaxIbDepth = 8;
 // producer we do not run, and spinning on that buys nothing.
 class FenceLabels {
  public:
-  void Note(uint64_t address) {
+  void Note(u64 address) {
     if (!address)
       return;
     std::lock_guard<std::mutex> lock(mutex_);
     if (addresses_.size() < 4096)
       addresses_.insert(address & ~3ull);
   }
-  bool Contains(uint64_t address) const {
+  bool Contains(u64 address) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return addresses_.count(address & ~3ull) != 0;
   }
 
  private:
   mutable std::mutex mutex_;
-  std::unordered_set<uint64_t> addresses_;
+  std::unordered_set<u64> addresses_;
 };
 FenceLabels g_fence_labels;
 
 // Labels live in guest memory the game allocated (Garlic/Onion), in low guest
 // heaps, or in the GnmDriver area. Accept any plausibly-mapped, non-low
 // address; reject null/garbage.
-bool IsLabelAddress(uint64_t address) {
+bool IsLabelAddress(u64 address) {
   return address >= 0x10000ull && address < kGuestEnd;
 }
 
@@ -115,15 +116,15 @@ bool IsLabelAddress(uint64_t address) {
 // CPU-side polls (the flip-done / submit-done labels Gnm spins on between
 // frames) make progress. Without it the title stalls once the few in-flight
 // display buffers drain.
-void WriteLabel(uint64_t address, uint64_t value, bool is_64bit) {
+void WriteLabel(u64 address, u64 value, bool is_64bit) {
   g_fence_labels.Note(address);
   if (!IsLabelAddress(address))
     return;
   if (is_64bit)
-    *reinterpret_cast<volatile uint64_t*>(address) = value;
+    *reinterpret_cast<volatile u64*>(address) = value;
   else
-    *reinterpret_cast<volatile uint32_t*>(address) =
-        static_cast<uint32_t>(value);
+    *reinterpret_cast<volatile u32*>(address) =
+        static_cast<u32>(value);
 }
 
 // EOP/RELEASE_MEM DATA_SEL 3 (GPU clock) and 4 (system clock) tell the GPU to
@@ -133,9 +134,9 @@ void WriteLabel(uint64_t address, uint64_t value, bool is_64bit) {
 // increasing, non-zero value; our submit is synchronous, so any advancing clock
 // reads as "already complete". Without this Doom64's per-frame submit-done wait
 // (a spin with a hard 2s timeout) burns the full 2s every frame -> ~0.5 fps.
-uint64_t GpuClockTimestamp() {
+u64 GpuClockTimestamp() {
   using namespace std::chrono;
-  return static_cast<uint64_t>(
+  return static_cast<u64>(
       duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
           .count());
 }
@@ -143,9 +144,9 @@ uint64_t GpuClockTimestamp() {
 // The label write shared by EOP and RELEASE_MEM, which encode DATA_SEL the same
 // way: 1 = 32-bit immediate, 2 = 64-bit immediate, 3/4 = a clock counter.
 void WriteEventLabel(const char* packet,
-                     uint64_t address,
-                     uint32_t data_sel,
-                     uint64_t value) {
+                     u64 address,
+                     u32 data_sel,
+                     u64 value) {
   if (data_sel == 1)
     WriteLabel(address, value, false);
   else if (data_sel == 2)
@@ -162,37 +163,37 @@ void WriteEventLabel(const char* packet,
 // bounds checked here so a malformed packet can never write outside it.
 class ConstRam {
  public:
-  bool Fits(uint32_t offset, uint32_t dwords) const {
-    return (uint64_t)offset + (uint64_t)dwords * 4 <= sizeof(data_);
+  bool Fits(u32 offset, u32 dwords) const {
+    return (u64)offset + (u64)dwords * 4 <= sizeof(data_);
   }
-  void Write(uint32_t offset, const void* src, uint32_t dwords) {
+  void Write(u32 offset, const void* src, u32 dwords) {
     std::memcpy(data_ + offset, src, (size_t)dwords * 4);
   }
-  void Read(uint32_t offset, void* dst, uint32_t dwords) const {
+  void Read(u32 offset, void* dst, u32 dwords) const {
     std::memcpy(dst, data_ + offset, (size_t)dwords * 4);
   }
-  uint32_t DwordAt(uint32_t offset) const {
-    uint32_t value;
+  u32 DwordAt(u32 offset) const {
+    u32 value;
     std::memcpy(&value, data_ + offset, sizeof(value));
     return value;
   }
 
  private:
-  uint8_t data_[48 * 1024] = {};
+  u8 data_[48 * 1024] = {};
 };
 ConstRam g_const_ram;
 
 // --- register writes -------------------------------------------------------
 
-void SetRegs(uint32_t base, const uint32_t* body, uint32_t count) {
+void SetRegs(u32 base, const u32* body, u32 count) {
   if (!count)
     return;
   // Indexed SET packets use bits 28..31 for the index; only the low 16 bits are
   // the register offset. Treating the whole word as an offset drops Neo
   // register writes such as 0x40000258.
-  const uint32_t first = Pm4SetRegAddress(base, body[0]);
-  const uint32_t values = count - 1;
-  for (uint32_t i = 0; i < values; i++)
+  const u32 first = Pm4SetRegAddress(base, body[0]);
+  const u32 values = count - 1;
+  for (u32 i = 0; i < values; i++)
     if (first + i < kRegFileSize)
       g_regs[first + i] = body[1 + i];
   NoteRegisterWrites(first, &body[1], values, base);
@@ -208,14 +209,14 @@ void SetRegs(uint32_t base, const uint32_t* body, uint32_t count) {
 //
 // body: [0] function/space, [1] addr lo or reg offset, [2] addr hi,
 // [3] reference, [4] mask, [5] poll interval.
-void HandleWaitRegMem(const uint32_t* body, uint32_t count) {
+void HandleWaitRegMem(const u32* body, u32 count) {
   if (count < 5)
     return;
-  const uint32_t function = body[0] & 0x7;
+  const u32 function = body[0] & 0x7;
   const bool memory_space = ((body[0] >> 4) & 1) != 0;
-  const uint32_t reference = body[3], mask = body[4];
-  const auto passes = [&](uint32_t polled) {
-    const uint32_t a = polled & mask, b = reference & mask;
+  const u32 reference = body[3], mask = body[4];
+  const auto passes = [&](u32 polled) {
+    const u32 a = polled & mask, b = reference & mask;
     switch (function) {
       case 1:
         return a < b;
@@ -234,15 +235,15 @@ void HandleWaitRegMem(const uint32_t* body, uint32_t count) {
     }
   };
 
-  const volatile uint32_t* polled = nullptr;
+  const volatile u32* polled = nullptr;
   if (memory_space) {
-    const uint64_t address =
-        ((static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | body[1]) & ~3ull;
+    const u64 address =
+        ((static_cast<u64>(body[2] & 0xFFFF) << 32) | body[1]) & ~3ull;
     // Only where we are the producer. A poll on a word nothing of ours writes
     // can never be satisfied, and waiting out its timeout is pure loss.
     if (IsGuestAddress(address) && g_fence_labels.Contains(address) &&
         utl::isMemoryRangeMapped(reinterpret_cast<const void*>(address), 4))
-      polled = reinterpret_cast<const volatile uint32_t*>(address);
+      polled = reinterpret_cast<const volatile u32*>(address);
   } else if ((body[1] & 0xFFFF) < kRegFileSize) {
     polled = &g_regs[body[1] & 0xFFFF];
   }
@@ -271,18 +272,18 @@ void HandleWaitRegMem(const uint32_t* body, uint32_t count) {
 // SRC_SEL[30:29], DST_SEL[21:20]; sel 0/3 = memory address, 2 = immediate data
 // (a fill, not a copy); only true mem->mem is copied.
 void HandleDmaData(rhi::Renderer& renderer,
-                   const uint32_t* body,
-                   uint32_t count) {
+                   const u32* body,
+                   u32 count) {
   if (count < 6)
     return;
-  const uint32_t control = body[0];
-  const uint32_t src_sel = (control >> 29) & 0x3;
-  const uint32_t dst_sel = (control >> 20) & 0x3;
-  const uint64_t src =
-      (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | body[1];
-  const uint64_t dst =
-      (static_cast<uint64_t>(body[4] & 0xFFFF) << 32) | body[3];
-  const uint32_t bytes = body[5] & 0x1FFFFF;
+  const u32 control = body[0];
+  const u32 src_sel = (control >> 29) & 0x3;
+  const u32 dst_sel = (control >> 20) & 0x3;
+  const u64 src =
+      (static_cast<u64>(body[2] & 0xFFFF) << 32) | body[1];
+  const u64 dst =
+      (static_cast<u64>(body[4] & 0xFFFF) << 32) | body[3];
+  const u32 bytes = body[5] & 0x1FFFFF;
   const bool src_is_memory = src_sel == 0 || src_sel == 3;
   const bool dst_is_memory = dst_sel == 0 || dst_sel == 3;
   // Only copy between REAL guest memory: the sel bits report "memory" even for
@@ -290,7 +291,7 @@ void HandleDmaData(rhi::Renderer& renderer,
   // address space and segfault. Every real guest allocation sits far above
   // 16 MiB, so that floor excludes the on-chip GDS/low targets while keeping
   // texture/buffer uploads.
-  const auto addressable = [](uint64_t address) {
+  const auto addressable = [](u64 address) {
     return address >= 0x1000000ull && address < kGuestEnd;
   };
   bool copied = false;
@@ -315,19 +316,19 @@ void HandleDmaData(rhi::Renderer& renderer,
 // on dst_sel: a memory write resolves to a real guest label address, while a
 // register write yields a tiny offset IsLabelAddress rejects.
 // body: control, dstLo, dstHi, data...
-void HandleWriteData(const uint32_t* body, uint32_t count) {
+void HandleWriteData(const u32* body, u32 count) {
   if (count >= 3)
     TraceAddrWatch("WRITE_DATA",
-                   (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | body[1],
+                   (static_cast<u64>(body[2] & 0xFFFF) << 32) | body[1],
                    (count - 3) * 4u, count >= 4 ? body[3] : 0,
                    /*max_lines=*/12);
   if (count < 4)
     return;
-  const uint64_t address =
-      (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
-  const uint32_t dwords = count - 3;
+  const u64 address =
+      (static_cast<u64>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
+  const u32 dwords = count - 3;
   if (IsLabelAddress(address) &&
-      IsLabelAddress(address + (uint64_t)dwords * 4)) {
+      IsLabelAddress(address + (u64)dwords * 4)) {
     std::memcpy(reinterpret_cast<void*>(address), &body[3], (size_t)dwords * 4);
     g_fence_labels.Note(address);
   }
@@ -335,60 +336,60 @@ void HandleWriteData(const uint32_t* body, uint32_t count) {
 }
 
 // body: eventCtrl, addrLo, addrHi+sel, dataLo, dataHi
-void HandleEventWriteEop(const uint32_t* body, uint32_t count) {
+void HandleEventWriteEop(const u32* body, u32 count) {
   if (count >= 3)
     TraceAddrWatch("EVENT_WRITE_EOP",
-                   (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | body[1], 8,
+                   (static_cast<u64>(body[2] & 0xFFFF) << 32) | body[1], 8,
                    count >= 4 ? body[3] : 0, /*max_lines=*/8);
   if (count < 4)
     return;
-  const uint64_t address =
-      (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
-  const uint64_t value =
-      static_cast<uint64_t>(body[3]) |
-      (static_cast<uint64_t>(count >= 5 ? body[4] : 0) << 32);
+  const u64 address =
+      (static_cast<u64>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
+  const u64 value =
+      static_cast<u64>(body[3]) |
+      (static_cast<u64>(count >= 5 ? body[4] : 0) << 32);
   WriteEventLabel("EOP", address, (body[2] >> 29) & 0x7, value);
 }
 
 // body: eventCtrl, selBits, addrLo, addrHi, dataLo, dataHi
-void HandleReleaseMem(const uint32_t* body, uint32_t count) {
+void HandleReleaseMem(const u32* body, u32 count) {
   if (count >= 4)
     TraceAddrWatch("RELEASE_MEM",
-                   (static_cast<uint64_t>(body[3] & 0xFFFF) << 32) | body[2], 8,
+                   (static_cast<u64>(body[3] & 0xFFFF) << 32) | body[2], 8,
                    count >= 5 ? body[4] : 0, /*max_lines=*/8);
   if (count < 5)
     return;
-  const uint64_t address =
-      (static_cast<uint64_t>(body[3] & 0xFFFF) << 32) | (body[2] & ~0x3u);
-  const uint64_t value =
-      static_cast<uint64_t>(body[4]) |
-      (static_cast<uint64_t>(count >= 6 ? body[5] : 0) << 32);
+  const u64 address =
+      (static_cast<u64>(body[3] & 0xFFFF) << 32) | (body[2] & ~0x3u);
+  const u64 value =
+      static_cast<u64>(body[4]) |
+      (static_cast<u64>(count >= 6 ? body[5] : 0) << 32);
   WriteEventLabel("RELEASE_MEM", address, (body[1] >> 29) & 0x7, value);
 }
 
 // body: eventCtrl, addrLo, addrHi+cmd, data
-void HandleEventWriteEos(const uint32_t* body, uint32_t count) {
+void HandleEventWriteEos(const u32* body, u32 count) {
   if (count >= 3)
     TraceAddrWatch("EVENT_WRITE_EOS",
-                   (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | body[1], 8,
+                   (static_cast<u64>(body[2] & 0xFFFF) << 32) | body[1], 8,
                    count >= 4 ? body[3] : 0, /*max_lines=*/8);
   if (count < 4)
     return;
-  const uint64_t address =
-      (static_cast<uint64_t>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
+  const u64 address =
+      (static_cast<u64>(body[2] & 0xFFFF) << 32) | (body[1] & ~0x3u);
   WriteLabel(address, body[3], false);
   TraceEosLabel(address, body[3]);
 }
 
 void HandleDrawPacket(rhi::Renderer& renderer,
-                      uint32_t op,
-                      const uint32_t* body,
-                      uint32_t count) {
+                      u32 op,
+                      const u32* body,
+                      u32 count) {
   g_total_draws.fetch_add(1);
   // Ahead of the renderer gate: the watch these can arm is a kernel one, and a
   // run whose device failed to come up is when register state is worth having.
-  const uint32_t frame = g_presented_frames + 1;
-  const uint64_t ps_addr = g_regs.ShaderAddr(mmSPI_SHADER_PGM_LO_PS);
+  const u32 frame = g_presented_frames + 1;
+  const u64 ps_addr = g_regs.ShaderAddr(mmSPI_SHADER_PGM_LO_PS);
   MaybeArmRootWriteWatch(g_regs, ps_addr, frame);
   TraceRegisterSources(g_regs, ps_addr, frame);
   TraceFirstTexturedPs(g_regs, ps_addr);
@@ -419,7 +420,7 @@ void HandleDrawPacket(rhi::Renderer& renderer,
   TraceDrawRegisters(g_regs, op, body, count);
 }
 
-bool IsDraw(uint32_t op) {
+bool IsDraw(u32 op) {
   return op == IT_DRAW_INDEX_AUTO || op == IT_DRAW_INDEX_2 ||
          op == IT_DRAW_INDEX_OFFSET_2 || op == IT_DRAW_INDIRECT ||
          op == IT_DRAW_INDEX_INDIRECT || op == IT_DRAW_INDEX_MULTI_AUTO;
@@ -432,43 +433,43 @@ bool IsDraw(uint32_t op) {
 // non-zero ib_size whose GPU address sits in the guest range and is actually
 // mapped. Any failure returns false so the caller skips the chain instead of
 // dereferencing garbage.
-bool ResolveIndirectBuffer(const uint32_t* body,
-                           uint32_t count,
-                           const uint32_t*& out,
-                           uint32_t& out_dwords) {
+bool ResolveIndirectBuffer(const u32* body,
+                           u32 count,
+                           const u32*& out,
+                           u32& out_dwords) {
   out_dwords = 0;
   if (count < 3)
     return false;
-  const uint64_t address =
-      (static_cast<uint64_t>(body[1] & 0xFF) << 32) | body[0];
-  const uint32_t dwords = body[2] & 0xFFFFF;
-  const uint64_t bytes = static_cast<uint64_t>(dwords) * 4;
+  const u64 address =
+      (static_cast<u64>(body[1] & 0xFF) << 32) | body[0];
+  const u32 dwords = body[2] & 0xFFFFF;
+  const u64 bytes = static_cast<u64>(dwords) * 4;
   if (!IsGuestRange(address, bytes))
     return false;
   const void* p = reinterpret_cast<const void*>(address);
   if (!utl::isMemoryRangeMapped(p, bytes))
     return false;
-  out = static_cast<const uint32_t*>(p);
+  out = static_cast<const u32*>(p);
   out_dwords = dwords;
   return true;
 }
 
-uint32_t WalkDcb(rhi::Renderer& renderer,
-                 const uint32_t* p,
-                 uint32_t words,
-                 uint32_t depth,
+u32 WalkDcb(rhi::Renderer& renderer,
+                 const u32* p,
+                 u32 words,
+                 u32 depth,
                  bool dump);
 
 // Walk one CCB (CE stream), recursing into any chained indirect buffers at
 // `depth`. The CE runs ahead of the draw engine: it fills its on-chip RAM and
 // dumps it to the guest memory the DE's draws then read as constant buffers.
 void WalkCcb(rhi::Renderer& renderer,
-             const uint32_t* p,
-             uint32_t words,
-             uint32_t depth) {
-  uint32_t i = 0;
+             const u32* p,
+             u32 words,
+             u32 depth) {
+  u32 i = 0;
   while (i < words) {
-    const uint32_t hdr = p[i];
+    const u32 hdr = p[i];
     const Pm4Type type = Pm4TypeOf(hdr);
     if (type != Pm4Type::kType3) {
       if (type == Pm4Type::kType2 || hdr == 0)
@@ -479,8 +480,8 @@ void WalkCcb(rhi::Renderer& renderer,
         break;  // type-1 desync
       continue;
     }
-    const uint32_t op = Pm4Opcode(hdr), count = Pm4Count(hdr);
-    const uint32_t* body = &p[i + 1];
+    const u32 op = Pm4Opcode(hdr), count = Pm4Count(hdr);
+    const u32* body = &p[i + 1];
     if (i + 1 + count > words)
       break;
     NoteCcbPacket(op);
@@ -488,8 +489,8 @@ void WalkCcb(rhi::Renderer& renderer,
       case IT_WRITE_CONST_RAM: {  // body[0] = byte offset, body[1..] = data
         if (!kCeOn)
           break;
-        const uint32_t offset = body[0] & 0xFFFF;
-        const uint32_t dwords = count > 1 ? count - 1 : 0;
+        const u32 offset = body[0] & 0xFFFF;
+        const u32 dwords = count > 1 ? count - 1 : 0;
         const bool fits = g_const_ram.Fits(offset, dwords);
         if (fits)
           g_const_ram.Write(offset, &body[1], dwords);
@@ -500,10 +501,10 @@ void WalkCcb(rhi::Renderer& renderer,
       case IT_LOAD_CONST_RAM: {  // addrLo, addrHi, num_dwords, byte offset
         if (!kCeOn || count < 4)
           break;
-        const uint64_t address =
-            (static_cast<uint64_t>(body[1] & 0xFFFF) << 32) | body[0];
-        const uint32_t dwords = body[2] & 0x7FFF, offset = body[3] & 0xFFFF;
-        const bool in_guest = IsGuestRange(address, (uint64_t)dwords * 4);
+        const u64 address =
+            (static_cast<u64>(body[1] & 0xFFFF) << 32) | body[0];
+        const u32 dwords = body[2] & 0x7FFF, offset = body[3] & 0xFFFF;
+        const bool in_guest = IsGuestRange(address, (u64)dwords * 4);
         const bool fits = g_const_ram.Fits(offset, dwords);
         if (in_guest && fits)
           g_const_ram.Write(offset, reinterpret_cast<const void*>(address),
@@ -513,17 +514,17 @@ void WalkCcb(rhi::Renderer& renderer,
             !in_guest ? "addr-not-guest"
             : !fits   ? "off+n>ceram"
                       : "ok",
-            in_guest ? *reinterpret_cast<const uint32_t*>(address) : 0);
+            in_guest ? *reinterpret_cast<const u32*>(address) : 0);
         break;
       }
       case IT_DUMP_CONST_RAM:
       case IT_DUMP_CONST_RAM_OFFSET: {  // offset, num_dwords, addrLo, addrHi
         if (!kCeOn || count < 4)
           break;
-        const uint32_t offset = body[0] & 0xFFFF, dwords = body[1] & 0x7FFF;
-        const uint64_t address =
-            (static_cast<uint64_t>(body[3] & 0xFFFF) << 32) | body[2];
-        const bool in_guest = IsGuestRange(address, (uint64_t)dwords * 4);
+        const u32 offset = body[0] & 0xFFFF, dwords = body[1] & 0x7FFF;
+        const u64 address =
+            (static_cast<u64>(body[3] & 0xFFFF) << 32) | body[2];
+        const bool in_guest = IsGuestRange(address, (u64)dwords * 4);
         const bool fits = g_const_ram.Fits(offset, dwords);
         if (in_guest && fits)
           g_const_ram.Read(offset, reinterpret_cast<void*>(address), dwords);
@@ -542,8 +543,8 @@ void WalkCcb(rhi::Renderer& renderer,
       case IT_INDIRECT_BUFFER: {
         // The CE can chain further const buffers; follow them so chained
         // WRITE/LOAD/DISPATCH work is not silently dropped.
-        const uint32_t* chain = nullptr;
-        uint32_t chain_dwords = 0;
+        const u32* chain = nullptr;
+        u32 chain_dwords = 0;
         if (depth < kMaxIbDepth &&
             ResolveIndirectBuffer(body, count, chain, chain_dwords)) {
           if (op == IT_INDIRECT_BUFFER_CNST)
@@ -563,15 +564,15 @@ void WalkCcb(rhi::Renderer& renderer,
 // Walk one DCB (DE stream), issuing draws and dispatches and recursing into any
 // chained IT_INDIRECT_BUFFER at `depth`. Returns the walk position (dwords
 // consumed) so the top-level caller can report how far it got.
-uint32_t WalkDcb(rhi::Renderer& renderer,
-                 const uint32_t* p,
-                 uint32_t words,
-                 uint32_t depth,
+u32 WalkDcb(rhi::Renderer& renderer,
+                 const u32* p,
+                 u32 words,
+                 u32 depth,
                  bool dump) {
   const bool time_packets = WantPacketCost();
-  uint32_t i = 0;
+  u32 i = 0;
   while (i < words) {
-    const uint32_t hdr = p[i];
+    const u32 hdr = p[i];
     const Pm4Type type = Pm4TypeOf(hdr);
     if (type == Pm4Type::kType2 || hdr == 0) {
       // Type-2 NOPs and the zero-dword alignment padding Gnm sprinkles between
@@ -591,10 +592,10 @@ uint32_t WalkDcb(rhi::Renderer& renderer,
       // in hdr[29:16]+1) directly into the register file. Treating this as a
       // desync and stopping dropped every later draw (the room floor) in any
       // command buffer that used type-0.
-      const uint32_t count = Pm4Count(hdr);
-      const uint32_t base = Pm4Type0Reg(hdr);  // absolute register offset
-      const uint32_t available = std::min(count, words - i - 1);
-      for (uint32_t k = 0; k < available; k++)
+      const u32 count = Pm4Count(hdr);
+      const u32 base = Pm4Type0Reg(hdr);  // absolute register offset
+      const u32 available = std::min(count, words - i - 1);
+      for (u32 k = 0; k < available; k++)
         if (base + k < kRegFileSize)
           g_regs[base + k] = p[i + 1 + k];
       NoteRegisterWrites(base, &p[i + 1], available, 0);
@@ -602,13 +603,13 @@ uint32_t WalkDcb(rhi::Renderer& renderer,
       continue;
     }
     if (type != Pm4Type::kType3) {
-      TraceDesync(i, words, static_cast<uint32_t>(type), hdr, /*force=*/dump);
+      TraceDesync(i, words, static_cast<u32>(type), hdr, /*force=*/dump);
       break;  // a type-1 header is a genuine desync
     }
 
-    const uint32_t op = Pm4Opcode(hdr);
-    const uint32_t count = Pm4Count(hdr);  // body dword count
-    const uint32_t* body = &p[i + 1];
+    const u32 op = Pm4Opcode(hdr);
+    const u32 count = Pm4Count(hdr);  // body dword count
+    const u32* body = &p[i + 1];
     NotePacket(op);
     const auto op_start = time_packets
                               ? std::chrono::steady_clock::now()
@@ -641,14 +642,14 @@ uint32_t WalkDcb(rhi::Renderer& renderer,
       case IT_INDEX_BASE:  // index buffer base (byte address) lo/hi
         if (count >= 2)
           g_index.base =
-              (static_cast<uint64_t>(body[1] & 0xFF) << 32) | body[0];
+              (static_cast<u64>(body[1] & 0xFF) << 32) | body[0];
         break;
       case IT_SET_BASE:
         // base_index 1 = DRAW_INDIRECT_BASE: where the indirect draws read
         // their argument structs from. body: baseIndex, addrLo, addrHi.
         if (count >= 3 && (body[0] & 0xF) == 1)
           g_index.indirect_base =
-              (static_cast<uint64_t>(body[2] & 0xFF) << 32) | (body[1] & ~0x3u);
+              (static_cast<u64>(body[2] & 0xFF) << 32) | (body[1] & ~0x3u);
         break;
       case IT_NUM_INSTANCES:
         g_index.num_instances = (count >= 1 && body[0]) ? body[0] : 1;
@@ -673,8 +674,8 @@ uint32_t WalkDcb(rhi::Renderer& renderer,
         break;
       case IT_INDIRECT_BUFFER:
       case IT_INDIRECT_BUFFER_CNST: {  // chained buffer (nested CMDBUF)
-        const uint32_t* chain = nullptr;
-        uint32_t chain_dwords = 0;
+        const u32* chain = nullptr;
+        u32 chain_dwords = 0;
         const bool followed =
             depth < kMaxIbDepth &&
             ResolveIndirectBuffer(body, count, chain, chain_dwords);
@@ -740,7 +741,7 @@ void StartRendererOnce(rhi::Renderer& renderer) {
   rhi::Init(renderer);
   // The resource replay reads descriptor tables out of guest memory a compute
   // dispatch may still own; it is below the renderer, so it cannot ask itself.
-  gcn::g_flush_guest_range = [](uint64_t address, uint64_t bytes) {
+  gcn::g_flush_guest_range = [](u64 address, u64 bytes) {
     rhi::FlushCsWritesRange(rhi::DefaultRenderer(), address, bytes);
   };
 }
@@ -756,7 +757,7 @@ void SetPs4NeoMode(bool enabled) {
   gcn::SetDefaultIsaMode(enabled ? gcn::IsaMode::kNeo : gcn::IsaMode::kBase);
 }
 
-void EndFrame(uint64_t scanout_base) {
+void EndFrame(u64 scanout_base) {
   std::lock_guard<std::mutex> lock(g_mutex);
   // New frame -> shader code may have been rewritten; let CachedProgram
   // revalidate each address once next frame instead of once per draw.
@@ -769,17 +770,17 @@ void EndFrame(uint64_t scanout_base) {
   g_presented_frames++;
 }
 
-void SubmitCcb(const void* ccb, uint32_t size_bytes) {
+void SubmitCcb(const void* ccb, u32 size_bytes) {
   if (!ccb || size_bytes < 4)
     return;
   std::lock_guard<std::mutex> lock(g_mutex);
-  const uint32_t words = size_bytes / 4;
+  const u32 words = size_bytes / 4;
   TraceCcbSubmit(size_bytes, words);
-  WalkCcb(rhi::DefaultRenderer(), static_cast<const uint32_t*>(ccb), words, 0);
+  WalkCcb(rhi::DefaultRenderer(), static_cast<const u32*>(ccb), words, 0);
   TraceCcbHistogram(words);
 }
 
-void SubmitDcb(const void* dcb, uint32_t size_bytes) {
+void SubmitDcb(const void* dcb, u32 size_bytes) {
   if (!dcb || size_bytes < 4)
     return;
   ScopedWalkTimer timer;
@@ -794,14 +795,14 @@ void SubmitDcb(const void* dcb, uint32_t size_bytes) {
   rhi::Renderer& renderer = rhi::DefaultRenderer();
   StartRendererOnce(renderer);
 
-  const auto* p = static_cast<const uint32_t*>(dcb);
-  const uint32_t words = size_bytes / 4;
-  const uint64_t submission = g_total_submits.fetch_add(1) + 1;
+  const auto* p = static_cast<const u32*>(dcb);
+  const u32 words = size_bytes / 4;
+  const u64 submission = g_total_submits.fetch_add(1) + 1;
   TraceSubmit(dcb, size_bytes, words, submission, g_total_draws.load());
   const bool dump = ShouldDumpDcb(size_bytes);
   TraceDcbStat(words);
 
-  const uint32_t walked = WalkDcb(renderer, p, words, 0, dump);
+  const u32 walked = WalkDcb(renderer, p, words, 0, dump);
   if (dump)
     TraceDcbWalkResult(p, words, walked);
   MaybeDumpOpcodeHistogram(walked, words);

@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdlib>
 #include <cstdio>
@@ -45,7 +46,7 @@ int PS4ABI sys_dynlib_dlopen(const char *) {
   return -SysError::eNOSYS;
 }
 
-int PS4ABI sys_dynlib_get_info(uint32_t handle, dynlib_info *dyn_info) {
+int PS4ABI sys_dynlib_get_info(u32 handle, dynlib_info *dyn_info) {
   if (!dyn_info)
     return -SysError::eFAULT;
   if (dyn_info->size != sizeof(*dyn_info))
@@ -75,7 +76,7 @@ int PS4ABI sys_dynlib_get_info(uint32_t handle, dynlib_info *dyn_info) {
   return 0;
 }
 
-int PS4ABI sys_dynlib_get_info_ex(uint32_t handle, int32_t ukn /*always 1*/,
+int PS4ABI sys_dynlib_get_info_ex(u32 handle, i32 ukn /*always 1*/,
                                   dynlib_info_ex *dyn_info) {
   ps5MaybeInterposePthreadAlloc();  // frequent main-thread init call (see load_prx)
   if (!dyn_info)
@@ -132,13 +133,13 @@ int PS4ABI sys_dynlib_get_info_ex(uint32_t handle, int32_t ukn /*always 1*/,
   return 0;
 }
 
-int PS4ABI sys_dynlib_dlsym(uint32_t handle, const char *symName, void **sym) {
+int PS4ABI sys_dynlib_dlsym(u32 handle, const char *symName, void **sym) {
   auto mod = proc::getActive()->getModule(handle);
   if (!mod)
     return -1;
 
   char nameenc[12]{};
-  runtime::encode_nid(symName, reinterpret_cast<uint8_t *>(&nameenc));
+  runtime::encode_nid(symName, reinterpret_cast<u8 *>(&nameenc));
 
   auto &modName = mod->getInfo().name;
 
@@ -168,7 +169,7 @@ int PS4ABI sys_dynlib_dlsym(uint32_t handle, const char *symName, void **sym) {
   return 0;
 }
 
-int PS4ABI sys_dynlib_get_obj_member(uint32_t handle, uint8_t index,
+int PS4ABI sys_dynlib_get_obj_member(u32 handle, u8 index,
                                      void **value) {
   auto mod = proc::getActive()->getModule(handle);
   if (!mod)
@@ -214,7 +215,7 @@ int PS4ABI sys_dynlib_get_proc_param(void **data, size_t *size) {
   return 0;
 }
 
-int PS4ABI sys_dynlib_get_list(uint32_t *handles, size_t maxCount,
+int PS4ABI sys_dynlib_get_list(u32 *handles, size_t maxCount,
                                size_t *count) {
   auto *proc = proc::getActive();
   auto &list = proc->getModuleList();
@@ -266,8 +267,8 @@ int PS4ABI sys_dynlib_get_list(uint32_t *handles, size_t maxCount,
 // syscall 594. libkernel's _sceKernelLoadStartModule path calls this with
 // rdi=path, rsi=flags, rdx=&handle. It expects the loaded module's handle
 // written to *pHandle and 0 returned on success.
-int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
-                               uint64_t arg4, const void *opt, int64_t *pRes) {
+int PS4ABI sys_dynlib_load_prx(const char *path, u64 flags, int *pHandle,
+                               u64 arg4, const void *opt, i64 *pRes) {
   // Main-thread module loading runs after libc init (so libkernel's pthread-state
   // allocator pointer is populated) but before the multithreaded malloc-mutex
   // bootstrap that would recurse; interpose it here (idempotent, PS5+native).
@@ -383,20 +384,20 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
       // and set f0=4. Finally set the scePthreadOnce guard so the title's first
       // sceVideoOutOpen skips re-running the ctor and reads our connected slot.
       if (kVoLleFix) {
-        uint8_t *base = mod->getInfo().base;
+        u8 *base = mod->getInfo().base;
         BASE_LOGI("volle", "running libSceVideoOut ctor (+0xd530)");
         cpu::backend().runGuestFunction(baseAddr + 0xd530, 0, 0, 0);
-        int32_t idx = *reinterpret_cast<int32_t *>(base + 0x1cb40);
-        uint32_t f0c = *reinterpret_cast<uint32_t *>(base + 0x1cb50);
+        i32 idx = *reinterpret_cast<i32 *>(base + 0x1cb40);
+        u32 f0c = *reinterpret_cast<u32 *>(base + 0x1cb50);
         BASE_LOGI("volle", "after ctor: idx={} cfg[0].f0={:#x}", idx, f0c);
         if (idx >= 1 && idx < 8) {
-          uint8_t *cfg0 = base + 0x1cb50;
-          uint8_t *cfgi = base + 0x1cb50 + (size_t)idx * 0x140;
+          u8 *cfg0 = base + 0x1cb50;
+          u8 *cfgi = base + 0x1cb50 + (size_t)idx * 0x140;
           std::memcpy(cfgi, cfg0, 0x140);
-          *reinterpret_cast<uint32_t *>(cfgi) = 4;  // main display, connected
+          *reinterpret_cast<u32 *>(cfgi) = 4;  // main display, connected
           // scePthreadOnce control @ +0x1cb18: mark "already run" so Open skips it.
-          *reinterpret_cast<uint32_t *>(base + 0x1cb18) = 1;
-          uint64_t op = *reinterpret_cast<uint64_t *>(cfgi + 0x48);
+          *reinterpret_cast<u32 *>(base + 0x1cb18) = 1;
+          u64 op = *reinterpret_cast<u64 *>(cfgi + 0x48);
           BASE_LOGI("volle",
                     "connected cfg[{}] (f0=4), once-guard set; "
                     "cfg[idx].op@+0x48 = {:#x} (base+{:#x})",
@@ -418,7 +419,7 @@ int PS4ABI sys_dynlib_load_prx(const char *path, uint64_t flags, int *pHandle,
 // We never reclaim a loaded module (its code/data stay mapped for the process
 // lifetime), so unload is a success no-op: the guest's module_stop has already
 // run and it just wants the bookkeeping to succeed.
-int PS4ABI sys_dynlib_unload_prx(uint32_t handle) {
+int PS4ABI sys_dynlib_unload_prx(u32 handle) {
   BASE_LOGI("unload_prx", "handle={:#x} (no-op)", handle);
   return 0;
 }
@@ -430,14 +431,14 @@ int PS4ABI sys_dynlib_unload_prx(uint32_t handle) {
 // init-image-populated block. tls_index = {module_id, offset}; the result is
 // block + offset. Single boot thread => one block per module, cached.
 struct tls_index {
-  uint64_t module_id;
-  uint64_t offset;
+  u64 module_id;
+  u64 offset;
 };
 
 void *PS4ABI guest_tls_get_addr(tls_index *ti) {
   // per-thread dynamic TLS blocks (module index -> block). Each thread gets its
   // own copy of every module's __thread storage, like a real DTV.
-  static thread_local std::unordered_map<uint32_t, uint8_t *> t_blocks;
+  static thread_local std::unordered_map<u32, u8 *> t_blocks;
 
   auto it = t_blocks.find(ti->module_id);
   if (it != t_blocks.end())
@@ -450,7 +451,7 @@ void *PS4ABI guest_tls_get_addr(tls_index *ti) {
       continue;
 
     size_t sz = info.tlsSizeMem ? info.tlsSizeMem : 1;
-    auto *block = static_cast<uint8_t *>(std::calloc(1, sz));
+    auto *block = static_cast<u8 *>(std::calloc(1, sz));
     if (info.tlsAddr && info.tlsSizeFile)
       std::memcpy(block, info.tlsAddr, info.tlsSizeFile);
     t_blocks[ti->module_id] = block;

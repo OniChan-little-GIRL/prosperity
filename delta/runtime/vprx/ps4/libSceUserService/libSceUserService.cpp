@@ -1,4 +1,5 @@
 #include "libSceUserService.h"
+#include "base/arch.h"
 
 #include <cstdint>
 #include <cstring>
@@ -8,8 +9,8 @@
 // associate a controller and proceed past the "press start" sign-in. We report
 // one user (id 1) logged in and deliver exactly one LOGIN event.
 namespace {
-constexpr int32_t kUserId = 1;
-constexpr int32_t kInvalidUserId = -1;
+constexpr i32 kUserId = 1;
+constexpr i32 kInvalidUserId = -1;
 constexpr int kNoEvent = 0x80960007;  // SCE_USER_SERVICE_ERROR_NO_EVENT
 bool g_loginDelivered = false;
 }  // namespace
@@ -18,15 +19,15 @@ bool g_loginDelivered = false;
 // client (whose login round-trip to a non-existent system daemon spins forever
 // once a controller appears).
 int PS4ABI sceUserServiceInitialize(const void *params) { return 0; }
-int PS4ABI sceUserServiceInitialize2(uint32_t a, int64_t b, const void *c) {
+int PS4ABI sceUserServiceInitialize2(u32 a, i64 b, const void *c) {
   return 0;
 }
 int PS4ABI sceUserServiceTerminate() { return 0; }
 
 int PS4ABI sceUserServiceGetEvent(void *eventOut) {
   struct Event {
-    int32_t eventType;  // 0 = LOGIN, 1 = LOGOUT
-    int32_t userId;
+    i32 eventType;  // 0 = LOGIN, 1 = LOGOUT
+    i32 userId;
   };
   auto *e = static_cast<Event *>(eventOut);
   if (!e)
@@ -42,7 +43,7 @@ int PS4ABI sceUserServiceGetEvent(void *eventOut) {
 
 int PS4ABI sceUserServiceGetLoginUserIdList(void *listOut) {
   struct List {
-    int32_t userId[4];
+    i32 userId[4];
   };
   auto *l = static_cast<List *>(listOut);
   if (!l)
@@ -52,19 +53,19 @@ int PS4ABI sceUserServiceGetLoginUserIdList(void *listOut) {
   return 0;
 }
 
-int PS4ABI sceUserServiceGetInitialUser(int32_t *userId) {
+int PS4ABI sceUserServiceGetInitialUser(i32 *userId) {
   if (userId)
     *userId = kUserId;
   return 0;
 }
 
-int PS4ABI sceUserServiceGetForegroundUser(int32_t *userId) {
+int PS4ABI sceUserServiceGetForegroundUser(i32 *userId) {
   if (userId)
     *userId = kUserId;
   return 0;
 }
 
-int PS4ABI sceUserServiceGetUserName(int32_t userId, char *name, uint64_t size) {
+int PS4ABI sceUserServiceGetUserName(i32 userId, char *name, u64 size) {
   if (name && size) {
     std::strncpy(name, "Player", size - 1);
     name[size - 1] = '\0';

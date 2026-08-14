@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -13,11 +14,11 @@ class consoleDevice : public device {
 public:
   consoleDevice(proc *);
 
-  bool init(const char *, uint32_t, uint32_t) override;
-  int64_t read(void *, size_t) override;
-  int64_t write(const void *, size_t n) override;
-  int64_t lseek(int64_t, int) override;
+  bool init(const char *, u32, u32) override;
+  i64 read(void *, size_t) override;
+  i64 write(const void *, size_t n) override;
+  i64 lseek(i64, int) override;
   int fstat(void *stat) override;
-  int32_t ioctl(uint32_t cmd, void *data) override;
+  i32 ioctl(u32 cmd, void *data) override;
 };
 } // namespace krnl

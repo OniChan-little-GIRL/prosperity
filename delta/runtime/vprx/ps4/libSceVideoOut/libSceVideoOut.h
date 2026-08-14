@@ -12,6 +12,7 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -23,10 +24,10 @@ extern "C" {
 int PS4ABI sceVideoOutOpen(int userId, int busType, int index, const void *param);
 int PS4ABI sceVideoOutClose(int handle);
 int PS4ABI sceVideoOutGetResolutionStatus(int handle, void *status);
-int PS4ABI sceVideoOutSetBufferAttribute(void *attribute, uint32_t pixelFormat,
-                                         uint32_t tilingMode, uint32_t aspectRatio,
-                                         uint32_t width, uint32_t height,
-                                         uint32_t pitchInPixel);
+int PS4ABI sceVideoOutSetBufferAttribute(void *attribute, u32 pixelFormat,
+                                         u32 tilingMode, u32 aspectRatio,
+                                         u32 width, u32 height,
+                                         u32 pitchInPixel);
 int PS4ABI sceVideoOutRegisterBuffers(int handle, int startIndex,
                                      void *const *addresses, int bufferNum,
                                      const void *attribute);
@@ -39,16 +40,16 @@ int PS4ABI sceVideoOutDeleteFlipEvent(int eqHandle, int handle);
 int PS4ABI sceVideoOutAddVblankEvent(int eqHandle, int handle, void *udata);
 int PS4ABI sceVideoOutGetEventCount(const void *event);
 int PS4ABI sceVideoOutGetEventId(const void *event);
-int PS4ABI sceVideoOutGetEventData(const void *event, int64_t *data);
+int PS4ABI sceVideoOutGetEventData(const void *event, i64 *data);
 
 // --- flip / vblank ---
 int PS4ABI sceVideoOutSubmitFlip(int handle, int bufferIndex, int flipMode,
-                                int64_t flipArg);
+                                i64 flipArg);
 // EOP-label variant of SubmitFlip (NID j8xl+92A0q4). The real libSceGnmDriver
 // calls this on its LLE flip path; same as SubmitFlip plus a GPU completion-label
 // pointer we don't need (we present synchronously).
 int PS4ABI sceVideoOutSubmitFlipEop(int handle, int bufferIndex, int flipMode,
-                                    int64_t flipArg, void *eopLabel);
+                                    i64 flipArg, void *eopLabel);
 int PS4ABI sceVideoOutGetFlipStatus(int handle, void *status);
 int PS4ABI sceVideoOutIsFlipPending(int handle);
 int PS4ABI sceVideoOutGetVblankStatus(int handle, void *status);

@@ -5,6 +5,7 @@
  */
 
 #include "gfx_audio.h"
+#include "base/arch.h"
 
 #if !defined(__ANDROID__)
 
@@ -28,7 +29,7 @@ namespace {
 
 struct Port {
   SDL_AudioStream *stream = nullptr;
-  uint32_t channels = 2;
+  u32 channels = 2;
   int bytesPerSample = 2;  // S16 = 2, F32 = 4
   float gain = 1.0f;
 };
@@ -36,11 +37,11 @@ struct Port {
 std::mutex g_mtx;
 std::vector<Port> g_ports;
 bool g_init = false;
-uint64_t g_framesOut = 0;
+u64 g_framesOut = 0;
 
 }  // namespace
 
-extern "C" int prosperity_audio_open(uint32_t freq, uint32_t channels, int isFloat) {
+extern "C" int prosperity_audio_open(u32 freq, u32 channels, int isFloat) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!g_init) {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
@@ -97,7 +98,7 @@ FILE *pcmFile(int handle, int channels, int bps) {
 }
 }  // namespace
 
-extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t frames) {
+extern "C" int prosperity_audio_output(int handle, const void *samples, u32 frames) {
   // Snapshot the port under the lock, then operate lock-free. The SDL stream is
   // owned by SDL (stable), and SDL_Get/PutAudioStreamData are thread-safe, so we
   // must NOT hold g_mtx across the backpressure sleep below: another thread can
@@ -118,7 +119,7 @@ extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t
     bytesPerSample = p.bytesPerSample;
     gain = p.gain;
   }
-  uint32_t bytes = frames * channels * static_cast<uint32_t>(bytesPerSample);
+  u32 bytes = frames * channels * static_cast<u32>(bytesPerSample);
   if (FILE *pf = pcmFile(handle, channels, bytesPerSample)) {
     std::fwrite(samples, 1, bytes, pf);
     std::fflush(pf);
@@ -130,11 +131,11 @@ extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t
   // Block here until the device queue drains below a small target so the producer
   // tracks playback. Bounded so a stalled/absent device (headless) can't hang the
   // thread: if it doesn't drain within ~a buffer's worth of time, fall through.
-  const uint32_t target = bytes * 3;  // keep ~3 buffers of latency
+  const u32 target = bytes * 3;  // keep ~3 buffers of latency
   int prevQ = -1;
   for (int i = 0; i < 64; i++) {
     int q = SDL_GetAudioStreamQueued(stream);  // thread-safe
-    if (q < 0 || static_cast<uint32_t>(q) <= target)
+    if (q < 0 || static_cast<u32>(q) <= target)
       break;
     // Only pace against a device that is actually consuming. If the queue isn't
     // shrinking (no real playback, e.g. headless/no audio device), don't block --
@@ -149,22 +150,22 @@ extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t
   // (no real playback to pace against, e.g. headless), drop this buffer rather than
   // accumulate seconds of delay.
   int queued = SDL_GetAudioStreamQueued(stream);
-  if (queued >= 0 && static_cast<uint32_t>(queued) < bytes * 8) {
+  if (queued >= 0 && static_cast<u32>(queued) < bytes * 8) {
     if (gain >= 0.999f) {
       SDL_PutAudioStreamData(stream, samples, static_cast<int>(bytes));
     } else {
       // Apply gain into a scratch copy so we never mutate guest memory.
-      static thread_local std::vector<uint8_t> scratch;
+      static thread_local std::vector<u8> scratch;
       scratch.resize(bytes);
-      uint32_t n = frames * channels;
+      u32 n = frames * channels;
       if (bytesPerSample == 4) {
         const float *src = static_cast<const float *>(samples);
         float *dst = reinterpret_cast<float *>(scratch.data());
-        for (uint32_t i = 0; i < n; i++) dst[i] = src[i] * gain;
+        for (u32 i = 0; i < n; i++) dst[i] = src[i] * gain;
       } else {
-        const int16_t *src = static_cast<const int16_t *>(samples);
-        int16_t *dst = reinterpret_cast<int16_t *>(scratch.data());
-        for (uint32_t i = 0; i < n; i++) dst[i] = static_cast<int16_t>(src[i] * gain);
+        const i16 *src = static_cast<const i16 *>(samples);
+        i16 *dst = reinterpret_cast<i16 *>(scratch.data());
+        for (u32 i = 0; i < n; i++) dst[i] = static_cast<i16>(src[i] * gain);
       }
       SDL_PutAudioStreamData(stream, scratch.data(), static_cast<int>(bytes));
     }
@@ -173,13 +174,13 @@ extern "C" int prosperity_audio_output(int handle, const void *samples, uint32_t
     // Peak level over this buffer (confirms real audio vs. silence -> tells PCM
     // working from a missing decode upstream).
     float peak = 0.f;
-    uint32_t n = frames * channels;
+    u32 n = frames * channels;
     if (bytesPerSample == 4) {
       const float *s = static_cast<const float *>(samples);
-      for (uint32_t i = 0; i < n; i++) { float a = s[i] < 0 ? -s[i] : s[i]; if (a > peak) peak = a; }
+      for (u32 i = 0; i < n; i++) { float a = s[i] < 0 ? -s[i] : s[i]; if (a > peak) peak = a; }
     } else {
-      const int16_t *s = static_cast<const int16_t *>(samples);
-      for (uint32_t i = 0; i < n; i++) { float a = (s[i] < 0 ? -s[i] : s[i]) / 32768.f; if (a > peak) peak = a; }
+      const i16 *s = static_cast<const i16 *>(samples);
+      for (u32 i = 0; i < n; i++) { float a = (s[i] < 0 ? -s[i] : s[i]) / 32768.f; if (a > peak) peak = a; }
     }
     BASE_LOGI("audio", "h={} ~{} frames out, queued={} peak={:.3f}", handle,
               (unsigned long)g_framesOut, queued, peak);
@@ -204,8 +205,8 @@ extern "C" void prosperity_audio_close(int handle) {
 
 #else  // __ANDROID__ : SDL is not linked into the gfx build; no-op for now.
 
-extern "C" int prosperity_audio_open(uint32_t, uint32_t, int) { return -1; }
-extern "C" int prosperity_audio_output(int, const void *, uint32_t frames) {
+extern "C" int prosperity_audio_open(u32, u32, int) { return -1; }
+extern "C" int prosperity_audio_output(int, const void *, u32 frames) {
   return static_cast<int>(frames);
 }
 extern "C" void prosperity_audio_volume(int, float) {}

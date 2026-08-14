@@ -10,6 +10,7 @@
  */
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -18,8 +19,8 @@ class randomDevice : public device {
 public:
   randomDevice(proc *);
 
-  int64_t read(void *buf, size_t len) override;
-  int64_t lseek(int64_t off, int whence) override;
+  i64 read(void *buf, size_t len) override;
+  i64 lseek(i64 off, int whence) override;
   int fstat(void *stat) override;
 };
 } // namespace krnl

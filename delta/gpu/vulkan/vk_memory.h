@@ -7,6 +7,7 @@
 // blocks; images requiring dedicated memory retain an exact allocation.
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 #include <unordered_set>
@@ -22,7 +23,7 @@ struct ImageAllocation {
   VkDeviceMemory memory = VK_NULL_HANDLE;
   VkDeviceSize offset = 0;
   VkDeviceSize size = 0;
-  uint32_t memory_type = 0;
+  u32 memory_type = 0;
   bool dedicated = false;
 };
 
@@ -41,7 +42,7 @@ class ImageMemoryPool {
   struct Block {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
-    uint32_t memory_type = 0;
+    u32 memory_type = 0;
     MemorySpanAllocator spans;
   };
 

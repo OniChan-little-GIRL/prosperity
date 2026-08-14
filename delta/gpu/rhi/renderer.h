@@ -20,6 +20,7 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 
 // Spelled from the delta root, the one include convention the layering check
@@ -50,7 +51,7 @@ bool Init(Renderer& renderer);
 // the render target at `scanout_base` (the flip buffer) and presents/dumps it.
 void BeginFrame(Renderer& renderer);
 void Draw(Renderer& renderer, const DrawInfo& d);
-void EndFrame(Renderer& renderer, uint64_t scanout_base);
+void EndFrame(Renderer& renderer, u64 scanout_base);
 
 // Run a compute dispatch on the GPU. Returns true if it executed, false if it
 // could not be set up (the caller then skips the dispatch, as before).
@@ -63,24 +64,24 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci);
 bool FlushCsWrites(Renderer& renderer);
 // Flush only dirty ranges overlapping [base, base+bytes), with the same result
 // contract as FlushCsWrites.
-bool FlushCsWritesRange(Renderer& renderer, uint64_t base, uint64_t bytes);
+bool FlushCsWritesRange(Renderer& renderer, u64 base, u64 bytes);
 
 // Monotonic count of compute-results-became-visible-in-guest-memory events
 // (a range writeback, or an executed batch of dispatches that write guest
 // memory directly). A cached copy of guest bytes taken at generation G is
 // current iff the generation still reads G and no dirty range overlaps it.
-uint64_t CsWritebackGeneration();
+u64 CsWritebackGeneration();
 // Whether any GPU-dirty compute range overlaps [base, base+bytes). O(1) when
 // nothing is dirty anywhere (the common case on the draw path).
-bool CsRangeDirtyOverlapping(uint64_t base, uint64_t bytes);
+bool CsRangeDirtyOverlapping(u64 base, u64 bytes);
 
 // A CP DMA immediate fill over guest memory. When the range covers a live
 // render target that is how the title clears it -- there is no clear packet on
 // this hardware -- so the target takes a pending clear with the filled value.
 void NoteMemoryFill(Renderer& renderer,
-                    uint64_t base,
-                    uint64_t bytes,
-                    uint32_t value);
+                    u64 base,
+                    u64 bytes,
+                    u32 value);
 
 // Does `addr` fall inside a compute staging range -- guest memory the renderer
 // snapshots and copies back? A guest fault on memory the guest alone should own
@@ -88,7 +89,7 @@ void NoteMemoryFill(Renderer& renderer,
 // word can be attributed to (or cleared of) the compute writeback without a
 // second run. Returns false if no range covers it; otherwise fills `out` with
 // the range's base, size and staging state.
-bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size);
+bool DescribeCsRangeCovering(u64 addr, char* out, size_t out_size);
 
 // The process-wide renderer instance the command processors drive. The
 // composition root (main/dapi) Init()s it once; the HLE submit paths reach it

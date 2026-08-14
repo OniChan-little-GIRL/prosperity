@@ -9,6 +9,7 @@
  */
 
 #include "device.h"
+#include "base/arch.h"
 
 namespace krnl {
 class proc;
@@ -17,6 +18,6 @@ class dipswDevice : public device {
 public:
   dipswDevice(proc *);
 
-  int32_t ioctl(uint32_t command, void *args) override;
+  i32 ioctl(u32 command, void *args) override;
 };
 }

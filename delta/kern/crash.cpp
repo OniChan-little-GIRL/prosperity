@@ -8,6 +8,7 @@
 
 #define _GNU_SOURCE
 #include <atomic>
+#include "base/arch.h"
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -46,7 +47,7 @@ namespace {
 DELTA_OPTION(uintptr_t, kBrkTrace, "DELTA_GUEST_BRK_TRACE", 0);
 DELTA_OPTION(const char *, kBrkDump, "DELTA_GUEST_BRK_DUMP", nullptr);
 DELTA_OPTION(uintptr_t, kBrkArm, "DELTA_GUEST_BRK_ARM", 0);
-DELTA_OPTION(uint32_t, kBrkArmPos, "DELTA_GUEST_BRK_ARM_POS", 0);
+DELTA_OPTION(u32, kBrkArmPos, "DELTA_GUEST_BRK_ARM_POS", 0);
 DELTA_OPTION(const char *, kBrkPeek, "DELTA_GUEST_BRK_PEEK", nullptr);
 DELTA_OPTION(const char *, kBrkWprot, "DELTA_GUEST_BRK_WPROT", nullptr);
 DELTA_OPTION(const char *, kCrashPeek, "DELTA_CRASH_PEEK", nullptr);
@@ -59,7 +60,7 @@ DELTA_OPTION(bool, kRdoffTrace, "DELTA_RDOFF_TRACE", false);
 }  // namespace
 
 namespace krnl {
-const char *syscall_getname(uint32_t idx); // name_table.cpp
+const char *syscall_getname(u32 idx); // name_table.cpp
 
 // Resolve a host address to "<module>+0x<off> (<seg>)" by scanning loaded module
 // images, so a guest fault points straight at a guest module offset.
@@ -128,16 +129,16 @@ static void backtrace(uintptr_t rbp) {
 // rbp;r15;r14;r13;r12;rbx;rax with NO further stack alloc before the fault, so
 //   [rsp+0x18]=saved r13=TRACKER   [rsp+0x20]=saved r14=KEY.
 namespace {
-inline bool trkMincore(uint64_t va) {
+inline bool trkMincore(u64 va) {
   if (va < 0x10000) return false;
   long pg = sysconf(_SC_PAGESIZE);
   unsigned char vec = 0;
-  void *pa = reinterpret_cast<void *>(va & ~((uint64_t)pg - 1));
+  void *pa = reinterpret_cast<void *>(va & ~((u64)pg - 1));
   return mincore(pa, 1, &vec) == 0;
 }
-inline bool trkRd64(uint64_t va, uint64_t &out) {
+inline bool trkRd64(u64 va, u64 &out) {
   if (!trkMincore(va) || !trkMincore(va + 7)) return false;
-  out = *reinterpret_cast<const uint64_t *>(va);
+  out = *reinterpret_cast<const u64 *>(va);
   return true;
 }
 // Re-walk the title's size-ordered free tree the way the faulting insert does,
@@ -149,17 +150,17 @@ inline bool trkRd64(uint64_t va, uint64_t &out) {
 // tree head and doubles as the loop's sentinel; a node points at chunk+0x10, so
 // its size word is at node-8; children are node[0] and node[1]; the branch taken
 // is `newsz < cursz ? 0 : 1`, and an exact size match ends the walk.
-void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
-  const uint64_t sentinel = state + 0x80;
+void sotcWalkFreeTree(u64 state, u64 newsz) {
+  const u64 sentinel = state + 0x80;
   BASE_LOGI("freetree", "  state={:#x} sentinel={:#x} newsz={:#x}",
             (unsigned long long)state, (unsigned long long)sentinel,
             (unsigned long long)newsz);
-  uint64_t cur = 0;
+  u64 cur = 0;
   if (!trkRd64(sentinel, cur)) {
     BASE_LOGI("freetree", "  head not mapped -- nothing to walk");
     return;
   }
-  uint64_t field = sentinel;  // where `cur` was loaded from
+  u64 field = sentinel;  // where `cur` was loaded from
   for (int step = 0; step < 64; step++) {
     if (cur == sentinel) {
       BASE_LOGI("freetree",
@@ -167,7 +168,7 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
                 "bad pointer is NOT here", step);
       return;
     }
-    uint64_t sz = 0;
+    u64 sz = 0;
     if (!trkRd64(cur - 8, sz)) {
       BASE_LOGI("freetree",
                 "  step {}: node {:#x} is UNMAPPED (its size word at {:#x} "
@@ -179,10 +180,10 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
                 (unsigned long long)field, (unsigned long long)field);
       // What surrounds the corrupt field: its neighbours often show the intact
       // originals, which says whether the whole node or just one word was hit.
-      const uint64_t win = field & ~0x3full;
+      const u64 win = field & ~0x3full;
       base::String winwords;
       for (int i = 0; i < 8; i++) {
-        uint64_t v = 0;
+        u64 v = 0;
         if ((i % 4) == 0)
           base::FormatTo(winwords, "\n  {:#x}:", (unsigned long long)(win + i * 8));
         base::FormatTo(winwords, " {:016x}",
@@ -243,10 +244,10 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
         BASE_LOGI("freetree",
                   "    the reused CHUNK is inside a compute staging range: {}",
                   csr1);
-      const uint64_t win2 = (field & ~0x1full) - 0x20;
+      const u64 win2 = (field & ~0x1full) - 0x20;
       base::String win2words;
       for (int i = 0; i < 12; i++) {
-        uint64_t v = 0;
+        u64 v = 0;
         if ((i % 4) == 0)
           base::FormatTo(win2words, "\n  {:#x}:",
                          (unsigned long long)(win2 + i * 8));
@@ -260,7 +261,7 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
       BASE_LOGI("freetree", "  exact size match, walk ends here");
       return;
     }
-    field = cur + (uint64_t)idx * 8;
+    field = cur + (u64)idx * 8;
     if (!trkRd64(field, cur)) {
       BASE_LOGI("freetree", "  child field {:#x} unmapped -- stop",
                 (unsigned long long)field);
@@ -273,15 +274,15 @@ void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
 // Walk one tracker's circular record list; report count/bytes, whether `key`
 // is covered by a record, and the 8 records nearest to `key` by |base-key|.
 // Returns true if `key` fell inside some record's [base,base+size).
-bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
+bool sotcWalkTracker(u64 tracker, u64 key, const char *tag) {
   BASE_LOGI("trkwalk", "{}  tracker={:#x} key={:#x}", tag,
             (unsigned long long)tracker, (unsigned long long)key);
   if (!trkMincore(tracker) || !trkMincore(tracker + 0x98)) {
     BASE_LOGI("trkwalk", "{}    tracker not mapped -- skip", tag);
     return false;
   }
-  uint64_t sentinel = tracker + 0x38;
-  uint64_t first = 0, hdrCount = 0, hdrBytes = 0, listener = 0;
+  u64 sentinel = tracker + 0x38;
+  u64 first = 0, hdrCount = 0, hdrBytes = 0, listener = 0;
   trkRd64(tracker + 0x48, first);
   trkRd64(tracker + 0x90, hdrCount);
   trkRd64(tracker + 0x80, hdrBytes);
@@ -292,9 +293,9 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
             tag, (unsigned long long)listener, (unsigned long long)first,
             (unsigned long long)hdrCount, (unsigned long long)hdrBytes);
   // Nearest-8 online selection by absolute distance from key.
-  uint64_t nb[8], ns[8], nd[8];
+  u64 nb[8], ns[8], nd[8];
   for (int i = 0; i < 8; i++) { nb[i] = ns[i] = 0; nd[i] = ~0ull; }
-  uint64_t node = first, walked = 0, sumSize = 0;
+  u64 node = first, walked = 0, sumSize = 0;
   bool covered = false, coverPrinted = false;
   for (; walked < 200000; walked++) {
     if (node == sentinel || node == 0) break;
@@ -303,7 +304,7 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
                 (unsigned long long)node);
       break;
     }
-    uint64_t base = 0, size = 0, next = 0;
+    u64 base = 0, size = 0, next = 0;
     trkRd64(node + 0x60, base);
     trkRd64(node + 0x58, size);
     trkRd64(node + 0x10, next);
@@ -319,7 +320,7 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
         coverPrinted = true;
       }
     }
-    uint64_t d = base > key ? base - key : key - base;
+    u64 d = base > key ? base - key : key - base;
     // insert into nearest-8 if closer than the current worst
     int worst = 0;
     for (int i = 1; i < 8; i++) if (nd[i] > nd[worst]) worst = i;
@@ -334,7 +335,7 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
   for (int i = 0; i < 8; i++)
     for (int j = i + 1; j < 8; j++)
       if (nd[j] < nd[i]) {
-        uint64_t t;
+        u64 t;
         t = nd[i]; nd[i] = nd[j]; nd[j] = t;
         t = nb[i]; nb[i] = nb[j]; nb[j] = t;
         t = ns[i]; ns[i] = ns[j]; ns[j] = t;
@@ -354,7 +355,7 @@ bool sotcWalkTracker(uint64_t tracker, uint64_t key, const char *tag) {
 }  // namespace
 
 // Per-syscall call counter, filled by the lv2 trampoline under DELTA_SCHIST.
-extern "C" uint64_t g_sysHist[1024];
+extern "C" u64 g_sysHist[1024];
 
 // DELTA_HEAP_PROF: dump the top allocation sites (defined below).
 extern uintptr_t g_heapProfAddr;
@@ -423,7 +424,7 @@ static void probeHandler(int, siginfo_t *, void *ucv) {
 // logs rsi (the size arg) when big, emulates the push rbp, and resumes -- one
 // trap per call, no single-stepping. x86-native only.
 uintptr_t g_allocTraceAddr = 0;
-uint64_t g_allocTraceMin = 0x1000000;  // 16 MiB
+u64 g_allocTraceMin = 0x1000000;  // 16 MiB
 // DELTA_HEAP_PROF: aggregate operator-new/malloc (size in rdi) by guest caller.
 // Fixed open-addressing table, claimed lock-free from the trap handler (called
 // concurrently from every guest thread). SIGUSR1 dumps the top sites by bytes.
@@ -431,19 +432,19 @@ uintptr_t g_heapProfAddr = 0;  // non-zero once any hook is armed
 static constexpr int kHeapProfMaxHooks = 24;
 static uintptr_t g_heapProfHooks[kHeapProfMaxHooks];
 static int g_heapProfHookCount = 0;
-static std::atomic<uint64_t> g_heapProfHookBytes[kHeapProfMaxHooks];
-static std::atomic<uint64_t> g_heapProfHookCalls[kHeapProfMaxHooks];
+static std::atomic<u64> g_heapProfHookBytes[kHeapProfMaxHooks];
+static std::atomic<u64> g_heapProfHookCalls[kHeapProfMaxHooks];
 static bool g_heapProfCountOnly[kHeapProfMaxHooks];
 namespace {
-constexpr uint32_t kHeapProfSlots = 16384;
+constexpr u32 kHeapProfSlots = 16384;
 struct HeapProfSlot {
   std::atomic<uintptr_t> caller{0};
-  std::atomic<uint64_t> bytes{0};
-  std::atomic<uint64_t> count{0};
-  std::atomic<uint64_t> unscoped{0};  // of `bytes`, taken with no scope live
+  std::atomic<u64> bytes{0};
+  std::atomic<u64> count{0};
+  std::atomic<u64> unscoped{0};  // of `bytes`, taken with no scope live
 };
 HeapProfSlot g_heapProf[kHeapProfSlots];
-std::atomic<uint64_t> g_heapProfTotal{0};
+std::atomic<u64> g_heapProfTotal{0};
 
 // DELTA_HEAP_PROF_SCOPE=<tls-slot-global>:<depth-offset>. Engines route an
 // allocation through a THREAD-LOCAL stack of scoped allocators and fall back
@@ -455,8 +456,8 @@ std::atomic<uint64_t> g_heapProfTotal{0};
 //   block = *(u64*)slot
 //   depth = block ? *(u32*)(block + <depth-offset>) : 0
 uintptr_t g_heapProfScopeSlot = 0;
-uint64_t g_heapProfScopeDepthOff = 0;
-std::atomic<uint64_t> g_heapProfScoped{0}, g_heapProfUnscoped{0};
+u64 g_heapProfScopeDepthOff = 0;
+std::atomic<u64> g_heapProfScoped{0}, g_heapProfUnscoped{0};
 
 // Reads through process_vm_readv so a mis-specified address reports nothing
 // instead of taking the run down from inside the trap handler.
@@ -467,11 +468,11 @@ bool heapProfPeek(uintptr_t addr, void *out, size_t n) {
   return ::process_vm_readv(::getpid(), &l, 1, &r, 1, 0) == (ssize_t)n;
 }
 
-uint32_t heapProfScopeDepth(uintptr_t fs_base) {
+u32 heapProfScopeDepth(uintptr_t fs_base) {
   if (!g_heapProfScopeSlot || !fs_base)
     return 0;
-  uint64_t off = 0, block = 0;
-  uint32_t depth = 0;
+  u64 off = 0, block = 0;
+  u32 depth = 0;
   if (!heapProfPeek(g_heapProfScopeSlot, &off, sizeof(off)))
     return 0;
   if (!heapProfPeek(fs_base + off, &block, sizeof(block)))
@@ -481,16 +482,16 @@ uint32_t heapProfScopeDepth(uintptr_t fs_base) {
   return depth;
 }
 
-void heapProfRecord(uintptr_t caller, uint64_t size, bool unscoped) {
-  uint32_t h = static_cast<uint32_t>((caller * 2654435761u) >> 13) & (kHeapProfSlots - 1);
-  const auto add = [&](uint32_t s) {
+void heapProfRecord(uintptr_t caller, u64 size, bool unscoped) {
+  u32 h = static_cast<u32>((caller * 2654435761u) >> 13) & (kHeapProfSlots - 1);
+  const auto add = [&](u32 s) {
     g_heapProf[s].bytes.fetch_add(size, std::memory_order_relaxed);
     g_heapProf[s].count.fetch_add(1, std::memory_order_relaxed);
     if (unscoped)
       g_heapProf[s].unscoped.fetch_add(size, std::memory_order_relaxed);
   };
-  for (uint32_t i = 0; i < kHeapProfSlots; i++) {
-    uint32_t s = (h + i) & (kHeapProfSlots - 1);
+  for (u32 i = 0; i < kHeapProfSlots; i++) {
+    u32 s = (h + i) & (kHeapProfSlots - 1);
     uintptr_t c = g_heapProf[s].caller.load(std::memory_order_relaxed);
     if (c == caller) {
       add(s);
@@ -525,18 +526,18 @@ void heapProfDump() {
               g_heapProfScoped.load() / 1048576.0,
               g_heapProfUnscoped.load() / 1048576.0);
   for (int i = 0; i < g_heapProfHookCount; i++) {
-    uint64_t b = g_heapProfHookBytes[i].load(std::memory_order_relaxed);
+    u64 b = g_heapProfHookBytes[i].load(std::memory_order_relaxed);
     BASE_LOGI("heapprof", "  hook[{}] {:#x}: {:8.1f} MB  {:8} calls", i,
               (unsigned long)g_heapProfHooks[i], b / 1048576.0,
               (unsigned long long)g_heapProfHookCalls[i].load(std::memory_order_relaxed));
   }
   // Select top 20 by bytes without allocating (linear passes).
-  uint64_t prevBytes = ~0ull;
+  u64 prevBytes = ~0ull;
   uintptr_t prevCaller = 0;
   for (int rank = 0; rank < 20; rank++) {
-    uint64_t bestB = 0; uint32_t bestS = kHeapProfSlots;
-    for (uint32_t s = 0; s < kHeapProfSlots; s++) {
-      uint64_t b = g_heapProf[s].bytes.load(std::memory_order_relaxed);
+    u64 bestB = 0; u32 bestS = kHeapProfSlots;
+    for (u32 s = 0; s < kHeapProfSlots; s++) {
+      u64 b = g_heapProf[s].bytes.load(std::memory_order_relaxed);
       if (b == 0) continue;
       uintptr_t c = g_heapProf[s].caller.load(std::memory_order_relaxed);
       bool below = b < prevBytes || (b == prevBytes && c > prevCaller);
@@ -544,8 +545,8 @@ void heapProfDump() {
     }
     if (bestS == kHeapProfSlots) break;
     uintptr_t c = g_heapProf[bestS].caller.load(std::memory_order_relaxed);
-    uint64_t cnt = g_heapProf[bestS].count.load(std::memory_order_relaxed);
-    uint64_t uns = g_heapProf[bestS].unscoped.load(std::memory_order_relaxed);
+    u64 cnt = g_heapProf[bestS].count.load(std::memory_order_relaxed);
+    u64 uns = g_heapProf[bestS].unscoped.load(std::memory_order_relaxed);
     char sym[200];
     symbolize(c, sym, sizeof(sym));
     BASE_LOGI("heapprof", "  {:8.1f} MB  {:8} calls  {}{}",
@@ -559,7 +560,7 @@ void heapProfDump() {
   std::fflush(stderr);
 }
 }  // namespace
-void setHeapProfScope(uintptr_t tlsSlotGlobal, uint64_t depthOffset) {
+void setHeapProfScope(uintptr_t tlsSlotGlobal, u64 depthOffset) {
   g_heapProfScopeSlot = tlsSlotGlobal;
   g_heapProfScopeDepthOff = depthOffset;
 }
@@ -572,11 +573,11 @@ void setHeapProf(uintptr_t addr, bool countOnly) {
 }
 // Throttle to one dump per SIGUSR1 burst (every thread gets the signal).
 static void heapProfDumpOnce() {
-  static std::atomic<uint64_t> last{0};
+  static std::atomic<u64> last{0};
   timespec t{};
   clock_gettime(CLOCK_MONOTONIC, &t);
-  uint64_t now = (uint64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-  uint64_t prev = last.load(std::memory_order_relaxed);
+  u64 now = (u64)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+  u64 prev = last.load(std::memory_order_relaxed);
   if (now - prev < 300)
     return;
   if (!last.compare_exchange_strong(prev, now, std::memory_order_relaxed))
@@ -600,7 +601,7 @@ int g_hdrTraceCount = 0;
 // reads; force it to 0 (read from the start) when the fd is a .manifest.bin fd.
 uintptr_t g_rdoffAddr = 0;
 bool g_manifestFd[8192] = {false};
-void markManifestFd(uint32_t fd, bool v) { if (fd < 8192) g_manifestFd[fd] = v; }
+void markManifestFd(u32 fd, bool v) { if (fd < 8192) g_manifestFd[fd] = v; }
 // DELTA_SKIP_FN: int3 at a function entry (push rbp); emulate an immediate
 // `ret` (the push rbp hasn't run, so [rsp] is the return addr) with rax=0. Skips
 // the whole function -- used to step past a guest function that crashes/wedges
@@ -643,7 +644,7 @@ static int g_callSkipCount = 0;
 static constexpr int kFnWatchMax = 16;
 static uintptr_t g_fnWatchAddrs[kFnWatchMax];
 static const char *g_fnWatchLabels[kFnWatchMax];
-static std::atomic<uint64_t> g_fnWatchHits[kFnWatchMax];
+static std::atomic<u64> g_fnWatchHits[kFnWatchMax];
 static int g_fnWatchCount = 0;
 
 // DELTA_FNARGS pointer-chain probe (see crash.h).
@@ -652,9 +653,9 @@ static constexpr int kFnArgsOffsMax = 6;
 static constexpr int kFnArgsLogs = 8;  // logs per site; these sites are hot
 static uintptr_t g_fnArgsAddrs[kFnArgsMax];
 static const char *g_fnArgsLabels[kFnArgsMax];
-static uint64_t g_fnArgsOffs[kFnArgsMax][kFnArgsOffsMax];
+static u64 g_fnArgsOffs[kFnArgsMax][kFnArgsOffsMax];
 static int g_fnArgsNoffs[kFnArgsMax];
-static std::atomic<uint64_t> g_fnArgsHits[kFnArgsMax];
+static std::atomic<u64> g_fnArgsHits[kFnArgsMax];
 static int g_fnArgsCount = 0;
 
 // Range currently write-protected for the write watch, armed either from the
@@ -678,14 +679,14 @@ static constexpr int kWhistBuckets = 512;
 static constexpr int kWhistSites = 32;
 static std::atomic<uintptr_t> g_whistBase{0};
 static std::atomic<size_t> g_whistLen{0};
-static std::atomic<uint32_t> g_whistBucket[kWhistBuckets];
+static std::atomic<u32> g_whistBucket[kWhistBuckets];
 static std::atomic<uintptr_t> g_whistSite[kWhistSites];
 static std::atomic<uintptr_t> g_whistSiteCaller[kWhistSites];
-static std::atomic<uint32_t> g_whistSiteHits[kWhistSites];
+static std::atomic<u32> g_whistSiteHits[kWhistSites];
 // Faults whose guest instruction could not be established (see
 // watchFaultGuestRip). Reported alongside the sites so a census can never read
 // as "these are all the writers" when some of them went unnamed.
-static std::atomic<uint64_t> g_whistUnattributed{0};
+static std::atomic<u64> g_whistUnattributed{0};
 
 // The guest instruction behind a memory-watch fault. Returns false when it
 // cannot be established, and then `rip` is 0.
@@ -721,7 +722,7 @@ static uintptr_t watchFaultGuestRsp(void *ucv) {
   return (uintptr_t)static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_RSP];
 #else
   (void)ucv;
-  if (const uint64_t *g = cpu::currentGuestGregs()) {
+  if (const u64 *g = cpu::currentGuestGregs()) {
     enum { RAX, RCX, RDX, RBX, RSP };
     return (uintptr_t)g[RSP];
   }
@@ -893,7 +894,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           probe && utl::isMemoryRangeMapped(reinterpret_cast<void *>(probe), 8))
         BASE_LOGI("wprot", "{} {:#x} from {} | probe {:#x} = {:#x}", kind,
                   (unsigned long long)at, sym, (unsigned long)probe,
-                  (unsigned long long)*reinterpret_cast<uint64_t *>(probe));
+                  (unsigned long long)*reinterpret_cast<u64 *>(probe));
       else
         BASE_LOGI("wprot", "{} {:#x} from {}", kind, (unsigned long long)at,
                   sym);
@@ -914,23 +915,23 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       // request to follow one word, and the word's SOURCE (a memcpy's rsi) is
       // the next hop, so dump registers for that case too.
       if (g_wprotRegs.load() || utl::writeWatchValueProbe()) {
-        const uint64_t *g = nullptr;
+        const u64 *g = nullptr;
 #if defined(__x86_64__)
-        uint64_t xg[16];
+        u64 xg[16];
         auto *hg = static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs;
         const int kOrder[16] = {REG_RAX, REG_RCX, REG_RDX, REG_RBX,
                                 REG_RSP, REG_RBP, REG_RSI, REG_RDI,
                                 REG_R8,  REG_R9,  REG_R10, REG_R11,
                                 REG_R12, REG_R13, REG_R14, REG_R15};
         for (int i = 0; i < 16; i++)
-          xg[i] = (uint64_t)hg[kOrder[i]];
+          xg[i] = (u64)hg[kOrder[i]];
         g = xg;
 #else
         // FEX pins every guest GPR to a fixed host register, so the signal
         // context holds the exact values at the faulting instruction. Only fall
         // back to the in-memory thread state -- which is written back at block
         // boundaries and therefore lags -- when the fault was not in JIT code.
-        uint64_t sig_gregs[16];
+        u64 sig_gregs[16];
         bool exact = cpu::guestGregsFromSignal(ucv, sig_gregs);
         g = exact ? sig_gregs : cpu::currentGuestGregs();
 #endif
@@ -959,7 +960,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           enum { C_RCX = 1, C_RSI = 6, C_RDI = 7 };
           const uintptr_t probe = utl::writeWatchValueProbe();
           if (exact && probe && utl::writeWatchChaseLeft()) {
-            const uint64_t rdi = g[C_RDI], rsi = g[C_RSI], rcx = g[C_RCX];
+            const u64 rdi = g[C_RDI], rsi = g[C_RSI], rcx = g[C_RCX];
             const bool looks_like_copy =
                 rdi && rsi && rcx && probe >= rdi && probe - rdi < rcx;
             const uintptr_t src = rsi + (probe - rdi);
@@ -998,18 +999,18 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       auto *uc = static_cast<ucontext_t *>(ucv);
       auto *gr = uc->uc_mcontext.gregs;
       if ((uintptr_t)gr[REG_RIP] == site) {
-        const uint32_t code = (uint32_t)gr[REG_RSI] & 0xFF;
+        const u32 code = (u32)gr[REG_RSI] & 0xFF;
         const uintptr_t self = (uintptr_t)gr[REG_RDI];
-        uint32_t pos = 0;
+        u32 pos = 0;
         if (self > 0x10000)
-          pos = *reinterpret_cast<const uint32_t *>(self + 0x3c);
+          pos = *reinterpret_cast<const u32 *>(self + 0x3c);
         // One open() and one write() per record to a dedicated fd: fprintf to
         // stderr loses most records here, because other threads interleave
         // mid-line and the trace is the whole point.
         static const int fd = ::open("/tmp/bc_trace.txt",
                                      O_WRONLY | O_CREAT | O_TRUNC | O_APPEND,
                                      0644);
-        static uint64_t n = 0;
+        static u64 n = 0;
         if (fd >= 0) {
           char buf[64];
           const int len = std::snprintf(buf, sizeof(buf), "%llu %02x %u\n",
@@ -1024,12 +1025,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // DELTA_GUEST_BRK_ARM_POS=<n>: wait until the restarted stream reaches
         // this position, so the trap lands on one named record rather than the
         // first of its kind.
-        static uint32_t last_pos = 0;
+        static u32 last_pos = 0;
         static bool armed = false, restarted = false;
         if (pos < last_pos)
           restarted = true;
         if (kBrkArm && !armed && restarted && pos >= kBrkArmPos) {
-          auto *at = reinterpret_cast<uint8_t *>((uintptr_t)kBrkArm);
+          auto *at = reinterpret_cast<u8 *>((uintptr_t)kBrkArm);
           at[0] = 0x0F;
           at[1] = 0x0B;
           armed = true;
@@ -1051,7 +1052,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           }
         }
         last_pos = pos;
-        gr[REG_R12] = (uint32_t)gr[REG_RSI];  // mov %esi,%r12d (zero-extends)
+        gr[REG_R12] = (u32)gr[REG_RSI];  // mov %esi,%r12d (zero-extends)
         gr[REG_RIP] = site + 3;
         return;
       }
@@ -1063,7 +1064,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     for (int i = 0; i < g_retCount; i++) {
       if ((uintptr_t)gr[REG_RIP] != g_retAddrs[i] + 1)
         continue;
-      uint32_t eax = (uint32_t)gr[REG_RAX];
+      u32 eax = (u32)gr[REG_RAX];
       // DELTA_PS5_DCBFORCE: force a failing graphics-init sub-call to report
       // success (SCE_OK) so the run-once init 0x69e720 completes and the engine
       // creates its DrawCommandBuffer -- lets us measure how far the boot gets
@@ -1120,7 +1121,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       long ms = (t.tv_sec - g_orderStart.tv_sec) * 1000 +
                 (t.tv_nsec - g_orderStart.tv_nsec) / 1000000;
       uintptr_t rsp = (uintptr_t)gr[REG_RSP];
-      uintptr_t caller = rsp >= 0x10000 ? *reinterpret_cast<uint64_t *>(rsp) : 0;
+      uintptr_t caller = rsp >= 0x10000 ? *reinterpret_cast<u64 *>(rsp) : 0;
       char csym[200];
       symbolize(caller, csym, sizeof(csym));
       char m[320];
@@ -1128,7 +1129,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                             ms, (long)gettid(), g_orderLabels[i], csym);
       if (n > 0) { ssize_t w = write(2, m, (size_t)n); (void)w; }
       gr[REG_RSP] -= 8;  // emulate the displaced `push rbp`
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1161,7 +1162,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         }
         if (n > 0 && p && utl::isMemoryRangeMapped(reinterpret_cast<void *>(p), 64)) {
           n += std::snprintf(m + n, sizeof(m) - n, " *=");
-          const auto *w = reinterpret_cast<const uint32_t *>(p);
+          const auto *w = reinterpret_cast<const u32 *>(p);
           for (int j = 0; j < 12 && n > 0 && n < (int)sizeof(m) - 12; j++)
             n += std::snprintf(m + n, sizeof(m) - n, " %08x", w[j]);
         }
@@ -1172,7 +1173,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         }
       }
       gr[REG_RSP] -= 8;  // emulate the displaced `push rbp`
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1185,7 +1186,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       g_fnWatchHits[i].fetch_add(1, std::memory_order_relaxed);
       // Emulate the displaced `push rbp`; RIP stays at addr+1 (the `mov rbp,rsp`).
       gr[REG_RSP] -= 8;
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1195,7 +1196,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     for (int si2 = 0; si2 < g_skipFnCount; si2++) {
       if ((uintptr_t)gr[REG_RIP] == g_skipFnAddrs[si2] + 1) {
         uintptr_t rsp = (uintptr_t)gr[REG_RSP];
-        gr[REG_RIP] = *reinterpret_cast<uint64_t *>(rsp);  // return addr
+        gr[REG_RIP] = *reinterpret_cast<u64 *>(rsp);  // return addr
         gr[REG_RSP] = rsp + 8;
         gr[REG_RAX] = 0;
         return;
@@ -1206,14 +1207,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     auto *uc = static_cast<ucontext_t *>(ucv);
     auto *gr = uc->uc_mcontext.gregs;
     if ((uintptr_t)gr[REG_RIP] == g_rdoffAddr + 1) {
-      uint32_t fd = (uint32_t)gr[REG_RSI];
+      u32 fd = (u32)gr[REG_RSI];
       bool mf = (fd < 8192 && g_manifestFd[fd]);
       if (kRdoffTrace) {
         char m[128];
         int n = std::snprintf(m, sizeof(m),
                               "[rdoff] fd=%u off=%lld nbytes=%lld buf=%llx manifest=%d\n",
-                              fd, (long long)(int32_t)gr[REG_RDX],
-                              (long long)(int32_t)gr[REG_RCX],
+                              fd, (long long)(i32)gr[REG_RDX],
+                              (long long)(i32)gr[REG_RCX],
                               (unsigned long long)gr[REG_R8], mf);
         if (n > 0) { ssize_t w = write(2, m, (size_t)n); (void)w; }
       }
@@ -1221,7 +1222,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       if (mf && !kRdoffNofix)
         gr[REG_RDX] = 0;  // force manifest read offset to 0 (read from start)
       gr[REG_RSP] -= 8;   // emulate push rbp
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1232,27 +1233,27 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     for (int hi = 0; hi < g_hdrTraceCount; hi++)
       if ((uintptr_t)gr[REG_RIP] == g_hdrTraceAddrs[hi] + 1) { hit = true; break; }
     if (hit) {
-      uint64_t parent = (uint64_t)gr[REG_RDI];
-      uint64_t hdr = 0, obj = 0;
-      uint32_t magic = 0, cnt = 0;
+      u64 parent = (u64)gr[REG_RDI];
+      u64 hdr = 0, obj = 0;
+      u32 magic = 0, cnt = 0;
       char nm[48] = {0};
       if (parent >= 0x10000) {
-        hdr = *reinterpret_cast<uint64_t *>(parent + 0x8);
-        obj = *reinterpret_cast<uint64_t *>(parent + 0x10);
+        hdr = *reinterpret_cast<u64 *>(parent + 0x8);
+        obj = *reinterpret_cast<u64 *>(parent + 0x10);
         // DELTA_HDR_WAIT: test the producer-consumer-race hypothesis. If the
         // manifest header buffer isn't filled yet (magic != "TAFS"), block this
         // (consumer) thread to let the worker thread's read+copy complete.
         if (kHdrWait && hdr >= 0x10000) {
           for (int i = 0; i < 2000; i++) {
-            if (*reinterpret_cast<volatile uint32_t *>(hdr) == 0x53464154u)
+            if (*reinterpret_cast<volatile u32 *>(hdr) == 0x53464154u)
               break;
             timespec ts{0, 200000};  // 0.2ms
             nanosleep(&ts, nullptr);
           }
         }
         if (hdr >= 0x10000) {
-          magic = *reinterpret_cast<uint32_t *>(hdr);
-          cnt = *reinterpret_cast<uint32_t *>(hdr + 0xc);
+          magic = *reinterpret_cast<u32 *>(hdr);
+          cnt = *reinterpret_cast<u32 *>(hdr + 0xc);
         }
         if (obj >= 0x10000) {
           const char *s = reinterpret_cast<const char *>(obj + 0x5c);
@@ -1263,7 +1264,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // real (cached) manifest bytes straight into the header buffer, so the
         // count-setter reads the correct count + entry table for THIS archive.
         if (kHdrFill && hdr >= 0x10000 && nm[0]) {
-          auto *h = reinterpret_cast<uint8_t *>(hdr);
+          auto *h = reinterpret_cast<u8 *>(hdr);
           // The header buffer [parent+0x8] is allocated filesize (at 0x605e30),
           // so fill the WHOLE manifest at every consumer hook -- both the header
           // (count) and the entry table must be correct for the downstream
@@ -1276,12 +1277,12 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
             // the archive is empty, instead of reading a garbage count -> OOM.
             std::memset(h, 0, 0x34);
             h[0] = 'T'; h[1] = 'A'; h[2] = 'F'; h[3] = 'S';
-            *reinterpret_cast<uint32_t *>(h + 4) = 3;     // version
-            *reinterpret_cast<uint32_t *>(h + 0x10) = 7;  // strlen("orbis-w")
+            *reinterpret_cast<u32 *>(h + 4) = 3;     // version
+            *reinterpret_cast<u32 *>(h + 0x10) = 7;  // strlen("orbis-w")
             std::memcpy(h + 0x14, "orbis-w", 7);
           }
-          magic = *reinterpret_cast<uint32_t *>(h);
-          cnt = *reinterpret_cast<uint32_t *>(h + 0xc);
+          magic = *reinterpret_cast<u32 *>(h);
+          cnt = *reinterpret_cast<u32 *>(h + 0xc);
         }
       }
       char m[176];
@@ -1292,13 +1293,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       static bool once = false;
       if (!once && obj >= 0x10000) {
         once = true;
-        uint64_t vt = *reinterpret_cast<uint64_t *>(obj);
-        uint64_t m58 = (vt >= 0x10000) ? *reinterpret_cast<uint64_t *>(vt + 0x58) : 0;
+        u64 vt = *reinterpret_cast<u64 *>(obj);
+        u64 m58 = (vt >= 0x10000) ? *reinterpret_cast<u64 *>(vt + 0x58) : 0;
         // 0x608390-style forward: inner obj = [obj+0x8], real method = inner.vt[0x58].
-        uint64_t inner = *reinterpret_cast<uint64_t *>(obj + 0x8);
-        uint64_t ivt = (inner >= 0x10000) ? *reinterpret_cast<uint64_t *>(inner) : 0;
-        uint64_t im58 = (ivt >= 0x10000) ? *reinterpret_cast<uint64_t *>(ivt + 0x58) : 0;
-        uint64_t im30 = (ivt >= 0x10000) ? *reinterpret_cast<uint64_t *>(ivt + 0x30) : 0;
+        u64 inner = *reinterpret_cast<u64 *>(obj + 0x8);
+        u64 ivt = (inner >= 0x10000) ? *reinterpret_cast<u64 *>(inner) : 0;
+        u64 im58 = (ivt >= 0x10000) ? *reinterpret_cast<u64 *>(ivt + 0x58) : 0;
+        u64 im30 = (ivt >= 0x10000) ? *reinterpret_cast<u64 *>(ivt + 0x30) : 0;
         char v[224];
         int vn = std::snprintf(v, sizeof(v),
                                "[hdr] obj=%#llx vt=%#llx m58=%#llx | inner=%#llx ivt=%#llx im30=%#llx im58=%#llx\n",
@@ -1309,7 +1310,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         if (vn > 0) { ssize_t w = write(2, v, (size_t)vn); (void)w; }
       }
       gr[REG_RSP] -= 8;
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1317,10 +1318,10 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     auto *uc = static_cast<ucontext_t *>(ucv);
     auto *gr = uc->uc_mcontext.gregs;
     if ((uintptr_t)gr[REG_RIP] == g_fatalTraceAddr + 1) {
-      uint64_t fmt = (uint64_t)gr[REG_RDI];
-      uint64_t caller = 0;
+      u64 fmt = (u64)gr[REG_RDI];
+      u64 caller = 0;
       uintptr_t rsp = (uintptr_t)gr[REG_RSP];
-      if (rsp >= 0x10000) caller = *reinterpret_cast<uint64_t *>(rsp);
+      if (rsp >= 0x10000) caller = *reinterpret_cast<u64 *>(rsp);
       char msg[256] = {0};
       if (fmt >= 0x10000) {
         const char *s = reinterpret_cast<const char *>(fmt);
@@ -1335,7 +1336,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                             (unsigned long long)gr[REG_RDX], (unsigned long long)gr[REG_RCX], msg);
       if (n > 0) { ssize_t w = write(2, out, (size_t)n); (void)w; }
       gr[REG_RSP] -= 8;
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1343,10 +1344,10 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     auto *uc = static_cast<ucontext_t *>(ucv);
     auto *gr = uc->uc_mcontext.gregs;
     if ((uintptr_t)gr[REG_RIP] == g_cntTraceAddr + 1) {
-      uint64_t obj = (uint64_t)gr[REG_RDI];
-      uint32_t cnt = 0; char nm[48] = {0};
+      u64 obj = (u64)gr[REG_RDI];
+      u32 cnt = 0; char nm[48] = {0};
       if (obj >= 0x10000) {
-        cnt = *reinterpret_cast<uint32_t *>(obj + 0x30);
+        cnt = *reinterpret_cast<u32 *>(obj + 0x30);
         const char *s = reinterpret_cast<const char *>(obj + 0x5c);
         int j = 0; for (; j < 47 && s[j] >= 0x20 && s[j] <= 0x7e; j++) nm[j] = s[j];
         nm[j] = 0;
@@ -1359,9 +1360,9 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       // garbage), force it to 0 so the entry-table alloc is tiny and the boot can
       // proceed past the OOM to reveal the next blocker.
       if (kCntClamp && obj >= 0x10000 && cnt > 0x100000)
-        *reinterpret_cast<uint32_t *>(obj + 0x30) = 0;
+        *reinterpret_cast<u32 *>(obj + 0x30) = 0;
       gr[REG_RSP] -= 8;
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1374,8 +1375,8 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       if ((uintptr_t)gr[REG_RIP] != g_heapProfHooks[i] + 1)
         continue;
       uintptr_t rsp = (uintptr_t)gr[REG_RSP];
-      uintptr_t caller = rsp >= 0x10000 ? *reinterpret_cast<uint64_t *>(rsp) : 0;
-      const uint64_t size = g_heapProfCountOnly[i] ? 1u : (uint64_t)gr[REG_RDI];
+      uintptr_t caller = rsp >= 0x10000 ? *reinterpret_cast<u64 *>(rsp) : 0;
+      const u64 size = g_heapProfCountOnly[i] ? 1u : (u64)gr[REG_RDI];
       // The guest's fs base is NOT the thread's real fs (the lifter rewrites
       // guest fs accesses and the host keeps its own TLS there), so ask the
       // backend for the base the guest's own `fs:0` resolves to.
@@ -1385,7 +1386,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       g_heapProfHookBytes[i].fetch_add(size, std::memory_order_relaxed);
       g_heapProfHookCalls[i].fetch_add(1, std::memory_order_relaxed);
       gr[REG_RSP] -= 8;  // emulate the displaced `push rbp`
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;
     }
   }
@@ -1393,7 +1394,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     auto *uc = static_cast<ucontext_t *>(ucv);
     auto *gr = uc->uc_mcontext.gregs;
     if ((uintptr_t)gr[REG_RIP] == g_allocTraceAddr + 1) {
-      uint64_t size = (uint64_t)gr[REG_RSI];
+      u64 size = (u64)gr[REG_RSI];
       if (size >= g_allocTraceMin) {
         char m[96];
         int n = std::snprintf(m, sizeof(m), "[alloc] %llu bytes (%.1f MB) heap=%llx\n",
@@ -1419,7 +1420,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         }
       }
       gr[REG_RSP] -= 8;  // emulate the displaced `push rbp`
-      *reinterpret_cast<uint64_t *>(gr[REG_RSP]) = (uint64_t)gr[REG_RBP];
+      *reinterpret_cast<u64 *>(gr[REG_RSP]) = (u64)gr[REG_RBP];
       return;            // resume at addr+1 (the mov rbp,rsp that follows)
     }
   }
@@ -1454,7 +1455,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // and latching on it would make the next real fault park instead of dump.
   if (sig == SIGSEGV && ucv) {
     auto *uc = static_cast<ucontext_t *>(ucv);
-    auto *ip = reinterpret_cast<const uint8_t *>(uc->uc_mcontext.gregs[REG_RIP]);
+    auto *ip = reinterpret_cast<const u8 *>(uc->uc_mcontext.gregs[REG_RIP]);
     // A jump into unmapped memory faults with rip THERE, so reading the opcode
     // is itself a fault -- and the handler dying re-entrantly buries the real
     // report. Check the page is there first.
@@ -1521,14 +1522,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
             strsignal(sig), sig);
   if (int sc = cpu::faultingSyscall(); sc >= 0)
     BASE_LOGI("crashHandler", "  in syscall {} ({})", sc,
-              syscall_getname((uint32_t)sc));
+              syscall_getname((u32)sc));
   BASE_LOGI("crashHandler", "  fault = {:016x}  {}",
             (unsigned long long)si->si_addr, fault);
   // A fault inside the host-thunk pool is the guest calling an HLE import slot
   // we bound but cannot actually service. Name it: the raw address is inside
   // FEX's reserved heap and looks like unrelated garbage otherwise.
   {
-    uint32_t ti = 0;
+    u32 ti = 0;
     if (const char *tn =
             cpu::hostThunkNameForAddr((uintptr_t)si->si_addr, &ti))
       BASE_LOGI("crashHandler",
@@ -1538,7 +1539,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // Show what the host VA space holds around the fault: which mapping it hit,
   // or which two mappings it fell between. Async-signal-safe (read+write only).
   if (si->si_addr) {
-    const uint64_t fa = (uint64_t)si->si_addr;
+    const u64 fa = (u64)si->si_addr;
     int mf = open("/proc/self/maps", O_RDONLY);
     if (mf >= 0) {
       // Stream the file a line at a time. Slurping it into one fixed buffer
@@ -1576,9 +1577,9 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
             if (++after >= 3) { after = -1; found = true; }
             continue;
           }
-          const uint64_t lo = strtoull(line, nullptr, 16);
+          const u64 lo = strtoull(line, nullptr, 16);
           const char *dash = strchr(line, '-');
-          const uint64_t hi = dash ? strtoull(dash + 1, nullptr, 16) : 0;
+          const u64 hi = dash ? strtoull(dash + 1, nullptr, 16) : 0;
           if (fa < hi) {
             if (havePrev)
               BASE_LOGI("crashHandler", "  maps prev: {}", prev);
@@ -1639,7 +1640,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                                                 ~((uintptr_t)pgsz - 1)),
                        1, &vec) == 0;
       }()) {
-    auto *b = reinterpret_cast<const uint8_t *>(gr[REG_RIP]);
+    auto *b = reinterpret_cast<const u8 *>(gr[REG_RIP]);
     base::String insn;
     base::FormatTo(insn, "  insn bytes:");
     for (int i = 0; i < 16; i++)
@@ -1695,7 +1696,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       base::String qwords;
       base::FormatTo(qwords, "  --- {} = {:#x} ---", r.name,
                      (unsigned long long)base);
-      const auto *q = reinterpret_cast<const uint64_t *>(base);
+      const auto *q = reinterpret_cast<const u64 *>(base);
       for (int i = 0; i < 16; i++) {
         if (i % 4 == 0)
           base::FormatTo(qwords, "\n  {}+{:03x}:", r.name, i * 8);
@@ -1707,7 +1708,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         const uintptr_t p = q[i];
         if (p < 0x8000000000ull || p >= 0x8100000000ull)
           continue;
-        const auto *b8 = reinterpret_cast<const uint8_t *>(p);
+        const auto *b8 = reinterpret_cast<const u8 *>(p);
         base::String b8bytes;
         base::FormatTo(b8bytes, "  {}+{:03x} -> {:#x}:", r.name, i * 8,
                        (unsigned long long)p);
@@ -1728,15 +1729,15 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   if (const char *pk = kBrkPeek; pk && std::strncmp(pk, "scan:", 5) == 0) {
     const uintptr_t base = std::strtoull(pk + 5, nullptr, 16);
     const char *c2 = std::strchr(pk + 5, ':');
-    const uint64_t size = c2 ? std::strtoull(c2 + 1, nullptr, 16) : 0x100000;
+    const u64 size = c2 ? std::strtoull(c2 + 1, nullptr, 16) : 0x100000;
     const long pgsz = sysconf(_SC_PAGESIZE);
-    for (uint64_t off = 0; off < size; off += 0x1000) {
+    for (u64 off = 0; off < size; off += 0x1000) {
       unsigned char vec = 0;
       const uintptr_t a = base + off;
       if (mincore(reinterpret_cast<void *>(a & ~((uintptr_t)pgsz - 1)), 1,
                   &vec) != 0)
         continue;
-      const auto *b = reinterpret_cast<const uint8_t *>(a);
+      const auto *b = reinterpret_cast<const u8 *>(a);
       unsigned nz = 0;
       for (int i = 0; i < 0x1000; i++)
         nz += b[i] != 0;
@@ -1751,17 +1752,17 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
              pk && std::strncmp(pk, "find:", 5) == 0) {
     const uintptr_t base = std::strtoull(pk + 5, nullptr, 16);
     const char *c2 = std::strchr(pk + 5, ':');
-    const uint64_t size = c2 ? std::strtoull(c2 + 1, nullptr, 16) : 0x100000;
+    const u64 size = c2 ? std::strtoull(c2 + 1, nullptr, 16) : 0x100000;
     const char *c3 = c2 ? std::strchr(c2 + 1, ':') : nullptr;
-    const uint64_t want = c3 ? std::strtoull(c3 + 1, nullptr, 16) : 0;
+    const u64 want = c3 ? std::strtoull(c3 + 1, nullptr, 16) : 0;
     const long pgsz = sysconf(_SC_PAGESIZE);
     int hits = 0;
-    for (uint64_t off = 0; off < size && hits < 32; off += pgsz) {
+    for (u64 off = 0; off < size && hits < 32; off += pgsz) {
       unsigned char vec = 0;
       const uintptr_t a = base + off;
       if (mincore(reinterpret_cast<void *>(a), 1, &vec) != 0)
         continue;
-      const auto *q = reinterpret_cast<const uint64_t *>(a);
+      const auto *q = reinterpret_cast<const u64 *>(a);
       for (long i = 0; i < pgsz / 8 && hits < 32; i++)
         if (q[i] == want) {
           BASE_LOGI("crashHandler", "  find {:#x} at {:#x}",
@@ -1806,7 +1807,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         }
         std::fclose(m);
       }
-      const auto *b = reinterpret_cast<const uint8_t *>(at);
+      const auto *b = reinterpret_cast<const u8 *>(at);
       base::String peekbytes;
       for (size_t i = 0; i < n; i++) {
         if (i % 32 == 0)
@@ -1833,7 +1834,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // prints values that land in a module's .text, which hides the operand a bad
   // control transfer came through.
   if (kCrashPeek && gr[REG_RSP] >= 0x10000) {
-    auto *q = reinterpret_cast<const uint64_t *>(gr[REG_RSP] & ~7ull);
+    auto *q = reinterpret_cast<const u64 *>(gr[REG_RSP] & ~7ull);
     base::String rspwords;
     for (int i = 0; i < 16; i++) {
       if (i % 4 == 0)
@@ -1866,13 +1867,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // aarch64 host: guest x86 state lives in the FEXCore CPUState, not the host
   // ARM signal context. Reconstruct the precise guest RIP from the host JIT PC
   // (CPUState.rip alone is only block-accurate and multiblock hides the site).
-  uint64_t hostpc = 0;
+  u64 hostpc = 0;
 #if defined(__aarch64__)
   if (ucv)
     hostpc = static_cast<ucontext_t *>(ucv)->uc_mcontext.pc;
 #endif
-  uint64_t recon = cpu::reconstructGuestRip(hostpc);
-  uint64_t grip = recon ? recon : cpu::currentGuestRip(); // fall back to block rip
+  u64 recon = cpu::reconstructGuestRip(hostpc);
+  u64 grip = recon ? recon : cpu::currentGuestRip(); // fall back to block rip
   BASE_LOGI("crashHandler", "  host pc in JIT: {}",
             recon ? "yes" : "no (FEX/HLE C++)");
   char ripsym[256];
@@ -1881,7 +1882,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   BASE_LOGI("crashHandler", "  guest rip = {:016x}  {}",
             (unsigned long long)grip, ripsym);
   if (grip) {
-    auto *b = reinterpret_cast<const uint8_t *>(grip);
+    auto *b = reinterpret_cast<const u8 *>(grip);
     base::String insnb;
     base::FormatTo(insnb, "  insn bytes:");
     for (int i = 0; i < 16; i++)
@@ -1902,13 +1903,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // freed stack: rdi/rsi were verbatim the last sys_umtx_op's arguments, and the
   // "faulting" rax-8 disagreed with si_addr in every log. Label the fallback so
   // a stale dump can never again be mistaken for a precise one.
-  uint64_t sig_gregs[16];
+  u64 sig_gregs[16];
   const bool gexact = cpu::guestGregsFromSignal(ucv, sig_gregs);
   if (!gexact)
     BASE_LOGI("crashHandler",
               "  [regs] NOT from the fault: host pc is outside the JIT, so "
               "these are the last spilled CPUState values (STALE)");
-  if (const uint64_t *g = gexact ? sig_gregs : cpu::currentGuestGregs()) {
+  if (const u64 *g = gexact ? sig_gregs : cpu::currentGuestGregs()) {
     enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15 };
     BASE_LOGI("crashHandler", "  rax={:016x} rbx={:016x} rcx={:016x} rdx={:016x}",
               (unsigned long long)g[RAX], (unsigned long long)g[RBX],
@@ -1932,10 +1933,10 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       static const char *kN[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp",
                                    "rsi", "rdi", "r8",  "r9",  "r10", "r11",
                                    "r12", "r13", "r14", "r15"};
-      const uint64_t fa = (uint64_t)si->si_addr;
+      const u64 fa = (u64)si->si_addr;
       bool any = false;
       for (int i = 0; i < 16; i++) {
-        const int64_t d = (int64_t)fa - (int64_t)g[i];
+        const i64 d = (i64)fa - (i64)g[i];
         if (d >= -0x2000 && d <= 0x2000) {
           BASE_LOGI("crashHandler",
                     "  [regs] fault = {}{:+}  (exact, from the JIT "
@@ -1956,18 +1957,18 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     // title lands. r15 is arg0 (the allocator state) and rdx the size being
     // inserted; both are live for the whole loop, so the walk can be replayed.
     {
-      uint64_t ebase2 = 0;
+      u64 ebase2 = 0;
       if (auto *proc = proc::getActive()) {
         for (auto &mod : proc->getModuleList()) {
           auto &mi = mod->getInfo();
           auto *t = mi.textSeg.addr;
           if (t && grip >= (uintptr_t)t && grip < (uintptr_t)t + mi.textSeg.size) {
-            ebase2 = (uint64_t)t;
+            ebase2 = (u64)t;
             break;
           }
         }
       }
-      const uint64_t off2 = ebase2 ? grip - ebase2 : 0;
+      const u64 off2 = ebase2 ? grip - ebase2 : 0;
       if (gexact && ebase2 && off2 >= 0x48a70 && off2 < 0x48b64)
         sotcWalkFreeTree(g[R15], g[RDX] & ~7ull);
     }
@@ -1978,18 +1979,18 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     // eboot base from the module whose .text contains grip (== textSeg.addr, so
     // grip-base is the module-relative ELF vaddr), like symbolize() does.
     {
-      uint64_t ebase = 0;
+      u64 ebase = 0;
       if (auto *proc = proc::getActive()) {
         for (auto &mod : proc->getModuleList()) {
           auto &mi = mod->getInfo();
           auto *t = mi.textSeg.addr;
           if (t && grip >= (uintptr_t)t && grip < (uintptr_t)t + mi.textSeg.size) {
-            ebase = (uint64_t)t;
+            ebase = (u64)t;
             break;
           }
         }
       }
-      uint64_t off = ebase ? grip - ebase : 0;
+      u64 off = ebase ? grip - ebase : 0;
       bool inTrk = ebase && ((off >= 0x18000 && off < 0x19000) ||
                              (off >= 0x8d000 && off < 0x8e000));
       if (inTrk) {
@@ -2001,8 +2002,8 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         // which are reliable regardless of FEX callee-saved reconstruction.
         // Layout after the prologue pushes (no further stack alloc):
         //   [rsp+0x18]=saved r13=TRACKER   [rsp+0x20]=saved r14=KEY
-        uint64_t rsp = g[RSP];
-        uint64_t trkStk = 0, keyStk = 0;
+        u64 rsp = g[RSP];
+        u64 trkStk = 0, keyStk = 0;
         bool haveStk = trkRd64(rsp + 0x18, trkStk) && trkRd64(rsp + 0x20, keyStk);
         BASE_LOGI("trkwalk",
                   " from-stack: tracker={:#x} key={:#x} (ok={}) | "
@@ -2011,14 +2012,14 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
                   haveStk, (unsigned long long)g[R13], (unsigned long long)g[R14]);
         // Prefer the stack-recovered tracker/key; fall back to the regs if the
         // stack slot doesn't look like a mapped module-space pointer.
-        auto plausible = [](uint64_t t) {
+        auto plausible = [](u64 t) {
           return t >= 0x200000000000ull && t < 0x210000000000ull && trkMincore(t);
         };
-        uint64_t tracker = plausible(trkStk) ? trkStk : g[R13];
-        uint64_t key = (haveStk && keyStk) ? keyStk : g[R14];
+        u64 tracker = plausible(trkStk) ? trkStk : g[R13];
+        u64 key = (haveStk && keyStk) ? keyStk : g[R14];
         // Raw tracker header window (fallback context: +0x00..0xa0).
         if (trkMincore(tracker)) {
-          auto *q = reinterpret_cast<const uint64_t *>(tracker);
+          auto *q = reinterpret_cast<const u64 *>(tracker);
           base::String trkwords;
           for (int i = 0; i < 20; i++) {
             if ((i % 4) == 0)
@@ -2032,15 +2033,15 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         bool inThis = sotcWalkTracker(tracker, key, "fault");
         // 2) Cross-check the other known tracker instances (the two GPU/renderer
         //    tracker globals @ base+0x2ed3350 / +0x2ed33b0) for the same key.
-        uint64_t gpuA = ebase + 0x2ed3350, gpuB = ebase + 0x2ed33b0;
+        u64 gpuA = ebase + 0x2ed3350, gpuB = ebase + 0x2ed33b0;
         bool inA = false, inB = false;
         if (gpuA != tracker) inA = sotcWalkTracker(gpuA, key, "gpuA");
         if (gpuB != tracker) inB = sotcWalkTracker(gpuB, key, "gpuB");
         // 3) Emulator-side VMA view of the key.
         if (auto *proc = proc::getActive()) {
-          auto *pi = proc->getVma().get(reinterpret_cast<uint8_t *>(key));
+          auto *pi = proc->getVma().get(reinterpret_cast<u8 *>(key));
           if (pi) {
-            uint64_t vb = (uint64_t)pi->ptr, ve = vb + pi->size;
+            u64 vb = (u64)pi->ptr, ve = vb + pi->size;
             BASE_LOGI("trkwalk",
                       " emu VMA: key {:#x} is IN region [{:#x},{:#x}) "
                       "size={:#x} sceProt={:#x} reserved={} name={}  "
@@ -2068,13 +2069,13 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     // a garbage/null vtable slot is our most common late-boot fault; seeing the
     // object bytes + where the slot points identifies the uninitialised object.
     if (const char *pk = kCrashPeek) {
-      const uint64_t regs[] = {g[RAX], g[RBX], g[RDI], g[RSI], g[RCX], g[RDX]};
+      const u64 regs[] = {g[RAX], g[RBX], g[RDI], g[RSI], g[RCX], g[RDX]};
       const char *rn[] = {"rax", "rbx", "rdi", "rsi", "rcx", "rdx"};
       for (int r = 0; r < 6; r++) {
-        uint64_t base = regs[r];
+        u64 base = regs[r];
         if (base < 0x200000000000ull || base >= 0x210000000000ull)
           continue;  // only the module VA window is reliably mapped to read
-        auto *q = reinterpret_cast<const uint64_t *>(base);
+        auto *q = reinterpret_cast<const u64 *>(base);
         // rax/rbx are the usual object/this pointers: dump far enough to cover a
         // deep vtable/member-fn slot (the fault operand disp can be several
         // hundred bytes in). Other regs get just a header.
@@ -2096,19 +2097,19 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       for (const char *p = pk; *p;) {
         while (*p == ',' || *p == ' ') p++;
         char *end = nullptr;
-        uint64_t va = std::strtoull(p, &end, 0);
+        u64 va = std::strtoull(p, &end, 0);
         if (end == p) { if (*p) p++; continue; }
         p = end;
         if (va < 0x10000) continue;  // "1"/tiny -> register scan only
         long pg = sysconf(_SC_PAGESIZE);
         unsigned char vec[2] = {0, 0};
-        void *pa = reinterpret_cast<void *>(va & ~((uint64_t)pg - 1));
+        void *pa = reinterpret_cast<void *>(va & ~((u64)pg - 1));
         if (mincore(pa, 1, vec) != 0) {
           BASE_LOGI("crashHandler", "  peek {:#x}: <unmapped>",
                     (unsigned long long)va);
           continue;
         }
-        auto *q = reinterpret_cast<const uint64_t *>(va);
+        auto *q = reinterpret_cast<const u64 *>(va);
         base::String peeks;
         for (int i = 0; i < 16; i++) {
           if ((i % 4) == 0)
@@ -2127,9 +2128,9 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     if (kCrashPeek && g[RSP] >= 0x10000) {
       long pg = sysconf(_SC_PAGESIZE);
       unsigned char vec[2] = {0, 0};
-      void *pa = reinterpret_cast<void *>(g[RSP] & ~((uint64_t)pg - 1));
+      void *pa = reinterpret_cast<void *>(g[RSP] & ~((u64)pg - 1));
       if (mincore(pa, 1, vec) == 0) {
-        auto *q = reinterpret_cast<const uint64_t *>(g[RSP] & ~7ull);
+        auto *q = reinterpret_cast<const u64 *>(g[RSP] & ~7ull);
         base::String stackwords;
         for (int i = -8; i < 64; i++) {
           if (((i + 8) % 4) == 0)
@@ -2163,7 +2164,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
         base::String qw;
         base::FormatTo(qw, "  --- {} = {:#x} ---\n", r.name,
                        (unsigned long long)base);
-        const auto *q = reinterpret_cast<const uint64_t *>(base);
+        const auto *q = reinterpret_cast<const u64 *>(base);
         for (int i = 0; i < 16; i++) {
           if (i % 4 == 0)
             base::FormatTo(qw, "\n  {}+{:03x}:", r.name, i * 8);
@@ -2177,7 +2178,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
           const uintptr_t p = q[i];
           if (p < 0x8000000000ull || p >= 0x8100000000ull)
             continue;
-          const auto *b = reinterpret_cast<const uint8_t *>(p);
+          const auto *b = reinterpret_cast<const u8 *>(p);
           base::String b8b;
           base::FormatTo(b8b, "  {}+{:03x} -> {:#x}:", r.name, i * 8,
                          (unsigned long long)p);
@@ -2201,7 +2202,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
       if (at >= 0x10000 &&
           mincore(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)), 1,
                   &vec) == 0) {
-        const auto *b = reinterpret_cast<const uint8_t *>(at);
+        const auto *b = reinterpret_cast<const u8 *>(at);
         base::String pbytes;
         for (size_t i = 0; i < n; i++) {
           if (i % 32 == 0)
@@ -2244,7 +2245,7 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   std::_Exit(128 + sig);
 }
 
-void setAllocTrace(uintptr_t addr, uint64_t minSize) {
+void setAllocTrace(uintptr_t addr, u64 minSize) {
   g_allocTraceAddr = addr;
   if (minSize)
     g_allocTraceMin = minSize;
@@ -2364,7 +2365,7 @@ void setFnWatch(uintptr_t addr, const char *label) {
   g_fnWatchCount++;
 }
 
-void setFnArgs(uintptr_t addr, const char *label, const uint64_t *offsets,
+void setFnArgs(uintptr_t addr, const char *label, const u64 *offsets,
                int noffsets) {
   if (g_fnArgsCount >= kFnArgsMax)
     return;
@@ -2478,7 +2479,7 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
       sinceReport = 0;
       std::string map;
       for (size_t off = 0; off < span; off += kWhistGranule) {
-        const uint32_t n = g_whistBucket[off / kWhistGranule].load();
+        const u32 n = g_whistBucket[off / kWhistGranule].load();
         map += n == 0 ? '_' : n < 10 ? '.' : n < 100 ? '+' : '#';
       }
       BASE_LOGI("whist", "{}", map.c_str());
@@ -2494,7 +2495,7 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
       }
       // Never let the site list read as the complete set of writers when some
       // faults could not be attributed to a guest instruction.
-      if (const uint64_t unattributed = g_whistUnattributed.load())
+      if (const u64 unattributed = g_whistUnattributed.load())
         BASE_LOGI("whist", "  {:8} <unattributed>",
                   (unsigned long long)unattributed);
     }
@@ -2516,13 +2517,13 @@ void startPopcntPrinter(uintptr_t addr, size_t bytes, unsigned everyMs) {
       if (mincore(reinterpret_cast<void *>(addr & ~((uintptr_t)pgsz - 1)), 1,
                   &vec) != 0)
         continue;
-      const auto *w = reinterpret_cast<const uint64_t *>(addr);
-      uint64_t set = 0;
+      const auto *w = reinterpret_cast<const u64 *>(addr);
+      u64 set = 0;
       long first = -1, last = -1;
       for (size_t i = 0; i < bytes / 8; i++) {
         if (!w[i])
           continue;
-        set += (uint64_t)__builtin_popcountll(w[i]);
+        set += (u64)__builtin_popcountll(w[i]);
         if (first < 0)
           first = (long)(i * 64 + __builtin_ctzll(w[i]));
         last = (long)(i * 64 + 63 - __builtin_clzll(w[i]));
@@ -2560,10 +2561,10 @@ void startSumWatchPrinter(uintptr_t slot, size_t off, size_t stride, int count,
         continue;
       base::String line;
       base::FormatTo(line, "{:#x}:", (unsigned long)obj);
-      uint64_t sum = 0;
+      u64 sum = 0;
       for (int i = 0; i < count; i++) {
-        const uint32_t v =
-            *reinterpret_cast<const uint32_t *>(obj + off + (size_t)i * stride);
+        const u32 v =
+            *reinterpret_cast<const u32 *>(obj + off + (size_t)i * stride);
         sum += v;
         base::FormatTo(line, " {}", v);
       }
@@ -2600,7 +2601,7 @@ void startPoolMap(uintptr_t addr, size_t bytes, unsigned everyMs) {
           if (!(vec[i] & 1))
             continue;
           res++;
-          const auto *w = reinterpret_cast<const uint64_t *>(base + i * pgsz);
+          const auto *w = reinterpret_cast<const u64 *>(base + i * pgsz);
           for (size_t j = 0; j < pgsz / 8; j++)
             if (w[j]) { nz++; break; }
         }
@@ -2648,7 +2649,7 @@ void startPoolCensus(unsigned everyMs) {
           if (!(vec[i] & 1))
             continue;
           res++;
-          const auto *w = reinterpret_cast<const uint64_t *>(lo + i * pgsz);
+          const auto *w = reinterpret_cast<const u64 *>(lo + i * pgsz);
           for (size_t j = 0; j < pgsz / 8; j++)
             if (w[j]) { nz++; break; }
         }
@@ -2706,13 +2707,13 @@ void startFnWatchPrinter() {
   if (!started.compare_exchange_strong(exp, true))
     return;
   std::thread([] {
-    uint64_t last[kFnWatchMax] = {0};
+    u64 last[kFnWatchMax] = {0};
     for (;;) {
       std::this_thread::sleep_for(std::chrono::seconds(2));
       base::String line;
       base::FormatTo(line, "[fnwatch]");
       for (int i = 0; i < g_fnWatchCount; i++) {
-        uint64_t h = g_fnWatchHits[i].load(std::memory_order_relaxed);
+        u64 h = g_fnWatchHits[i].load(std::memory_order_relaxed);
         base::FormatTo(line, " {}={}(+{})", g_fnWatchLabels[i],
                        (unsigned long long)h, (unsigned long long)(h - last[i]));
         last[i] = h;

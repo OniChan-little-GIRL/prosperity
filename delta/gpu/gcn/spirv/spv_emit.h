@@ -17,6 +17,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -26,7 +27,7 @@
 
 namespace gpu::gcn::spirv {
 
-using Id = uint32_t;
+using Id = u32;
 
 // SSA-ish module builder. Instructions are accumulated into the SPIR-V logical
 // sections (the layout rules require a fixed section order); Assemble()
@@ -39,31 +40,31 @@ class Module {
 
   // ---- id + assembly ----
   Id Alloc() { return bound_++; }
-  std::vector<uint32_t> Assemble() const;
+  std::vector<u32> Assemble() const;
 
   // ---- types (cached) ----
   Id TypeVoid();
   Id TypeBool();
-  Id TypeInt(uint32_t width = 32, bool sign = false);
-  Id TypeFloat(uint32_t width = 32);
-  Id TypeVec(Id comp, uint32_t count);
-  Id TypeArray(Id elem, uint32_t len);  // length via an emitted u32 const
+  Id TypeInt(u32 width = 32, bool sign = false);
+  Id TypeFloat(u32 width = 32);
+  Id TypeVec(Id comp, u32 count);
+  Id TypeArray(Id elem, u32 len);  // length via an emitted u32 const
   Id TypeRuntimeArray(Id elem);
   Id TypeStruct(const std::vector<Id>& members);
   Id TypePointer(spv::StorageClass sc, Id pointee);
   Id TypeFunction(Id ret, const std::vector<Id>& params = {});
   Id TypeImage(Id sampled_type,
                spv::Dim dim,
-               uint32_t depth,
-               uint32_t arrayed,
-               uint32_t ms,
-               uint32_t sampled,
+               u32 depth,
+               u32 arrayed,
+               u32 ms,
+               u32 sampled,
                spv::ImageFormat fmt);
   Id TypeSampledImage(Id image_type);
 
   // ---- constants (cached) ----
-  Id ConstU32(uint32_t v);
-  Id ConstI32(int32_t v);
+  Id ConstU32(u32 v);
+  Id ConstI32(i32 v);
   Id ConstF32(float v);
   Id ConstBool(bool v);
   Id ConstComposite(Id type, const std::vector<Id>& parts);  // not cached
@@ -73,13 +74,13 @@ class Module {
   Id Variable(Id ptr_type, spv::StorageClass sc, Id init = 0);
   void Decorate(Id target,
                 spv::Decoration dec,
-                const std::vector<uint32_t>& operands = {});
+                const std::vector<u32>& operands = {});
   void MemberDecorate(Id struct_type,
-                      uint32_t member,
+                      u32 member,
                       spv::Decoration dec,
-                      const std::vector<uint32_t>& operands = {});
+                      const std::vector<u32>& operands = {});
   void Name(Id target, const std::string& n);
-  void MemberName(Id struct_type, uint32_t member, const std::string& n);
+  void MemberName(Id struct_type, u32 member, const std::string& n);
 
   // ---- debug info ----
   // OpString (debug section); the id is what OpLine references as a file.
@@ -87,7 +88,7 @@ class Module {
   // OpLine marker in the function body: subsequent instructions carry
   // (file, line) until the next marker. The GCN recompiler uses line == the
   // instruction's dword pc, so spirv-dis output maps back to the guest code.
-  void Line(Id file, uint32_t line);
+  void Line(Id file, u32 line);
   // Function-body words emitted so far; the delta across an emission tells a
   // caller exactly how much SPIR-V one guest instruction produced.
   size_t BodyWords() const { return fn_body_.size(); }
@@ -99,7 +100,7 @@ class Module {
                   const std::vector<Id>& interface);
   void ExecMode(Id fn,
                 spv::ExecutionMode mode,
-                const std::vector<uint32_t>& operands = {});
+                const std::vector<u32>& operands = {});
   void Capability(spv::Capability cap);
   // OpExtension: the SPIR-V extension string a capability belongs to. Emitted
   // after the capabilities and before the ext-inst imports, per the module's
@@ -119,16 +120,16 @@ class Module {
   // generic instruction emitters into the current function body
   Id Emit(spv::Op op, Id result_type, const std::vector<Id>& operands);
   void EmitVoid(spv::Op op, const std::vector<Id>& operands);
-  Id ExtInst(Id result_type, uint32_t glsl_op, const std::vector<Id>& operands);
+  Id ExtInst(Id result_type, u32 glsl_op, const std::vector<Id>& operands);
 
   // common ops
   Id Load(Id type, Id ptr);
   void Store(Id ptr, Id value);
   Id AccessChain(Id ptr_type, Id base, const std::vector<Id>& indices);
   Id Bitcast(Id type, Id value);
-  Id CompositeExtract(Id type, Id composite, uint32_t index);
+  Id CompositeExtract(Id type, Id composite, u32 index);
   Id CompositeConstruct(Id type, const std::vector<Id>& parts);
-  Id VectorShuffle(Id type, Id a, Id b, const std::vector<uint32_t>& comps);
+  Id VectorShuffle(Id type, Id a, Id b, const std::vector<u32>& comps);
 
   // structured control flow helpers
   void SelectionMerge(Id merge_block);
@@ -138,7 +139,7 @@ class Module {
   // OpSwitch: selector + default label + (literal, label) cases.
   void Switch(Id selector,
               Id default_label,
-              const std::vector<std::pair<uint32_t, Id>>& cases);
+              const std::vector<std::pair<u32, Id>>& cases);
   void ReturnVoid();
   void Unreachable();
   void Kill();  // OpKill (PS discard)
@@ -146,7 +147,7 @@ class Module {
  private:
   // Packed cache key: kind (8 bits) | a (32 bits) | b (24 bits). Exact -- every
   // cached entity maps to a unique key, no hashing of the payload.
-  enum class CacheKind : uint8_t {
+  enum class CacheKind : u8 {
     kVoid,
     kBool,
     kInt,
@@ -161,14 +162,14 @@ class Module {
     kConstBool,
     kConstNull,
   };
-  static uint64_t Key(CacheKind kind, uint64_t a = 0, uint64_t b = 0) {
-    return (static_cast<uint64_t>(kind) << 56) | (a << 24) | (b & 0xFFFFFF);
+  static u64 Key(CacheKind kind, u64 a = 0, u64 b = 0) {
+    return (static_cast<u64>(kind) << 56) | (a << 24) | (b & 0xFFFFFF);
   }
-  Id Cached(uint64_t key, Id id) {
+  Id Cached(u64 key, Id id) {
     cache_[key] = id;
     return id;
   }
-  bool Lookup(uint64_t key, Id& id) const {
+  bool Lookup(u64 key, Id& id) const {
     auto it = cache_.find(key);
     if (it == cache_.end())
       return false;
@@ -176,21 +177,21 @@ class Module {
     return true;
   }
 
-  void PutWord(std::vector<uint32_t>& sec, uint32_t w) { sec.push_back(w); }
-  void Instr(std::vector<uint32_t>& sec,
+  void PutWord(std::vector<u32>& sec, u32 w) { sec.push_back(w); }
+  void Instr(std::vector<u32>& sec,
              spv::Op op,
-             const std::vector<uint32_t>& ops);
-  void PutString(std::vector<uint32_t>& sec, const std::string& s);
+             const std::vector<u32>& ops);
+  void PutString(std::vector<u32>& sec, const std::string& s);
 
-  uint32_t bound_ = 1;
+  u32 bound_ = 1;
   Id glsl_ext_ = 0;
 
-  std::vector<uint32_t> caps_, exts_, ext_imports_, mem_model_, entries_,
+  std::vector<u32> caps_, exts_, ext_imports_, mem_model_, entries_,
       exec_modes_;
   // strings_ holds OpStrings, which the debug-section layout places before
   // the OpNames in debug_.
-  std::vector<uint32_t> strings_, debug_, decos_, types_consts_, fn_body_;
-  std::unordered_map<uint64_t, Id> cache_;
+  std::vector<u32> strings_, debug_, decos_, types_consts_, fn_body_;
+  std::unordered_map<u64, Id> cache_;
   std::map<std::vector<Id>, Id> struct_cache_;  // member-list keyed (exact)
   std::map<std::vector<Id>, Id> fn_type_cache_;
   Id cur_block_ = 0;

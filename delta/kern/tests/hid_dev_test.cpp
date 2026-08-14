@@ -1,4 +1,5 @@
 #include <cstdint>
+#include "base/arch.h"
 #include <cstring>
 
 #include <gtest/gtest.h>
@@ -29,7 +30,7 @@ protected:
 // is off by default, so every read has to report zero reports.
 TEST_F(HidDevice, ReadsProduceNothing) {
   struct Case {
-    uint32_t cmd;
+    u32 cmd;
   };
   const Case cases[] = {
       {0x80204814},  // KeyboardRead
@@ -41,11 +42,11 @@ TEST_F(HidDevice, ReadsProduceNothing) {
       {0x8028482e},  // ControllerRead2
   };
   for (const auto &c : cases) {
-    uint8_t buf[0x40];
+    u8 buf[0x40];
     std::memset(buf, 0xAA, sizeof(buf));
     EXPECT_EQ(dev_.ioctl(c.cmd, buf), 0) << std::hex << c.cmd;
     // A read that produced nothing must not have touched the guest buffer.
-    for (uint8_t b : buf)
+    for (u8 b : buf)
       EXPECT_EQ(b, 0xAA) << std::hex << c.cmd;
   }
 }
@@ -53,29 +54,29 @@ TEST_F(HidDevice, ReadsProduceNothing) {
 // The write commands drive the uinput device when passthrough is on; with it
 // off they are accepted and ignored, and must not rewrite their argument.
 TEST_F(HidDevice, WritesAreAcceptedAndIgnored) {
-  uint8_t buf[0x10];
+  u8 buf[0x10];
   std::memset(buf, 0x5A, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x80104822, buf), 0);  // SetVibration
   EXPECT_EQ(dev_.ioctl(0x80104821, buf), 0);  // SetLightBar
   EXPECT_EQ(dev_.ioctl(0x80044825, buf), 0);  // ResetLightBar
-  for (uint8_t b : buf)
+  for (u8 b : buf)
     EXPECT_EQ(b, 0x5A);  // a setter reads its argument, it does not rewrite it
 }
 
 // An unknown ioctl soft-succeeds, but an IOC_OUT one still owes the caller a
 // defined buffer.
 TEST_F(HidDevice, UnknownIoctlZeroesAnOutBuffer) {
-  uint8_t buf[0x20];
+  u8 buf[0x20];
   std::memset(buf, 0xAA, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x40107499, buf), 0);  // IOC_OUT, 0x10 bytes
-  for (uint32_t i = 0; i < 0x10; i++)
+  for (u32 i = 0; i < 0x10; i++)
     EXPECT_EQ(buf[i], 0) << "byte " << i;
   EXPECT_EQ(buf[0x10], 0xAA);
 
   // IOC_VOID carries no payload, so nothing may be written through the pointer.
   std::memset(buf, 0xAA, sizeof(buf));
   EXPECT_EQ(dev_.ioctl(0x20007499, buf), 0);
-  for (uint8_t b : buf)
+  for (u8 b : buf)
     EXPECT_EQ(b, 0xAA);
 }
 

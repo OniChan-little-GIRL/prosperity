@@ -12,6 +12,7 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -30,13 +31,13 @@ int PS4ABI kernelMapNamedFlexibleAligned(void **addrOut, size_t len, int prot,
   if (align < 0x4000)
     align = 0x4000;
 
-  auto *base = krnl::sys_mmap(nullptr, len + align, static_cast<uint32_t>(prot),
-                              krnl::mFlags::anon, static_cast<uint32_t>(-1), 0);
+  auto *base = krnl::sys_mmap(nullptr, len + align, static_cast<u32>(prot),
+                              krnl::mFlags::anon, static_cast<u32>(-1), 0);
   if (krnl::isErrnoPtr(base))
     return krnl::SysError::eNOMEM;
 
   auto addr = (reinterpret_cast<uintptr_t>(base) + align - 1) & ~(align - 1);
-  krnl::sys_mname(reinterpret_cast<uint8_t *>(addr), len, name, nullptr);
+  krnl::sys_mname(reinterpret_cast<u8 *>(addr), len, name, nullptr);
 
   *addrOut = reinterpret_cast<void *>(addr);
   return 0;
@@ -44,7 +45,7 @@ int PS4ABI kernelMapNamedFlexibleAligned(void **addrOut, size_t len, int prot,
 
 // Diagnostic-path helper the SDK libc calls while formatting an allocator error
 // report. The return value is discarded at the call site.
-int PS4ABI kernelStubOk(void *, size_t, uint64_t, uint64_t) { return 0; }
+int PS4ABI kernelStubOk(void *, size_t, u64, u64) { return 0; }
 }  // namespace
 
 static const runtime::funcInfo functions[] = {

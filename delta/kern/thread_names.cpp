@@ -15,6 +15,7 @@
  */
 
 #include "thread_names.h"
+#include "base/arch.h"
 
 #include <cstddef>
 #include <cstring>
@@ -59,7 +60,7 @@ void registerGuestThreadStack(const void *stack, size_t size) {
   // pick that tag up now.
   if (auto *proc = proc::getActive()) {
     auto *info = proc->getVma().get(
-        const_cast<uint8_t *>(static_cast<const uint8_t *>(stack)));
+        const_cast<u8 *>(static_cast<const u8 *>(stack)));
     if (info && info->name)
       setName(pthread_self(), info->name);
   }
@@ -83,7 +84,7 @@ void nameThreadsForRange(const void *ptr, size_t len, const char *name) {
   // after its guard page would overwrite the useful name.
   if (std::strcmp(name, "stack guard") == 0)
     return;
-  const auto *lo = static_cast<const uint8_t *>(ptr);
+  const auto *lo = static_cast<const u8 *>(ptr);
   const auto *hi = lo + len;
   std::lock_guard<std::mutex> lk(g_mtx);
   // CONTAINMENT, not overlap. A title tags a region that can span several
@@ -93,7 +94,7 @@ void nameThreadsForRange(const void *ptr, size_t len, const char *name) {
   // makes a wait-probe report look like one subsystem is wedged four times.
   // Only rename a thread whose whole stack lies inside the tagged range.
   for (const auto &e : g_stacks) {
-    const auto *slo = static_cast<const uint8_t *>(e.stack);
+    const auto *slo = static_cast<const u8 *>(e.stack);
     const auto *shi = slo + e.size;
     if (slo >= lo && shi <= hi)
       setName(e.thread, name);

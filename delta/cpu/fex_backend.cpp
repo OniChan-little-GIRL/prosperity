@@ -14,6 +14,7 @@
 #if defined(DELTA_BACKEND_FEX)
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/xstring.h>
@@ -58,8 +59,8 @@ namespace {
 DELTA_OPTION(int, kSampleMs, "DELTA_SAMPLE_MS", 0);
 DELTA_OPTION(const char *, kRipRace, "DELTA_RIPRACE", nullptr);
 DELTA_OPTION(int, kLoadWatch, "DELTA_LOADWATCH", 0);
-DELTA_OPTION(uint64_t, kLoadWatchBase, "DELTA_LOADWATCH_BASE", 0x201400000000ull);
-DELTA_OPTION(uint64_t, kLoadWatchGoff, "DELTA_LOADWATCH_GOFF", 0x2ee2d00ull);
+DELTA_OPTION(u64, kLoadWatchBase, "DELTA_LOADWATCH_BASE", 0x201400000000ull);
+DELTA_OPTION(u64, kLoadWatchGoff, "DELTA_LOADWATCH_GOFF", 0x2ee2d00ull);
 DELTA_OPTION(bool, kVectorTso, "DELTA_FEX_VECTOR_TSO", false);
 DELTA_OPTION(bool, kMemcpyTso, "DELTA_FEX_MEMCPY_TSO", false);
 DELTA_OPTION(bool, kFexSctrace, "FEX_SCTRACE", false);
@@ -68,18 +69,18 @@ DELTA_OPTION(bool, kWatchdog, "DELTA_WATCHDOG", false);
 }  // namespace
 
 namespace krnl {
-uintptr_t lv2_get(uint32_t sysIndex);
-const char *syscall_getname(uint32_t idx);
-extern "C" uint32_t krnl_syscall_errno(uint64_t raw);
+uintptr_t lv2_get(u32 sysIndex);
+const char *syscall_getname(u32 idx);
+extern "C" u32 krnl_syscall_errno(u64 raw);
 struct tls_index;
 void *PS4ABI guest_tls_get_addr(tls_index *ti); // HLE dynamic-TLS resolver
-const uint32_t *currentGuestTidPtr();           // this thread's guest tid TLS addr
+const u32 *currentGuestTidPtr();           // this thread's guest tid TLS addr
 extern const bool g_scHist;                     // DELTA_SCHIST enabled
 }
 
 // Per-syscall call counter (lv2.cpp). Only the native x86 bsd trampoline
 // increments it, so this backend must do so itself or DELTA_SCHIST is all zeros.
-extern "C" uint64_t g_sysHist[1024];
+extern "C" u64 g_sysHist[1024];
 
 namespace cpu {
 
@@ -94,7 +95,7 @@ static FEXCore::Context::Context *g_ctxPtr = nullptr;
 
 // Last syscall this host thread entered (and whether it returned), so the crash
 // handler can name the syscall a fault occurred inside.
-static thread_local uint32_t t_lastSyscall = 0xFFFFFFFFu;
+static thread_local u32 t_lastSyscall = 0xFFFFFFFFu;
 static thread_local bool t_inSyscall = false;
 
 // Per-thread ring of recent guest->host boundary crossings (syscalls + HLE
@@ -102,15 +103,15 @@ static thread_local bool t_inSyscall = false;
 // and lock-free (thread_local) so it is safe to touch from a signal handler.
 struct TraceEvt {
   char kind;        // 's' syscall, 'h' HLE thunk, 0 = empty
-  uint32_t id;      // syscall number / thunk index
-  uint64_t a0, a1, a2, a3;
-  uint64_t ret;     // result (or sentinel before return)
-  uint64_t caller;  // guest caller PC (HLE only)
+  u32 id;      // syscall number / thunk index
+  u64 a0, a1, a2, a3;
+  u64 ret;     // result (or sentinel before return)
+  u64 caller;  // guest caller PC (HLE only)
   const char *name; // static HLE name pointer (HLE only), else nullptr
 };
-static constexpr uint32_t kTraceRing = 96;
+static constexpr u32 kTraceRing = 96;
 static thread_local TraceEvt t_trace[kTraceRing];
-static thread_local uint32_t t_tracePos = 0;
+static thread_local u32 t_tracePos = 0;
 static inline TraceEvt &traceNext() {
   TraceEvt &e = t_trace[t_tracePos % kTraceRing];
   t_tracePos++;
@@ -126,7 +127,7 @@ namespace {
 
 // Executable guest ranges registered by the loader, queried by the JIT.
 struct ExecRange {
-  uint64_t base, size;
+  u64 base, size;
 };
 std::mutex g_rangeMutex;
 std::vector<ExecRange> g_ranges;
@@ -135,10 +136,10 @@ std::vector<ExecRange> g_ranges;
 std::vector<std::string> g_thunkNames;
 
 // Named module ranges, for the deadlock watchdog's symbolization.
-struct NamedRange { uint64_t base, size; std::string name; };
+struct NamedRange { u64 base, size; std::string name; };
 std::mutex g_namedMutex;
 std::vector<NamedRange> g_named;
-static void symRange(uint64_t a, char *out, size_t n) {
+static void symRange(u64 a, char *out, size_t n) {
   std::lock_guard lk(g_namedMutex);
   for (auto &r : g_named)
     if (a >= r.base && a < r.base + r.size) {
@@ -157,23 +158,23 @@ static void symRange(uint64_t a, char *out, size_t n) {
 // DELTA_RIPRACE sample slots. The signalled thread reconstructs its own guest
 // rip (exact, from the host PC in its signal context) and stamps the round it is
 // answering; the collector only counts slots stamped with the round it asked for.
-static std::atomic<uint64_t> g_sampleGen{0};
-static thread_local std::atomic<uint64_t> t_sampleGen{0};
-static thread_local std::atomic<uint64_t> t_sampleRip{0};
+static std::atomic<u64> g_sampleGen{0};
+static thread_local std::atomic<u64> t_sampleGen{0};
+static thread_local std::atomic<u64> t_sampleRip{0};
 // When the sample was taken. Signal delivery across threads is not simultaneous,
 // so without this a "co-occurrence" could be one thread leaving and another
 // entering hundreds of microseconds apart -- which is not the question.
-static thread_local std::atomic<uint64_t> t_sampleNs{0};
+static thread_local std::atomic<u64> t_sampleNs{0};
 
 struct LiveThread {
   FEXCore::Core::InternalThreadState *thread;
-  uint32_t id;
+  u32 id;
   // This thread's TLS syscall/HLE trace ring (valid while the thread lives):
   // lets the DELTA_WATCHDOG stall dump show every parked thread's last
   // syscalls WITH arguments, not just its rip.
   const TraceEvt *trace = nullptr;
-  const uint32_t *tracePos = nullptr;
-  const uint32_t *gtid = nullptr;  // this thread's guest tid (umutex owner space)
+  const u32 *tracePos = nullptr;
+  const u32 *gtid = nullptr;  // this thread's guest tid (umutex owner space)
   // Whether this thread is parked in a syscall. A sampler reading State.rip
   // cannot tell "executing here" from "blocked in a wait it entered from here":
   // rip is only written back at block boundaries, so a thread asleep in
@@ -183,14 +184,14 @@ struct LiveThread {
   const bool *inSyscall = nullptr;
   // Where DELTA_RIPRACE leaves this thread's sampled guest rip, and the host tid
   // to signal to ask for one.
-  std::atomic<uint64_t> *sampleGen = nullptr;
-  std::atomic<uint64_t> *sampleRip = nullptr;
-  std::atomic<uint64_t> *sampleNs = nullptr;
+  std::atomic<u64> *sampleGen = nullptr;
+  std::atomic<u64> *sampleRip = nullptr;
+  std::atomic<u64> *sampleNs = nullptr;
   pid_t hostTid = 0;
 };
 std::mutex g_liveMutex;
 std::vector<LiveThread> g_live;
-std::atomic<uint32_t> g_liveSeq{0};
+std::atomic<u32> g_liveSeq{0};
 static void startWatchdog() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -202,7 +203,7 @@ static void startWatchdog() {
       int ms = kSampleMs;
       if (ms <= 0) ms = 50;
       std::thread([ms] {
-        for (uint64_t tick = 0;; tick++) {
+        for (u64 tick = 0;; tick++) {
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
           std::lock_guard lk(g_liveMutex);
           for (auto &t : g_live) {
@@ -242,7 +243,7 @@ static void startWatchdog() {
     if (kRipRace) {
       std::string spec(kRipRace);
       int ms = 1;
-      std::vector<std::pair<uint64_t, uint64_t>> ranges;
+      std::vector<std::pair<u64, u64>> ranges;
       const size_t colon = spec.find(':');
       if (colon != std::string::npos) {
         ms = std::atoi(spec.substr(0, colon).c_str());
@@ -257,8 +258,8 @@ static void startWatchdog() {
           const size_t dash = one.find('-');
           if (dash == std::string::npos)
             continue;
-          const uint64_t lo = std::strtoull(one.c_str(), nullptr, 16);
-          const uint64_t hi = std::strtoull(one.c_str() + dash + 1, nullptr, 16);
+          const u64 lo = std::strtoull(one.c_str(), nullptr, 16);
+          const u64 hi = std::strtoull(one.c_str() + dash + 1, nullptr, 16);
           if (lo && hi > lo)
             ranges.push_back({lo, hi});
         }
@@ -269,10 +270,10 @@ static void startWatchdog() {
         sigemptyset(&sa.sa_mask);
         sa.sa_sigaction = [](int, siginfo_t *, void *ucv) {
           auto *uc = static_cast<ucontext_t *>(ucv);
-          const uint64_t rip = reconstructGuestRip(uc->uc_mcontext.pc);
+          const u64 rip = reconstructGuestRip(uc->uc_mcontext.pc);
           struct timespec ts {};
           clock_gettime(CLOCK_MONOTONIC, &ts);
-          t_sampleNs.store((uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec,
+          t_sampleNs.store((u64)ts.tv_sec * 1000000000ull + ts.tv_nsec,
                            std::memory_order_relaxed);
           t_sampleRip.store(rip, std::memory_order_relaxed);
           t_sampleGen.store(g_sampleGen.load(std::memory_order_relaxed),
@@ -280,14 +281,14 @@ static void startWatchdog() {
         };
         sigaction(SIGPROF, &sa, nullptr);
         std::thread([ms, ranges] {
-          uint64_t rounds = 0, withOne = 0, withTwo = 0, maxSeen = 0, reported = 0,
+          u64 rounds = 0, withOne = 0, withTwo = 0, maxSeen = 0, reported = 0,
                    answered = 0, withTwoTight = 0;
           for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-            const uint64_t gen =
+            const u64 gen =
                 g_sampleGen.fetch_add(1, std::memory_order_relaxed) + 1;
-            struct Slot { uint32_t id; pid_t tid;
-                          std::atomic<uint64_t> *gp, *rp, *np; };
+            struct Slot { u32 id; pid_t tid;
+                          std::atomic<u64> *gp, *rp, *np; };
             Slot slots[64];
             unsigned ns = 0;
             {
@@ -302,14 +303,14 @@ static void startWatchdog() {
             for (unsigned k = 0; k < ns; k++)
               ::syscall(SYS_tgkill, ::getpid(), slots[k].tid, SIGPROF);
             std::this_thread::sleep_for(std::chrono::microseconds(300));
-            struct Hit { uint32_t id; uint64_t rip; uint64_t ns; };
+            struct Hit { u32 id; u64 rip; u64 ns; };
             Hit hits[64];
             unsigned n = 0;
             for (unsigned k = 0; k < ns; k++) {
               if (slots[k].gp->load(std::memory_order_acquire) != gen)
                 continue;  // did not answer this round
               answered++;
-              const uint64_t rip = slots[k].rp->load(std::memory_order_relaxed);
+              const u64 rip = slots[k].rp->load(std::memory_order_relaxed);
               for (auto &r : ranges)
                 if (rip >= r.first && rip < r.second) {
                   hits[n++] = {slots[k].id, rip,
@@ -328,12 +329,12 @@ static void startWatchdog() {
               // under a microsecond means "both were inside at the same time";
               // anything larger is one thread leaving as another arrives, which
               // no lock forbids.
-              uint64_t lo = hits[0].ns, hi = hits[0].ns;
+              u64 lo = hits[0].ns, hi = hits[0].ns;
               for (unsigned k = 1; k < n; k++) {
                 lo = std::min(lo, hits[k].ns);
                 hi = std::max(hi, hits[k].ns);
               }
-              const uint64_t spreadNs = hi - lo;
+              const u64 spreadNs = hi - lo;
               if (spreadNs <= 1000)
                 withTwoTight++;
               if (reported++ < 40) {
@@ -376,23 +377,23 @@ static void startWatchdog() {
     if (kLoadWatch) {
       int ms = kLoadWatch;
       if (ms <= 0) ms = 2000;
-      const uint64_t base = kLoadWatchBase;
-      const uint64_t goff = kLoadWatchGoff;
+      const u64 base = kLoadWatchBase;
+      const u64 goff = kLoadWatchGoff;
       std::thread([ms, base, goff] {
-        auto rd = [](uint64_t a, void *dst, size_t n) -> bool {
+        auto rd = [](u64 a, void *dst, size_t n) -> bool {
           long pg = sysconf(_SC_PAGESIZE);
-          for (uint64_t p = a & ~((uint64_t)pg - 1); p < a + n; p += pg) {
+          for (u64 p = a & ~((u64)pg - 1); p < a + n; p += pg) {
             unsigned char mv = 0;
             if (mincore(reinterpret_cast<void *>(p), 1, &mv) != 0) return false;
           }
           std::memcpy(dst, reinterpret_cast<void *>(a), n);
           return true;
         };
-        uint64_t pobj = base + goff;
+        u64 pobj = base + goff;
         int lastTotal = -1, plateau = 0;
-        for (uint64_t tick = 0;; tick++) {
+        for (u64 tick = 0;; tick++) {
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-          uint64_t obj = 0;
+          u64 obj = 0;
           if (!rd(pobj, &obj, 8) || obj < 0x1000) {
             BASE_LOGI("loadwatch", "{} obj ptr @{:#x} not ready (obj={:#x})",
                       (unsigned long long)tick, (unsigned long long)pobj,
@@ -400,12 +401,12 @@ static void startWatchdog() {
             std::fflush(stderr);
             continue;
           }
-          int32_t c[10] = {0};
+          i32 c[10] = {0};
           int total = 0;
           bool ok = true;
           for (int i = 0; i < 10; i++) {
-            int32_t v = 0;
-            if (!rd(obj + 0x110 + (uint64_t)i * 0x28, &v, 4)) { ok = false; break; }
+            i32 v = 0;
+            if (!rd(obj + 0x110 + (u64)i * 0x28, &v, 4)) { ok = false; break; }
             c[i] = v;
             total += v;
           }
@@ -433,23 +434,23 @@ static void startWatchdog() {
     if (kLoadWatch) {
       int ms = kLoadWatch;
       if (ms <= 0) ms = 2000;
-      const uint64_t base = kLoadWatchBase;
-      const uint64_t goff = kLoadWatchGoff;
+      const u64 base = kLoadWatchBase;
+      const u64 goff = kLoadWatchGoff;
       std::thread([ms, base, goff] {
-        auto rd = [](uint64_t a, void *dst, size_t n) -> bool {
+        auto rd = [](u64 a, void *dst, size_t n) -> bool {
           long pg = sysconf(_SC_PAGESIZE);
-          for (uint64_t p = a & ~((uint64_t)pg - 1); p < a + n; p += pg) {
+          for (u64 p = a & ~((u64)pg - 1); p < a + n; p += pg) {
             unsigned char mv = 0;
             if (mincore(reinterpret_cast<void *>(p), 1, &mv) != 0) return false;
           }
           std::memcpy(dst, reinterpret_cast<void *>(a), n);
           return true;
         };
-        uint64_t pobj = base + goff;
+        u64 pobj = base + goff;
         int lastTotal = -1, plateau = 0;
-        for (uint64_t tick = 0;; tick++) {
+        for (u64 tick = 0;; tick++) {
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-          uint64_t obj = 0;
+          u64 obj = 0;
           if (!rd(pobj, &obj, 8) || obj < 0x1000) {
             BASE_LOGI("loadwatch", "{} obj ptr @{:#x} not ready (obj={:#x})",
                       (unsigned long long)tick, (unsigned long long)pobj,
@@ -457,12 +458,12 @@ static void startWatchdog() {
             std::fflush(stderr);
             continue;
           }
-          int32_t c[10] = {0};
+          i32 c[10] = {0};
           int total = 0;
           bool ok = true;
           for (int i = 0; i < 10; i++) {
-            int32_t v = 0;
-            if (!rd(obj + 0x110 + (uint64_t)i * 0x28, &v, 4)) { ok = false; break; }
+            i32 v = 0;
+            if (!rd(obj + 0x110 + (u64)i * 0x28, &v, 4)) { ok = false; break; }
             c[i] = v;
             total += v;
           }
@@ -505,10 +506,10 @@ static void startWatchdog() {
           // registered in g_live): the difference between "waiting" and "waiting
           // on WHAT".
           if (t.trace && t.tracePos) {
-            uint32_t pos = *t.tracePos;
-            uint32_t cnt = pos < kTraceRing ? pos : kTraceRing;
-            uint32_t from = cnt > 6 ? cnt - 6 : 0;
-            for (uint32_t k = from; k < cnt; k++) {
+            u32 pos = *t.tracePos;
+            u32 cnt = pos < kTraceRing ? pos : kTraceRing;
+            u32 from = cnt > 6 ? cnt - 6 : 0;
+            for (u32 k = from; k < cnt; k++) {
               const TraceEvt &e = t.trace[(pos - cnt + k) % kTraceRing];
               if (e.kind != 's')
                 continue;
@@ -524,10 +525,10 @@ static void startWatchdog() {
               if (k == cnt - 1 && e.id == 454 && e.a1 == 17 && e.a0 >= 0x10000) {
                 unsigned char mv = 0;
                 long pg = sysconf(_SC_PAGESIZE);
-                if (mincore(reinterpret_cast<void *>(e.a0 & ~((uint64_t)pg - 1)),
+                if (mincore(reinterpret_cast<void *>(e.a0 & ~((u64)pg - 1)),
                             1, &mv) == 0) {
-                  uint32_t ow = *reinterpret_cast<volatile uint32_t *>(e.a0);
-                  uint32_t ownerTid = ow & 0x7fffffff;
+                  u32 ow = *reinterpret_cast<volatile u32 *>(e.a0);
+                  u32 ownerTid = ow & 0x7fffffff;
                   BASE_LOGI("watchdog",
                             "      ^ umutex {:#x} word={:#x} owner-tid={}{}",
                             (unsigned long long)e.a0, ow, ownerTid,
@@ -539,10 +540,10 @@ static void startWatchdog() {
                   for (auto &o : g_live) {
                     if (!o.gtid || *o.gtid != ownerTid || &o == &t) continue;
                     const TraceEvt *ot = o.trace;
-                    uint32_t opos = o.tracePos ? *o.tracePos : 0;
+                    u32 opos = o.tracePos ? *o.tracePos : 0;
                     const char *osc = "?";
-                    uint64_t oa0 = 0, oa1 = 0;
-                    uint32_t oid = 0;
+                    u64 oa0 = 0, oa1 = 0;
+                    u32 oid = 0;
                     if (ot && opos) {
                       const TraceEvt &le = ot[(opos - 1) % kTraceRing];
                       if (le.kind == 's') { oid = le.id; osc = krnl::syscall_getname(le.id); oa0 = le.a0; oa1 = le.a1; }
@@ -557,20 +558,20 @@ static void startWatchdog() {
               }
             }
           }
-          uint64_t rsp = S.gregs[FEXCore::X86State::REG_RSP];
+          u64 rsp = S.gregs[FEXCore::X86State::REG_RSP];
           int shown = 0;
           for (int i = 0; i < 1024 && shown < 12; i++) {
-            uint64_t a = rsp + (uint64_t)i * 8;
+            u64 a = rsp + (u64)i * 8;
             if (a < 0x1000) break;
             // Guard every read: the scan walks past stack tops and the old
             // unguarded memcpy CRASHED the process mid-dump (fault at the
             // mapping end above a guest stack).
             unsigned char mv = 0;
             long pg = sysconf(_SC_PAGESIZE);
-            if (mincore(reinterpret_cast<void *>(a & ~((uint64_t)pg - 1)), 1,
+            if (mincore(reinterpret_cast<void *>(a & ~((u64)pg - 1)), 1,
                         &mv) != 0)
               break;
-            uint64_t v = 0;
+            u64 v = 0;
             std::memcpy(&v, reinterpret_cast<void *>(a), 8);
             // a plausible code return address that lands in a named module range
             if (v < 0x200000000000ull || v >= 0x210000000000ull) continue;
@@ -593,7 +594,7 @@ static void startWatchdog() {
 std::mutex g_thunkMutex;
 std::vector<void *> g_hostThunks;
 // Bump-allocated pool of guest-executable trampolines (one per bound HLE export).
-uint8_t *g_thunkPool = nullptr;
+u8 *g_thunkPool = nullptr;
 size_t g_thunkPoolUsed = 0;
 constexpr size_t g_thunkPoolSize = 0x100000; // 1 MiB -> ~95k trampolines
 constexpr size_t kThunkStride = 16;
@@ -602,18 +603,18 @@ class FexSyscallHandler final : public FEXCore::HLE::SyscallHandler {
 public:
   FexSyscallHandler() { OSABI = FEXCore::HLE::SyscallOSABI::OS_LINUX64; }
 
-  uint64_t HandleSyscall(FEXCore::Core::CpuStateFrame *Frame,
+  u64 HandleSyscall(FEXCore::Core::CpuStateFrame *Frame,
                          FEXCore::HLE::SyscallArguments *Args) override {
     // Args->Argument[0] = syscall number (RAX); [1..6] = RDI,RSI,RDX,R10,R8,R9.
-    const uint32_t num = static_cast<uint32_t>(Args->Argument[0]);
+    const u32 num = static_cast<u32>(Args->Argument[0]);
 
     // Dynamic-TLS bridge: the patched guest __tls_get_addr issues this magic
     // syscall with the tls_index pointer in rdi (Argument[1]).
     if (num == kTlsGetAddrSyscall) {
-      uint64_t r = reinterpret_cast<uint64_t>(krnl::guest_tls_get_addr(
+      u64 r = reinterpret_cast<u64>(krnl::guest_tls_get_addr(
           reinterpret_cast<krnl::tls_index *>(Args->Argument[1])));
       if (g_ctxPtr) {
-        uint32_t ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
+        u32 ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
         g_ctxPtr->SetFlagsFromCompactedEFLAGS(Frame->Thread, ef & ~1u);
       }
       return r;
@@ -625,29 +626,29 @@ public:
     // (rcx, which `syscall` clobbers) is in Argument[4]; args 7-8 sit on the
     // guest stack just above the return address.
     if ((num & 0xFF000000u) == kHostThunkSyscallBase) {
-      const uint32_t idx = num & 0x00FFFFFFu;
+      const u32 idx = num & 0x00FFFFFFu;
       void *fn = nullptr;
       {
         std::lock_guard lk(g_thunkMutex);
         if (idx < g_hostThunks.size())
           fn = g_hostThunks[idx];
       }
-      uint64_t ret = 0;
+      u64 ret = 0;
       if (fn) {
         // Reconstruct SysV args 7..14 from the guest stack just above the return
         // address (the trampoline pushed nothing). Passing extra args a callee
         // ignores is harmless; this covers up to 14-arg Sce exports such as
         // sceGnmSubmitAndFlipCommandBuffers (9 args).
-        const uint64_t rsp = Frame->State.gregs[FEXCore::X86State::REG_RSP];
-        uint64_t s[8] = {};
+        const u64 rsp = Frame->State.gregs[FEXCore::X86State::REG_RSP];
+        u64 s[8] = {};
         if (rsp)
           for (int i = 0; i < 8; i++)
-            s[i] = reinterpret_cast<uint64_t *>(rsp)[i + 1];
-        using Fn = uint64_t(PS4ABI *)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t);
-        uint64_t caller = (rsp) ? reinterpret_cast<uint64_t *>(rsp)[0] : 0;
+            s[i] = reinterpret_cast<u64 *>(rsp)[i + 1];
+        using Fn = u64(PS4ABI *)(u64, u64, u64, u64,
+                                      u64, u64, u64, u64,
+                                      u64, u64, u64, u64,
+                                      u64, u64);
+        u64 caller = (rsp) ? reinterpret_cast<u64 *>(rsp)[0] : 0;
         const char *evName = nullptr;
         { std::lock_guard lk(g_thunkMutex);
           if (idx < g_thunkNames.size()) evName = g_thunkNames[idx].c_str(); }
@@ -671,7 +672,7 @@ public:
         }
       }
       if (g_ctxPtr) {
-        uint32_t ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
+        u32 ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
         g_ctxPtr->SetFlagsFromCompactedEFLAGS(Frame->Thread, ef & ~1u);
       }
       return ret;
@@ -691,7 +692,7 @@ public:
     // The lv2 handlers are plain AArch64 functions (PS4ABI is empty off-x86);
     // call with the six GPR args and translate their Linux-style negative errno
     // returns to the BSD/PS4 carry + positive errno convention.
-    using Fn = uint64_t(PS4ABI *)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn = u64(PS4ABI *)(u64, u64, u64, u64, u64, u64);
     auto fn = reinterpret_cast<Fn>(handler);
     // DELTA_SCHIST: the histogram is incremented by the native x86 bsd trampoline,
     // which this backend never emits, so count here too. Racy increments are fine.
@@ -702,9 +703,9 @@ public:
     TraceEvt &ev = traceNext();
     ev = {'s', num, Args->Argument[1], Args->Argument[2], Args->Argument[3],
           Args->Argument[4], ~0ull, 0, nullptr};
-    uint64_t ret = fn(Args->Argument[1], Args->Argument[2], Args->Argument[3],
+    u64 ret = fn(Args->Argument[1], Args->Argument[2], Args->Argument[3],
                        Args->Argument[4], Args->Argument[5], Args->Argument[6]);
-    const uint32_t error = krnl::krnl_syscall_errno(ret);
+    const u32 error = krnl::krnl_syscall_errno(ret);
     if (error)
       ret = error;
     ev.ret = ret;
@@ -715,7 +716,7 @@ public:
     // CF isn't stored directly in flags[]; update it through FEX's compacted-
     // EFLAGS API so the guest's `jb cerror` observes the syscall result.
     if (g_ctxPtr) {
-      uint32_t ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
+      u32 ef = g_ctxPtr->ReconstructCompactedEFLAGS(Frame->Thread, false, nullptr, 0);
       if (error)
         ef |= 1u;  // EFLAGS.CF
       else
@@ -726,7 +727,7 @@ public:
   }
 
   FEXCore::HLE::ExecutableRangeInfo
-  QueryGuestExecutableRange(FEXCore::Core::InternalThreadState *, uint64_t Address) override {
+  QueryGuestExecutableRange(FEXCore::Core::InternalThreadState *, u64 Address) override {
     std::lock_guard lk(g_rangeMutex);
     for (auto &r : g_ranges)
       if (Address >= r.base && Address < r.base + r.size)
@@ -735,7 +736,7 @@ public:
   }
 
   std::optional<FEXCore::ExecutableFileSectionInfo>
-  LookupExecutableFileSection(FEXCore::Core::InternalThreadState *, uint64_t) override {
+  LookupExecutableFileSection(FEXCore::Core::InternalThreadState *, u64) override {
     return std::nullopt;
   }
 };
@@ -748,7 +749,7 @@ class FexSignalDelegator final : public FEXCore::SignalDelegator {};
 // Return target for runGuestFunction: a synchronously-called guest function rets
 // here, and we longjmp out of the JIT just like thr_exit. Dispatched as a host
 // thunk, so its signature matches the thunk call path (extra args ignored).
-static uint64_t PS4ABI guestFnReturnExit() {
+static u64 PS4ABI guestFnReturnExit() {
   exitGuestThread();
   return 0;  // unreachable (exitGuestThread longjmps)
 }
@@ -758,10 +759,10 @@ public:
   void onImageMapped(krnl::moduleInfo &info) override {
     ensureInit();
     std::lock_guard lk(g_rangeMutex);
-    g_ranges.push_back({reinterpret_cast<uint64_t>(info.base), info.codeSize});
+    g_ranges.push_back({reinterpret_cast<u64>(info.base), info.codeSize});
     {
       std::lock_guard nk(g_namedMutex);
-      g_named.push_back({reinterpret_cast<uint64_t>(info.base), info.codeSize,
+      g_named.push_back({reinterpret_cast<u64>(info.base), info.codeSize,
                          std::string(info.name.c_str())});
     }
     LOG_INFO("fex: registered exec range {} +{:#x}", (void *)info.base, info.codeSize);
@@ -812,7 +813,7 @@ public:
     pool.push_back({p, size});
   }
 
-  void *createGuestThread(uintptr_t entry, void *arg, uint64_t fsbase) override {
+  void *createGuestThread(uintptr_t entry, void *arg, u64 fsbase) override {
     ensureInit();
     auto *h = new FexThread{};
 
@@ -824,7 +825,7 @@ public:
     if (!h->stack)
       h->stack = mmap(nullptr, h->stackSize, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    uint64_t rsp = (reinterpret_cast<uint64_t>(h->stack) + h->stackSize - 0x200) & ~0xFULL;
+    u64 rsp = (reinterpret_cast<u64>(h->stack) + h->stackSize - 0x200) & ~0xFULL;
 
     // IMPORTANT: create on the calling (parent) thread, as FEX's ThreadManager
     // does, never on the freshly spawned worker while other guest threads run.
@@ -842,10 +843,10 @@ public:
         alloc = mmap(nullptr, h->callretSize, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
       if (alloc != MAP_FAILED) {
         h->callret = alloc;
-        void *crBase = reinterpret_cast<uint8_t *>(alloc) + kPage;
+        void *crBase = reinterpret_cast<u8 *>(alloc) + kPage;
         mprotect(crBase, kSize, PROT_READ | PROT_WRITE);
         thread->CallRetStackBase = crBase;
-        S.callret_sp = reinterpret_cast<uint64_t>(crBase) + kSize / 4;
+        S.callret_sp = reinterpret_cast<u64>(crBase) + kSize / 4;
       }
     }
 
@@ -861,18 +862,18 @@ public:
     gdt->D = 0;
 
     // PS4 entry convention: argument block pointer in RDI.
-    S.gregs[FEXCore::X86State::REG_RDI] = reinterpret_cast<uint64_t>(arg);
+    S.gregs[FEXCore::X86State::REG_RDI] = reinterpret_cast<u64>(arg);
 
     // Seed guest TLS (fs base). Until the guest installs its own via sysarch, an
     // unset (0) base would fault early TLS reads at fs+disp; give a scratch TLS
     // region with a TCB self-pointer at [fs:0], mirroring native's valid host fs.
-    uint64_t fs = fsbase;
+    u64 fs = fsbase;
     if (fs == 0) {
       constexpr size_t kTls = 0x10000;
       void *t = mmap(nullptr, kTls, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
       if (t != MAP_FAILED) {
-        fs = reinterpret_cast<uint64_t>(t) + kTls / 2;
-        *reinterpret_cast<uint64_t *>(fs) = fs;
+        fs = reinterpret_cast<u64>(t) + kTls / 2;
+        *reinterpret_cast<u64 *>(fs) = fs;
       }
     }
     S.fs_cached = fs;
@@ -890,8 +891,8 @@ public:
     krnl::installCrashHandler();
     FEXCore::Allocator::RegisterTLSData(h->thread); // FEX per-thread registration
     startWatchdog();
-    uint32_t myId = g_liveSeq.fetch_add(1);
-    uint64_t entryRip = h->thread->CurrentFrame->State.rip;
+    u32 myId = g_liveSeq.fetch_add(1);
+    u64 entryRip = h->thread->CurrentFrame->State.rip;
     {
       // Map out this guest thread's memory identity: its FEX-allocated guest
       // stack and the HOST pthread stack it runs on, so a later fault address
@@ -933,14 +934,14 @@ public:
                 myId, (unsigned long long)entryRip, es,
                 (unsigned long long)endS.rip, rs);
       if (endS.rip >= 0x200000000000ull && endS.rip < 0x210000000000ull) {
-        const uint8_t *b = reinterpret_cast<const uint8_t *>(endS.rip);
+        const u8 *b = reinterpret_cast<const u8 *>(endS.rip);
         BASE_LOGI("watchdog", "      bytes@rip: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}",
                   b[0], b[1], b[2], b[3], b[4], b[5]);
       }
-      uint64_t rsp = endS.gregs[FEXCore::X86State::REG_RSP];
+      u64 rsp = endS.gregs[FEXCore::X86State::REG_RSP];
       int shown = 0;
       for (int i = 0; i < 2048 && shown < 20; i++) {
-        uint64_t a = rsp + (uint64_t)i * 8, v = 0;
+        u64 a = rsp + (u64)i * 8, v = 0;
         if (a < 0x1000) break;
         std::memcpy(&v, reinterpret_cast<void *>(a), 8);
         if (v < 0x200000000000ull || v >= 0x210000000000ull) continue;
@@ -961,10 +962,10 @@ public:
                           "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
       for (int i = 0; i < 16; i++)
         BASE_LOGI("fex", "  {}={:#x}", rn[i], (unsigned long)endS.gregs[i]);
-      uint64_t rsp = endS.gregs[FEXCore::X86State::REG_RSP];
+      u64 rsp = endS.gregs[FEXCore::X86State::REG_RSP];
       if (rsp) {
         for (int i = 0; i < 64; i++) {
-          uint64_t v = reinterpret_cast<uint64_t *>(rsp)[i];
+          u64 v = reinterpret_cast<u64 *>(rsp)[i];
           if (v >= 0x200000000000ull && v < 0x206000000000ull)
             BASE_LOGI("fex", "  stk+{:#x} = {:#x}", i * 8, (unsigned long)v);
         }
@@ -984,8 +985,8 @@ public:
     delete h;
   }
 
-  uint64_t runGuestFunction(uintptr_t fn, uint64_t a0, uint64_t a1,
-                            uint64_t a2, uint64_t a3) override {
+  u64 runGuestFunction(uintptr_t fn, u64 a0, u64 a1,
+                            u64 a2, u64 a3) override {
     // A guest function that returns must land somewhere; point its return address
     // at a host thunk that calls exitGuestThread, so the JIT unwinds cleanly.
     static uintptr_t exitThunk =
@@ -995,7 +996,7 @@ public:
     // which reads thread-local state. The caller (blocked on join below) isn't
     // touching its TLS meanwhile, so sharing it for this synchronous call is safe
     // and avoids faulting on the scratch-TLS a fresh thread would otherwise get.
-    uint64_t fsbase = t_curThread ? t_curThread->CurrentFrame->State.fs_cached : 0;
+    u64 fsbase = t_curThread ? t_curThread->CurrentFrame->State.fs_cached : 0;
 
     // createGuestThread sets RDI=arg; add RSI/RDX for the 2nd/3rd SysV args.
     auto *h = static_cast<FexThread *>(
@@ -1006,9 +1007,9 @@ public:
     S.gregs[FEXCore::X86State::REG_RCX] = a3;
     // Push the return address. After the implicit `call`, x86 wants rsp%16==8 at
     // the callee's first instruction, so 16-align then subtract 8.
-    uint64_t rsp = S.gregs[FEXCore::X86State::REG_RSP] & ~0xFULL;
+    u64 rsp = S.gregs[FEXCore::X86State::REG_RSP] & ~0xFULL;
     rsp -= 8;
-    *reinterpret_cast<uint64_t *>(rsp) = exitThunk;
+    *reinterpret_cast<u64 *>(rsp) = exitThunk;
     S.gregs[FEXCore::X86State::REG_RSP] = rsp;
     // Run on a PERSISTENT host worker (never nest ExecuteThread on the caller's
     // host thread) and block until it finishes. fn returns -> exitThunk ->
@@ -1194,14 +1195,14 @@ void exitGuestThread() {
 // trampoline lives there. A guest fault in this pool means the guest called an
 // import slot we bound but cannot service -- knowing WHICH import turns an
 // unreadable "illegal instruction at 0x5000000004xx" into a name.
-const char *hostThunkNameForAddr(uintptr_t addr, uint32_t *idxOut) {
+const char *hostThunkNameForAddr(uintptr_t addr, u32 *idxOut) {
   std::lock_guard lk(g_thunkMutex);
   if (!g_thunkPool)
     return nullptr;
   const auto base = reinterpret_cast<uintptr_t>(g_thunkPool);
   if (addr < base || addr >= base + g_thunkPoolUsed)
     return nullptr;
-  const uint32_t idx = static_cast<uint32_t>((addr - base) / kThunkStride);
+  const u32 idx = static_cast<u32>((addr - base) / kThunkStride);
   if (idxOut)
     *idxOut = idx;
   if (idx < g_thunkNames.size() && !g_thunkNames[idx].empty())
@@ -1214,7 +1215,7 @@ uintptr_t makeHostThunk(void *hostFn, const char *name) {
   g_thunkNames.resize(g_hostThunks.size() + 1);
   g_thunkNames[g_hostThunks.size()] = name ? name : "";
   if (!g_thunkPool) {
-    g_thunkPool = static_cast<uint8_t *>(
+    g_thunkPool = static_cast<u8 *>(
         mmap(nullptr, g_thunkPoolSize, PROT_READ | PROT_WRITE | PROT_EXEC,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     if (g_thunkPool == MAP_FAILED) {
@@ -1227,23 +1228,23 @@ uintptr_t makeHostThunk(void *hostFn, const char *name) {
     // guest fault that lands in it is a call through a bad HLE import slot, and
     // without the base there is no way to tell that from random garbage.
     LOG_INFO("fex: host-thunk pool {:#x}+{:#x}",
-             reinterpret_cast<uint64_t>(g_thunkPool),
-             (uint64_t)g_thunkPoolSize);
+             reinterpret_cast<u64>(g_thunkPool),
+             (u64)g_thunkPoolSize);
     // FEX won't JIT code outside a registered executable range.
     std::lock_guard rk(g_rangeMutex);
-    g_ranges.push_back({reinterpret_cast<uint64_t>(g_thunkPool), g_thunkPoolSize});
+    g_ranges.push_back({reinterpret_cast<u64>(g_thunkPool), g_thunkPoolSize});
   }
   if (g_thunkPoolUsed + kThunkStride > g_thunkPoolSize) {
     LOG_ERROR("fex: host-thunk pool exhausted");
     return 0;
   }
-  const uint32_t idx = static_cast<uint32_t>(g_hostThunks.size());
+  const u32 idx = static_cast<u32>(g_hostThunks.size());
   g_hostThunks.push_back(hostFn);
 
-  uint8_t *t = g_thunkPool + g_thunkPoolUsed;
+  u8 *t = g_thunkPool + g_thunkPoolUsed;
   g_thunkPoolUsed += kThunkStride;
-  const uint32_t sc = kHostThunkSyscallBase | idx;
-  uint8_t *p = t;
+  const u32 sc = kHostThunkSyscallBase | idx;
+  u8 *p = t;
   *p++ = 0x49; *p++ = 0x89; *p++ = 0xCA;           // mov r10, rcx
   *p++ = 0xB8;                                       // mov eax, imm32
   std::memcpy(p, &sc, 4); p += 4;
@@ -1264,11 +1265,11 @@ uintptr_t makeHostThunk(void *hostFn, const char *name) {
 // This is the ARM-compatible replacement for int3 return hooks: FEX JITs the
 // emitted bytes and the `call r11 -> realTarget` chains into the real callee.
 // Reentrant/thread-safe (all transient state on the guest stack). 0 on failure.
-uintptr_t makeGuestReturnHook(void *realTarget, uint32_t hookId, void *loggerFn,
+uintptr_t makeGuestReturnHook(void *realTarget, u32 hookId, void *loggerFn,
                               const char *name) {
   std::lock_guard lk(g_thunkMutex);
   if (!g_thunkPool) {
-    g_thunkPool = static_cast<uint8_t *>(
+    g_thunkPool = static_cast<u8 *>(
         mmap(nullptr, g_thunkPoolSize, PROT_READ | PROT_WRITE | PROT_EXEC,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     if (g_thunkPool == MAP_FAILED) {
@@ -1277,26 +1278,26 @@ uintptr_t makeGuestReturnHook(void *realTarget, uint32_t hookId, void *loggerFn,
       return 0;
     }
     std::lock_guard rk(g_rangeMutex);
-    g_ranges.push_back({reinterpret_cast<uint64_t>(g_thunkPool), g_thunkPoolSize});
+    g_ranges.push_back({reinterpret_cast<u64>(g_thunkPool), g_thunkPoolSize});
   }
   // Register the native logger as a host-thunk index for the magic syscall.
-  const uint32_t loggerIdx = static_cast<uint32_t>(g_hostThunks.size());
+  const u32 loggerIdx = static_cast<u32>(g_hostThunks.size());
   g_hostThunks.push_back(loggerFn);
   g_thunkNames.resize(g_hostThunks.size());
   g_thunkNames[loggerIdx] = name ? name : "guesthook";
-  const uint32_t magic = kHostThunkSyscallBase | loggerIdx;
+  const u32 magic = kHostThunkSyscallBase | loggerIdx;
 
   constexpr size_t kWrapStride = 64; // emitted body is ~51 bytes
   if (g_thunkPoolUsed + kWrapStride > g_thunkPoolSize) {
     LOG_ERROR("fex: guest-hook pool exhausted");
     return 0;
   }
-  uint8_t *t = g_thunkPool + g_thunkPoolUsed;
+  u8 *t = g_thunkPool + g_thunkPoolUsed;
   g_thunkPoolUsed += kWrapStride;
-  uint8_t *p = t;
-  auto emit = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) *p++ = x; };
-  auto emit32 = [&](uint32_t v) { std::memcpy(p, &v, 4); p += 4; };
-  auto emit64 = [&](uint64_t v) { std::memcpy(p, &v, 8); p += 8; };
+  u8 *p = t;
+  auto emit = [&](std::initializer_list<u8> b) { for (u8 x : b) *p++ = x; };
+  auto emit32 = [&](u32 v) { std::memcpy(p, &v, 4); p += 4; };
+  auto emit64 = [&](u64 v) { std::memcpy(p, &v, 8); p += 8; };
   // On entry: rsp%16==8; args rdi,rsi,rdx,rcx; [rsp]=caller return address.
   emit({0x57});                    // push rdi                 ; save a0
   emit({0x56});                    // push rsi                 ; save a1
@@ -1304,7 +1305,7 @@ uintptr_t makeGuestReturnHook(void *realTarget, uint32_t hookId, void *loggerFn,
   emit({0x51});                    // push rcx                 ; save a3
   emit({0x48, 0x83, 0xEC, 0x08});  // sub rsp, 8               ; realign to 16
   emit({0x49, 0xBB});              // movabs r11, realTarget
-  emit64(reinterpret_cast<uint64_t>(realTarget));
+  emit64(reinterpret_cast<u64>(realTarget));
   emit({0x41, 0xFF, 0xD3});        // call r11                 ; run real fn -> rax=ret
   emit({0x48, 0x83, 0xC4, 0x08});  // add rsp, 8
   emit({0x49, 0x89, 0xC1});        // mov r9, rax              ; logger arg6 = ret
@@ -1340,30 +1341,30 @@ uintptr_t makeGuestLockWrapper(void *realTarget, void *lockFn, void *unlockFn,
                                const char *name) {
   std::lock_guard lk(g_thunkMutex);
   if (!g_thunkPool) {
-    g_thunkPool = static_cast<uint8_t *>(
+    g_thunkPool = static_cast<u8 *>(
         mmap(nullptr, g_thunkPoolSize, PROT_READ | PROT_WRITE | PROT_EXEC,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     if (g_thunkPool == MAP_FAILED) { g_thunkPool = nullptr; return 0; }
     std::lock_guard rk(g_rangeMutex);
-    g_ranges.push_back({reinterpret_cast<uint64_t>(g_thunkPool), g_thunkPoolSize});
+    g_ranges.push_back({reinterpret_cast<u64>(g_thunkPool), g_thunkPoolSize});
   }
-  const uint32_t lockIdx = static_cast<uint32_t>(g_hostThunks.size());
+  const u32 lockIdx = static_cast<u32>(g_hostThunks.size());
   g_hostThunks.push_back(lockFn);
   g_thunkNames.resize(g_hostThunks.size());
   g_thunkNames[lockIdx] = name ? name : "guestlock";
-  const uint32_t unlockIdx = static_cast<uint32_t>(g_hostThunks.size());
+  const u32 unlockIdx = static_cast<u32>(g_hostThunks.size());
   g_hostThunks.push_back(unlockFn);
   g_thunkNames.resize(g_hostThunks.size());
   g_thunkNames[unlockIdx] = name ? name : "guestunlock";
 
   constexpr size_t kStride = 64;  // emitted body is 46 bytes
   if (g_thunkPoolUsed + kStride > g_thunkPoolSize) return 0;
-  uint8_t *t = g_thunkPool + g_thunkPoolUsed;
+  u8 *t = g_thunkPool + g_thunkPoolUsed;
   g_thunkPoolUsed += kStride;
-  uint8_t *p = t;
-  auto emit = [&](std::initializer_list<uint8_t> b) { for (uint8_t x : b) *p++ = x; };
-  auto emit32 = [&](uint32_t v) { std::memcpy(p, &v, 4); p += 4; };
-  auto emit64 = [&](uint64_t v) { std::memcpy(p, &v, 8); p += 8; };
+  u8 *p = t;
+  auto emit = [&](std::initializer_list<u8> b) { for (u8 x : b) *p++ = x; };
+  auto emit32 = [&](u32 v) { std::memcpy(p, &v, 4); p += 4; };
+  auto emit64 = [&](u64 v) { std::memcpy(p, &v, 8); p += 8; };
   // Reached by `jmp` from the patched entry, so rsp%16==8 and [rsp] is still the
   // ORIGINAL caller's return address -- the final `ret` therefore returns to it.
   // The syscall handler calls a C function, which may clobber every SysV
@@ -1383,7 +1384,7 @@ uintptr_t makeGuestLockWrapper(void *realTarget, void *lockFn, void *unlockFn,
   emit({0x5F});                    // pop rdi
   emit({0x48, 0x83, 0xEC, 0x08});  // sub rsp, 8      ; realign for the call
   emit({0x49, 0xBB});              // movabs r11, realTarget
-  emit64(reinterpret_cast<uint64_t>(realTarget));
+  emit64(reinterpret_cast<u64>(realTarget));
   emit({0x41, 0xFF, 0xD3});        // call r11        ; the real function
   emit({0x48, 0x83, 0xC4, 0x08});  // add rsp, 8
   emit({0x50});                    // push rax        ; preserve the return value
@@ -1403,39 +1404,39 @@ uintptr_t makeGuestLockWrapper(void *realTarget, void *lockFn, void *unlockFn,
 // function from the top (relocated prologue) and falls through into its body.
 // `prologueLen` bytes MUST be position-independent (no rip-relative / relative
 // branches) and end on an instruction boundary >= 14 (the detour's abs-jmp size).
-uintptr_t makeGuestTrampoline(const void *fnBytes, uint32_t prologueLen,
+uintptr_t makeGuestTrampoline(const void *fnBytes, u32 prologueLen,
                               const void *continueAt) {
   std::lock_guard lk(g_thunkMutex);
   if (!g_thunkPool) {
-    g_thunkPool = static_cast<uint8_t *>(
+    g_thunkPool = static_cast<u8 *>(
         mmap(nullptr, g_thunkPoolSize, PROT_READ | PROT_WRITE | PROT_EXEC,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     if (g_thunkPool == MAP_FAILED) { g_thunkPool = nullptr; return 0; }
     std::lock_guard rk(g_rangeMutex);
-    g_ranges.push_back({reinterpret_cast<uint64_t>(g_thunkPool), g_thunkPoolSize});
+    g_ranges.push_back({reinterpret_cast<u64>(g_thunkPool), g_thunkPoolSize});
   }
   const size_t need = prologueLen + 14;
   const size_t stride = (need + 15) & ~size_t(15);
   if (g_thunkPoolUsed + stride > g_thunkPoolSize) return 0;
-  uint8_t *t = g_thunkPool + g_thunkPoolUsed;
+  u8 *t = g_thunkPool + g_thunkPoolUsed;
   g_thunkPoolUsed += stride;
   std::memcpy(t, fnBytes, prologueLen);           // relocated prologue
-  uint8_t *p = t + prologueLen;
+  u8 *p = t + prologueLen;
   *p++ = 0xFF; *p++ = 0x25;                        // jmp qword [rip+0]
-  uint32_t zero = 0; std::memcpy(p, &zero, 4); p += 4;
-  uint64_t cont = reinterpret_cast<uint64_t>(continueAt);
+  u32 zero = 0; std::memcpy(p, &zero, 4); p += 4;
+  u64 cont = reinterpret_cast<u64>(continueAt);
   std::memcpy(p, &cont, 8);
   return reinterpret_cast<uintptr_t>(t);
 }
 
-uint64_t currentGuestRip() {
+u64 currentGuestRip() {
   return t_curThread ? t_curThread->CurrentFrame->State.rip : 0;
 }
 
 // Guest fs-segment base of the thread currently executing on this host thread
 // (0 if none). Lets a native hook logger read the guest's TLS (e.g. the BPE
 // JobSystem worker ordinal at fs:[-8]) without emitting guest fs-relative code.
-uint64_t currentGuestFsBase() {
+u64 currentGuestFsBase() {
   return t_curThread ? t_curThread->CurrentFrame->State.fs_cached : 0;
 }
 
@@ -1445,7 +1446,7 @@ uint64_t currentGuestFsBase() {
 // the ordinals that actually exist decides whether a job whose affinity names
 // a core we never assign (e.g. SotC's core-6 "Resource Loading" pin, mask
 // 0x40) can be claimed by anyone at all.
-void guestThreadFsBases(std::vector<uint64_t> &out) {
+void guestThreadFsBases(std::vector<u64> &out) {
   out.clear();
   std::lock_guard lk(g_liveMutex);
   out.reserve(g_live.size());
@@ -1454,11 +1455,11 @@ void guestThreadFsBases(std::vector<uint64_t> &out) {
       out.push_back(t.thread->CurrentFrame->State.fs_cached);
 }
 
-const uint64_t *currentGuestGregs() {
+const u64 *currentGuestGregs() {
   return t_curThread ? t_curThread->CurrentFrame->State.gregs : nullptr;
 }
 
-bool guestGregsFromSignal(const void *ucontext, uint64_t out[16]) {
+bool guestGregsFromSignal(const void *ucontext, u64 out[16]) {
 #if defined(__aarch64__)
   if (!ucontext || !t_curThread)
     return false;
@@ -1493,9 +1494,9 @@ void dumpThreadTrace(void *fileStar) {
   if (!f)
     return;
   std::fprintf(f, "  --- last guest->host calls (this thread, oldest first) ---\n");
-  uint32_t count = t_tracePos < kTraceRing ? t_tracePos : kTraceRing;
-  uint32_t start = t_tracePos - count;
-  for (uint32_t i = 0; i < count; i++) {
+  u32 count = t_tracePos < kTraceRing ? t_tracePos : kTraceRing;
+  u32 start = t_tracePos - count;
+  for (u32 i = 0; i < count; i++) {
     const TraceEvt &e = t_trace[(start + i) % kTraceRing];
     if (e.kind == 's') {
       std::fprintf(f, "  sc  %3u %-22s (%#llx,%#llx,%#llx,%#llx) -> %#llx\n",
@@ -1514,7 +1515,7 @@ void dumpThreadTrace(void *fileStar) {
   }
 }
 
-uint64_t reconstructGuestRip(uint64_t hostPC) {
+u64 reconstructGuestRip(u64 hostPC) {
   if (!g_ctxPtr || !t_curThread)
     return 0;
   if (!g_ctxPtr->IsAddressInCodeBuffer(t_curThread, hostPC))
@@ -1539,17 +1540,17 @@ bool tryHandleJitSignal(int sig, void *infop, void *ucv) {
   // fatal "guest fault" at the guard page (0x...feff0) ~9s into SotC's
   // LoadInitialWorld.
   if (sig == SIGSEGV && t_curThread->CallRetStackBase) {
-    const uint64_t fa =
-        reinterpret_cast<uint64_t>(static_cast<siginfo_t *>(infop)->si_addr);
-    const uint64_t crBase =
-        reinterpret_cast<uint64_t>(t_curThread->CallRetStackBase);
+    const u64 fa =
+        reinterpret_cast<u64>(static_cast<siginfo_t *>(infop)->si_addr);
+    const u64 crBase =
+        reinterpret_cast<u64>(t_curThread->CallRetStackBase);
     constexpr size_t kCrSize =
         FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE;
     constexpr size_t kPage = 0x1000;
     if (fa >= crBase - kPage && fa < crBase + kCrSize + kPage) {
       uc->uc_mcontext.regs[25] = crBase + kCrSize / 4;
-      static std::atomic<uint32_t> n{0};
-      uint32_t c = n.fetch_add(1);
+      static std::atomic<u32> n{0};
+      u32 c = n.fetch_add(1);
       if (c < 8 || (c & (c - 1)) == 0)  // first few, then powers of two
         BASE_LOGI("fex",
                   "callret predictor over/underflow #{} reset (fault {:#x})",
@@ -1564,20 +1565,20 @@ bool tryHandleJitSignal(int sig, void *infop, void *ucv) {
   // case.)
   if (sig != SIGBUS)
     return false;
-  const uint64_t pc = uc->uc_mcontext.pc;
+  const u64 pc = uc->uc_mcontext.pc;
   if (!g_ctxPtr->IsAddressInCodeBuffer(t_curThread, pc))
     return false;
   if (static_cast<siginfo_t *>(infop)->si_code != BUS_ADRALN)
     return false;
   auto result = FEXCore::ArchHelpers::Arm64::HandleUnalignedAccess(
       t_curThread, FEXCore::ArchHelpers::Arm64::UnalignedHandlerType::HalfBarrier,
-      pc, reinterpret_cast<uint64_t *>(&uc->uc_mcontext.regs[0]));
+      pc, reinterpret_cast<u64 *>(&uc->uc_mcontext.regs[0]));
   // A backpatched unaligned ATOMIC stops being atomic (HalfBarrier splits it
   // into plain ops + barriers). That silently breaks guest spinlocks/queues,
   // so make every backpatch visible: log the first ones with the guest RIP.
   static std::mutex logM;
-  static std::set<uint64_t> seenRips;
-  const uint64_t grip = reconstructGuestRip(pc);
+  static std::set<u64> seenRips;
+  const u64 grip = reconstructGuestRip(pc);
   {
     std::lock_guard<std::mutex> lk(logM);
     if (seenRips.insert(grip).second)
@@ -1598,11 +1599,11 @@ bool tryHandleJitSignal(int sig, void *infop, void *ucv) {
 // Guest fs base (TLS) is the current FEXCore thread's CPUState.fs_cached. Called
 // by the guest via sys_sysarch(AMD64_SET_FSBASE) and on thread spawn.
 namespace krnl {
-void setThreadFsBase(uint64_t v) {
+void setThreadFsBase(u64 v) {
   if (cpu::t_curThread)
     cpu::t_curThread->CurrentFrame->State.fs_cached = v;
 }
-uint64_t threadFsBase() {
+u64 threadFsBase() {
   return cpu::t_curThread ? cpu::t_curThread->CurrentFrame->State.fs_cached : 0;
 }
 } // namespace krnl

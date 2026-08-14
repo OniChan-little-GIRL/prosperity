@@ -9,6 +9,7 @@
  */
 
 #include <cstddef>
+#include "base/arch.h"
 #include <cstdint>
 
 // SDL3 window backed by a Vulkan swapchain. present() uploads a CPU framebuffer
@@ -27,19 +28,19 @@ void setTitle(const char *title);
 
 // Set PNG artwork for the game window. The desktop backend applies a small
 // emulator badge before using it as the taskbar icon.
-void setIcon(const uint8_t *png, size_t size);
+void setIcon(const u8 *png, size_t size);
 
 // Device-local memory this process is using, and what it may use. Both 0 when
 // the driver has no VK_EXT_memory_budget (or there is no window at all).
-void queryVram(uint64_t &used, uint64_t &total);
+void queryVram(u64 &used, u64 &total);
 
 // Create the window, Vulkan device and swapchain. Returns false on failure.
 // Idempotent: returns true immediately if a window already exists.
-bool init(const char *title, uint32_t width, uint32_t height);
+bool init(const char *title, u32 width, u32 height);
 
 // Idempotent bring-up for the presenting thread: create the window on the first
 // call, then report availability. Stops retrying after a failed attempt.
-bool ensure(const char *title, uint32_t width, uint32_t height);
+bool ensure(const char *title, u32 width, u32 height);
 
 // True once a window + swapchain exist (init succeeded and not shut down).
 bool available();
@@ -54,7 +55,7 @@ void requestPresentStop();
 
 // Upload pixels (w by h, srcPitch bytes per row, 0 means w*4) and present them,
 // scaling to the current window size.
-void present(const void *pixels, uint32_t w, uint32_t h, uint32_t srcPitch = 0,
+void present(const void *pixels, u32 w, u32 h, u32 srcPitch = 0,
              PixelFormat fmt = PixelFormat::rgba8);
 
 // Drain window events. Returns false once the user asks to close the window.
@@ -67,7 +68,7 @@ struct PadKeys {
   bool up = false, down = false, left = false, right = false;
   bool l1 = false, r1 = false, l2 = false, r2 = false;
   bool options = false, touchpad = false;
-  uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
+  u8 lx = 128, ly = 128, rx = 128, ry = 128;
 };
 // Fill `out` from the current keyboard state. Returns false if no window
 // exists.
@@ -76,7 +77,7 @@ bool pollKeyboardPad(PadKeys &out);
 // Drive haptics on the active controller. large/small are the DS4 motor
 // intensities (0..255). Routed to SDL gamepad rumble (PC) or the device
 // vibrator (Android); a no-op when no haptic device is present.
-void setRumble(uint8_t largeMotor, uint8_t smallMotor);
+void setRumble(u8 largeMotor, u8 smallMotor);
 
 // Harness signal shared between the GPU renderer and the input layer. The
 // renderer raises it once sustained gameplay (room rendering) is on screen, so

@@ -7,6 +7,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <cstdlib>
 #include <ctime>
 
@@ -22,7 +23,7 @@ namespace krnl {
 // PS4 timespec is {int64 tv_sec; int64 tv_nsec}, same layout as the host's on
 // x86-64. Map the guest clock id onto a host clock; unknown ids fall back to
 // monotonic (good enough for the deltas most callers want).
-int PS4ABI sys_clock_gettime(uint32_t clock_id, sce_timespec *tp) {
+int PS4ABI sys_clock_gettime(u32 clock_id, sce_timespec *tp) {
   if (!tp)
     return -SysError::eINVAL;
 
@@ -59,9 +60,9 @@ int PS4ABI sys_clock_gettime(uint32_t clock_id, sce_timespec *tp) {
   // the bottleneck. Realtime is left alone (only monotonic/uptime ids scale).
   const long scale = kTimeScale;
   if (scale > 1 && host == CLOCK_MONOTONIC) {
-    static const uint64_t base = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-    uint64_t now = (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
-    uint64_t scaled = base + (now - base) * (uint64_t)scale;
+    static const u64 base = (u64)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+    u64 now = (u64)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+    u64 scaled = base + (now - base) * (u64)scale;
     ts.tv_sec = scaled / 1000000000ull;
     ts.tv_nsec = scaled % 1000000000ull;
   }

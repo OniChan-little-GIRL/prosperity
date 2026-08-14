@@ -12,6 +12,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdlib>
 #include <strings.h>
 #include <utl/options.h>
@@ -20,18 +21,18 @@
 namespace runtime::sysparam {
 
 // SCE_SYSTEM_SERVICE_PARAM_ID_*.
-constexpr int32_t kIdLang = 1;
-constexpr int32_t kIdDateFormat = 2;
-constexpr int32_t kIdTimeFormat = 3;
-constexpr int32_t kIdTimeZone = 4;
-constexpr int32_t kIdSummerTime = 5;
-constexpr int32_t kIdParentalLevel = 7;
-constexpr int32_t kIdEnterButtonAssign = 1000;
+constexpr i32 kIdLang = 1;
+constexpr i32 kIdDateFormat = 2;
+constexpr i32 kIdTimeFormat = 3;
+constexpr i32 kIdTimeZone = 4;
+constexpr i32 kIdSummerTime = 5;
+constexpr i32 kIdParentalLevel = 7;
+constexpr i32 kIdEnterButtonAssign = 1000;
 
 // SCE_SYSTEM_PARAM_LANG_*, in the order the console numbers them.
 struct LangName {
   const char *name;
-  int32_t id;
+  i32 id;
 };
 inline constexpr LangName kLangs[] = {
     {"ja", 0},       {"en", 1},      {"en-us", 1},  {"fr", 2},
@@ -50,13 +51,13 @@ inline constexpr LangName kLangs[] = {
 DELTA_OPTION_INLINE(const char *, kSysLang, "DELTA_SYS_LANG", nullptr,
                     "system language a title sees, as a code or a raw id");
 
-inline int32_t Language() {
-  static const int32_t lang = [] {
+inline i32 Language() {
+  static const i32 lang = [] {
     const char *e = kSysLang;
     if (!e || !*e)
       return 1;
     if (e[0] >= '0' && e[0] <= '9')
-      return static_cast<int32_t>(std::atoi(e));
+      return static_cast<i32>(std::atoi(e));
     for (const auto &l : kLangs)
       if (strcasecmp(e, l.name) == 0)
         return l.id;
@@ -65,7 +66,7 @@ inline int32_t Language() {
   return lang;
 }
 
-inline int ParamGetInt(int32_t paramId, int32_t *value) {
+inline int ParamGetInt(i32 paramId, i32 *value) {
   if (!value)
     return -1;
   switch (paramId) {

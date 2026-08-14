@@ -3,6 +3,7 @@
  */
 
 #include "gpu/rhi/command.h"
+#include "base/arch.h"
 #include "gpu/vulkan/vk_perf.h"
 
 #include "gfx/gfx.h"
@@ -23,19 +24,19 @@ DELTA_OPTION(bool, kOverlay, "DELTA_GPU_OVERLAY", true);
 
 namespace gpu::vk {
 
-uint64_t g_ns_gpu_exec = 0;
-uint32_t g_gpu_exec_samples = 0;
+u64 g_ns_gpu_exec = 0;
+u32 g_gpu_exec_samples = 0;
 
-uint64_t g_ns_draw = 0, g_ns_end = 0, g_ns_readback = 0, g_ns_tex_up = 0;
-uint64_t g_ns_cs = 0, g_cs_bytes = 0;
-uint64_t g_ns_cs_in = 0, g_ns_cs_gpu = 0, g_ns_cs_out = 0;
-uint32_t g_cs_count = 0;
-uint64_t g_ns_submit = 0, g_ns_present = 0;
-uint32_t g_tex_ups = 0;
-uint32_t g_cs_stage_n = 0, g_cs_flush_n = 0;
-uint64_t g_cs_stage_bytes = 0;
-uint64_t g_cs_wb_bytes_written = 0, g_cs_wb_bytes_total = 0;
-uint64_t g_fr_draw = 0, g_fr_submit = 0, g_fr_wait = 0, g_fr_present = 0,
+u64 g_ns_draw = 0, g_ns_end = 0, g_ns_readback = 0, g_ns_tex_up = 0;
+u64 g_ns_cs = 0, g_cs_bytes = 0;
+u64 g_ns_cs_in = 0, g_ns_cs_gpu = 0, g_ns_cs_out = 0;
+u32 g_cs_count = 0;
+u64 g_ns_submit = 0, g_ns_present = 0;
+u32 g_tex_ups = 0;
+u32 g_cs_stage_n = 0, g_cs_flush_n = 0;
+u64 g_cs_stage_bytes = 0;
+u64 g_cs_wb_bytes_written = 0, g_cs_wb_bytes_total = 0;
+u64 g_fr_draw = 0, g_fr_submit = 0, g_fr_wait = 0, g_fr_present = 0,
          g_fr_tex_up = 0;
 
 namespace {
@@ -55,18 +56,18 @@ int g_stage_hist_pos = 0, g_stage_hist_count = 0;
 // /proc/self/stat, RSS the resident pages from /proc/self/statm.
 struct ProcStats {
   float cpuPct = 0;  // whole process; exceeds 100 when several threads are busy
-  uint64_t rss = 0;  // bytes
+  u64 rss = 0;  // bytes
 };
 ProcStats g_proc;
 
 void RefreshProcStats() {
-  static uint64_t last_ns = 0;
-  static uint64_t last_jiffies = 0;
-  const uint64_t now = NowNs();
+  static u64 last_ns = 0;
+  static u64 last_jiffies = 0;
+  const u64 now = NowNs();
   if (last_ns && now - last_ns < 500000000ull)
     return;
 
-  uint64_t jiffies = 0;
+  u64 jiffies = 0;
   if (FILE* f = std::fopen("/proc/self/stat", "r")) {
     char buf[1024];
     const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
@@ -98,16 +99,16 @@ void RefreshProcStats() {
   if (FILE* f = std::fopen("/proc/self/statm", "r")) {
     unsigned long total = 0, resident = 0;
     if (std::fscanf(f, "%lu %lu", &total, &resident) == 2)
-      g_proc.rss = uint64_t(resident) * uint64_t(sysconf(_SC_PAGESIZE));
+      g_proc.rss = u64(resident) * u64(sysconf(_SC_PAGESIZE));
     std::fclose(f);
   }
 }
 
 // 3x5 bitmap font (rows top-down, bit 2 = left pixel). Uppercase + digits only.
-const uint8_t* OvGlyph(char c) {
+const u8* OvGlyph(char c) {
   struct Glyph {
     char c;
-    uint8_t rows[5];
+    u8 rows[5];
   };
   static const Glyph f[] = {
       {'0', {7, 5, 5, 5, 7}}, {'1', {2, 6, 2, 2, 7}}, {'2', {7, 1, 7, 4, 7}},
@@ -129,33 +130,33 @@ const uint8_t* OvGlyph(char c) {
   return nullptr;  // unknown/space -> blank
 }
 
-inline void OvFill(uint8_t* b,
-                   uint32_t w,
-                   uint32_t h,
+inline void OvFill(u8* b,
+                   u32 w,
+                   u32 h,
                    int x,
                    int y,
                    int fw,
                    int fh,
-                   uint32_t bgra) {
+                   u32 bgra) {
   if (x < 0 || y < 0)
     return;
   for (int yy = y; yy < y + fh && yy < (int)h; yy++) {
-    uint32_t* row = reinterpret_cast<uint32_t*>(b + (size_t)yy * w * 4);
+    u32* row = reinterpret_cast<u32*>(b + (size_t)yy * w * 4);
     for (int xx = x; xx < x + fw && xx < (int)w; xx++)
       row[xx] = bgra;
   }
 }
 
-void OvText(uint8_t* b,
-            uint32_t w,
-            uint32_t h,
+void OvText(u8* b,
+            u32 w,
+            u32 h,
             int x,
             int y,
             int scale,
-            uint32_t bgra,
+            u32 bgra,
             const char* s) {
   for (; *s; s++, x += 4 * scale) {
-    const uint8_t* rows = OvGlyph(*s);
+    const u8* rows = OvGlyph(*s);
     if (!rows)
       continue;
     for (int ry = 0; ry < 5; ry++)
@@ -170,13 +171,13 @@ void OvText(uint8_t* b,
 // breakdown of the frame, and reading them next to the graph invited the two to
 // be compared. gpuMs/wallMs is our own GPU time as a share of the frame; VRAM
 // is the driver's per-process estimate.
-void DrawResourcePanel(uint8_t* bgra,
-                       uint32_t w,
-                       uint32_t h,
+void DrawResourcePanel(u8* bgra,
+                       u32 w,
+                       u32 h,
                        float gpuMs,
                        float wallMs) {
   RefreshProcStats();
-  uint64_t vramUsed = 0, vramTotal = 0;
+  u64 vramUsed = 0, vramTotal = 0;
   gfx::queryVram(vramUsed, vramTotal);
   constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
   const float gpuPct =
@@ -184,7 +185,7 @@ void DrawResourcePanel(uint8_t* bgra,
                                                          : gpuMs / wallMs * 100.0f)
                      : 0.0f;
   const struct {
-    uint32_t col;
+    u32 col;
     const char* fmt;
     double val;
   } kUse[4] = {
@@ -200,7 +201,7 @@ void DrawResourcePanel(uint8_t* bgra,
   for (int yy = y0 - 4; yy < y0 + panelH && yy < (int)h; yy++) {
     if (yy < 0)
       continue;
-    uint32_t* row = reinterpret_cast<uint32_t*>(bgra + (size_t)yy * w * 4);
+    u32* row = reinterpret_cast<u32*>(bgra + (size_t)yy * w * 4);
     for (int xx = x0 - 4; xx < x0 + kPanelW && xx < (int)w; xx++)
       if (xx >= 0)
         row[xx] = (row[xx] >> 2) & 0x3F3F3F3F;
@@ -228,8 +229,8 @@ void DrawResourcePanel(uint8_t* bgra,
 // Drawn AFTER the PPM capture paths so dumps stay clean.
 
 void PushStageSample() {
-  static uint64_t prev_ns = 0;
-  const uint64_t now = NowNs();
+  static u64 prev_ns = 0;
+  const u64 now = NowNs();
   const float wall = prev_ns ? (now - prev_ns) / 1e6f : 0.0f;
   prev_ns = now;
   StageSample s;
@@ -249,11 +250,11 @@ void PushStageSample() {
     g_stage_hist_count++;
 }
 
-void DrawPerfOverlay(uint8_t* bgra, uint32_t w, uint32_t h) {
+void DrawPerfOverlay(u8* bgra, u32 w, u32 h) {
   if (!kOverlay || !g_stage_hist_count || w < 560 || h < 280)
     return;
   // BGRA little-endian constants (0xAARRGGBB written as a uint32).
-  static constexpr uint32_t kCol[6] = {
+  static constexpr u32 kCol[6] = {
       0xFF32C832,  // REC green
       0xFFC8C828,  // SUB yellow
       0xFFE63232,  // GPU red
@@ -272,7 +273,7 @@ void DrawPerfOverlay(uint8_t* bgra, uint32_t w, uint32_t h) {
   for (int yy = panel_y0 - 4; yy < y1 + 4 && yy < (int)h; yy++) {
     if (yy < 0)
       continue;
-    uint32_t* row = reinterpret_cast<uint32_t*>(bgra + (size_t)yy * w * 4);
+    u32* row = reinterpret_cast<u32*>(bgra + (size_t)yy * w * 4);
     for (int xx = x0 - 4; xx < x0 + graph_w + 4 && xx < (int)w; xx++)
       row[xx] = (row[xx] >> 2) & 0x3F3F3F3F;
   }

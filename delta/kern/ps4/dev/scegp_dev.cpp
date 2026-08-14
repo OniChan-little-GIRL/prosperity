@@ -1,4 +1,5 @@
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -9,17 +10,17 @@
 namespace krnl {
 sceGpDevice::sceGpDevice(proc *p) : device(p) {}
 
-int32_t sceGpDevice::ioctl(uint32_t cmd, void *data) {
+i32 sceGpDevice::ioctl(u32 cmd, void *data) {
   BASE_LOGI("sceGp", "UNHANDLED ioctl({:#x})", cmd);
   if (data && (cmd & 0x40000000u)) {
-    const uint32_t len = (cmd >> 16) & 0x1fff;
+    const u32 len = (cmd >> 16) & 0x1fff;
     if (len)
       std::memset(data, 0, len);
   }
   return 0;
 }
 
-int64_t sceGpDevice::lseek(int64_t, int) { return 0; }
+i64 sceGpDevice::lseek(i64, int) { return 0; }
 
 int sceGpDevice::fstat(void *stat) {
   if (!stat)

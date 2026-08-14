@@ -1,4 +1,5 @@
 #include "gpu/vulkan/vk_index_upload.h"
+#include "base/arch.h"
 
 #include <gtest/gtest.h>
 
@@ -8,10 +9,10 @@ namespace gpu::vk {
 namespace {
 
 TEST(IndexUpload, PreservesNativeWidths) {
-  const uint16_t indices16[] = {1, 9, 3};
-  const uint32_t indices32[] = {2, 70000, 4};
-  uint16_t output16[3] = {};
-  uint32_t output32[3] = {};
+  const u16 indices16[] = {1, 9, 3};
+  const u32 indices32[] = {2, 70000, 4};
+  u16 output16[3] = {};
+  u32 output32[3] = {};
   CopyGuestIndices(output16, indices16, 3, 0);
   CopyGuestIndices(output32, indices32, 3, 1);
   EXPECT_EQ(std::memcmp(output16, indices16, sizeof(indices16)), 0);
@@ -21,8 +22,8 @@ TEST(IndexUpload, PreservesNativeWidths) {
 }
 
 TEST(IndexUpload, WidensEightBitIndices) {
-  const uint8_t input[] = {0, 255, 7};
-  uint16_t output[3] = {};
+  const u8 input[] = {0, 255, 7};
+  u16 output[3] = {};
   CopyGuestIndices(output, input, 3, 2);
   EXPECT_EQ(output[0], 0u);
   EXPECT_EQ(output[1], 255u);

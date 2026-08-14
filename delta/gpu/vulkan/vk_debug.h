@@ -15,6 +15,7 @@
 // speaks -- a capture can be lined up against DELTA_GPU_* logs by eye.
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -35,7 +36,7 @@ void InitDebugUtils(VkInstance instance, bool extension_enabled);
 bool DebugUtilsActive();
 
 // Attach a printf-formatted name to any Vulkan object.
-void NameObject(VkObjectType type, uint64_t handle, const char* fmt, ...)
+void NameObject(VkObjectType type, u64 handle, const char* fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
 // Open/close a nested label region in a command buffer.

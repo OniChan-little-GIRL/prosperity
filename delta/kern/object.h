@@ -9,6 +9,7 @@
  */
 
 #include <atomic>
+#include "base/arch.h"
 #include <mutex>
 #include <utl/object_ref.h>
 
@@ -20,7 +21,7 @@ class proc;
 
 class kObject {
 public:
-  using handleList = base::Vector<uint32_t>;
+  using handleList = base::Vector<u32>;
 
   enum class oType {
     file,
@@ -47,7 +48,7 @@ public:
 
   handleList &handles() { return handleCollection; }
 
-  uint32_t handle() const { return handleCollection[0]; }
+  u32 handle() const { return handleCollection[0]; }
 
 protected:
   oType otype;
@@ -56,7 +57,7 @@ protected:
 
 private:
   handleList handleCollection;
-  std::atomic<int32_t> refCount;
+  std::atomic<i32> refCount;
 };
 
 template <typename T> utl::object_ref<T> retain_object(T *ptr) {

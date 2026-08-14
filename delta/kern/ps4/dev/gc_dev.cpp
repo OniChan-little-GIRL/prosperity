@@ -2,6 +2,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <base/strings/format.h>
 #include <base/strings/xstring.h>
@@ -32,20 +33,20 @@ DELTA_OPTION(bool, kGcCaller, "DELTA_GC_CALLER", false);
 DELTA_OPTION(bool, kGcAcb, "DELTA_GPU_ACB", true);
 // Drain mapped compute rings by their contents rather than by a matching
 // doorbell; see the walk in the DingDong handler.
-DELTA_OPTION(uint32_t, kGcAcbScan, "DELTA_GPU_ACB_SCAN", 0);
+DELTA_OPTION(u32, kGcAcbScan, "DELTA_GPU_ACB_SCAN", 0);
 DELTA_OPTION(bool, kGcFlip, "DELTA_GC_FLIP", false);
 DELTA_OPTION(bool, kGcTrace, "DELTA_GC_TRACE", false);
-DELTA_OPTION(uint32_t, kGcTraceMax, "DELTA_GC_TRACE_MAX", 0);
+DELTA_OPTION(u32, kGcTraceMax, "DELTA_GC_TRACE_MAX", 0);
 }  // namespace
 
 // LLE GPU submit bridge (delta_runtime). The real libSceGnmDriver.sprx submits
 // PM4 through these ioctls; forward the descriptor array to the GPU command
 // processor. See prosperity_gc_submit in libSceGnmDriver.cpp.
-extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount);
-extern "C" void prosperity_gc_submit_acb(const void *commands, uint32_t bytes);
+extern "C" void prosperity_gc_submit(const void *descArray, u32 descCount);
+extern "C" void prosperity_gc_submit_acb(const void *commands, u32 bytes);
 
-extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
-                                    int64_t flipArg);
+extern "C" void prosperity_gc_flip(u64 scanoutBase, int displayBufferIndex,
+                                    i64 flipArg);
 
 // NOTE: the PS5 AGC /dev/gc protocol lives in a separate device,
 // kern/ps5/dev/gc_dev.cpp (gcDevicePs5); this file is PS4 GNM only.
@@ -53,31 +54,31 @@ extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
 namespace krnl {
 gcDevice::gcDevice(proc *p) : device(p) {}
 
-bool gcDevice::init(const char *, uint32_t, uint32_t) { return true; }
+bool gcDevice::init(const char *, u32, u32) { return true; }
 
-static void completeFlipLabels(uint64_t flipPtr) {
+static void completeFlipLabels(u64 flipPtr) {
   if (!flipPtr)
     return;
   // The flip arg block is caller-controlled; not every title passes a pointer
   // here (layout varies by GnmDriver revision). Never dereference a value that
   // isn't a mapped guest VA.
   auto *pr = proc::getActive();
-  if (!pr || !pr->getVma().get(reinterpret_cast<uint8_t *>(flipPtr)))
+  if (!pr || !pr->getVma().get(reinterpret_cast<u8 *>(flipPtr)))
     return;
 
-  auto *p = reinterpret_cast<uint32_t *>(flipPtr);
+  auto *p = reinterpret_cast<u32 *>(flipPtr);
   // Gnm prepareFlip emits a PM4-like EOP-label packet:
   //   C0038000 addr_lo addr_hi value_lo value_hi
   // Complete it synchronously because the CPU-side emulated submit already
   // finished all draws before returning.
   if (p[0] == 0xC0038000u) {
-    uint64_t addr = (static_cast<uint64_t>(p[2] & 0xFF) << 32) | p[1];
-    uint64_t value = static_cast<uint64_t>(p[3]) |
-                     (static_cast<uint64_t>(p[4]) << 32);
-    if (addr && !pr->getVma().get(reinterpret_cast<uint8_t *>(addr)))
+    u64 addr = (static_cast<u64>(p[2] & 0xFF) << 32) | p[1];
+    u64 value = static_cast<u64>(p[3]) |
+                     (static_cast<u64>(p[4]) << 32);
+    if (addr && !pr->getVma().get(reinterpret_cast<u8 *>(addr)))
       return;
     if (addr) {
-      *reinterpret_cast<uint64_t *>(addr) = value;
+      *reinterpret_cast<u64 *>(addr) = value;
       if (kGcFlip)
         BASE_LOGI("gc", "  flip label [{:#x}] = {:#x}",
                   static_cast<unsigned long>(addr),
@@ -118,7 +119,7 @@ static void printGuestCaller() {
 }
 
 /* ioctl dispatch */
-int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
+i32 gcDevice::ioctl(u32 cmd, void *data) {
   // Graphics command submission (the LLE path: real libSceGnmDriver.sprx). The
   // arg's descriptor array is an array of 16-byte PM4 INDIRECT_BUFFER packets;
   // forward it to the GPU command processor. Handle these first (and without the
@@ -126,9 +127,9 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   switch (cmd) {
   case 0xC0108102: {  // gc submit: {u32 a0, u32 count, u64 descPtr}
     struct argl {
-      uint32_t a0;
-      uint32_t count;
-      uint64_t descPtr;
+      u32 a0;
+      u32 count;
+      u64 descPtr;
     };
     auto *a = static_cast<argl *>(data);
     prosperity_gc_submit(reinterpret_cast<const void *>(a->descPtr), a->count);
@@ -138,11 +139,11 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // _, u64 descPtr}. Kernel (11.00): pfind(arg+0),
                       // count at +0x08, descPtr at +0x10.
     struct argl {
-      uint32_t pid;  // +0x00: submitter pid (kernel pfind()s it)
-      uint32_t pad4;
-      uint32_t count;  // +0x08
-      uint32_t padC;
-      uint64_t descPtr;  // +0x10
+      u32 pid;  // +0x00: submitter pid (kernel pfind()s it)
+      u32 pad4;
+      u32 count;  // +0x08
+      u32 padC;
+      u64 descPtr;  // +0x10
     };
     auto *a = static_cast<argl *>(data);
     prosperity_gc_submit(reinterpret_cast<const void *>(a->descPtr), a->count);
@@ -158,11 +159,11 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // prepareFlip packet pointer; SotC passes a scalar there
                       // and the read faulted.)
     struct argl {
-      uint32_t pid;
-      uint32_t count;
-      uint64_t descPtr;
-      uint64_t eopVal;
-      uint32_t wait;
+      u32 pid;
+      u32 count;
+      u64 descPtr;
+      u64 eopVal;
+      u32 wait;
     };
     auto *a = static_cast<argl *>(data);
     // SCOUT (DELTA_GC_FLIP): dump the raw args + first descriptor.
@@ -173,13 +174,13 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                 a->pid, a->count, (unsigned long)a->descPtr,
                 (unsigned long)a->eopVal, a->wait);
       if (a->descPtr && a->count) {
-        auto *d = reinterpret_cast<const uint32_t *>(a->descPtr);
+        auto *d = reinterpret_cast<const u32 *>(a->descPtr);
         BASE_LOGI("gc", "  desc[0..7]: {:x} {:x} {:x} {:x} {:x} {:x} {:x} {:x}",
                   d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
       }
     }
     prosperity_gc_submit(reinterpret_cast<const void *>(a->descPtr), a->count);
-    uint32_t bufferIndex = dceCurrentBuffer();
+    u32 bufferIndex = dceCurrentBuffer();
     prosperity_gc_flip(dceScanoutBuffer(bufferIndex),
                        static_cast<int>(bufferIndex), dceCurrentFlipArg());
     noteFlip();  // advance the flip count + post the display event for pacing
@@ -197,7 +198,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // "done" is always true; the kernel never touches the arg
                       // slot, we zero it as the benign idle answer.
     if (data)
-      *static_cast<uint32_t *>(data) = 0;
+      *static_cast<u32 *>(data) = 0;
     return 0;
   }
   case 0xC0048114: {  // kernel: GRBM poll -- spins on the busy regs (0x1413/0x1414)
@@ -208,7 +209,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // handle it here (return success, zero the slot) so it stops
                       // falling through to the UNHANDLED logger.
     if (data)
-      *static_cast<uint32_t *>(data) = 0;
+      *static_cast<u32 *>(data) = 0;
     return 0;
   }
   case 0xC0048113:  // kernel: query softc->submit_count into arg slot (returns 0).
@@ -216,17 +217,17 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                     // it. Both are query hot-paths; no async submit state to
                     // report, so the zeroed buffer is the "nothing pending" answer.
     if (data)
-      *static_cast<uint32_t *>(data) = 0;
+      *static_cast<u32 *>(data) = 0;
     return 0;
   case 0xC0088109: {  // kernel: register a suspend-done notify pointer: stores the
                       // u64 in arg into cdevpriv and copyout's a 4-byte zero to
                       // *arg (the "no suspend pending" flag). No suspend support,
                       // so zero the pointed-to flag if it is a mapped guest VA.
-    uint64_t ptr = static_cast<uint64_t *>(data) ? *static_cast<uint64_t *>(data) : 0;
+    u64 ptr = static_cast<u64 *>(data) ? *static_cast<u64 *>(data) : 0;
     if (ptr) {
       auto *pr = proc::getActive();
-      if (pr && pr->getVma().get(reinterpret_cast<uint8_t *>(ptr)))
-        *reinterpret_cast<uint32_t *>(ptr) = 0;
+      if (pr && pr->getVma().get(reinterpret_cast<u8 *>(ptr)))
+        *reinterpret_cast<u32 *>(ptr) = 0;
     }
     return 0;
   }
@@ -239,9 +240,9 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     // 0x2232/0x2233 from arg[0]/arg[1] (a compute kick). Our GPU is synchronous
     // (never busy) and register writes are no-ops, so just accept.
     struct argl {
-      uint32_t unknown_0;
-      uint32_t unknown_4;
-      uint32_t unknown_8;
+      u32 unknown_0;
+      u32 unknown_4;
+      u32 unknown_8;
     };
     auto args = reinterpret_cast<argl *>(data);
     (void)args;
@@ -253,10 +254,10 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     // consoles report 0 redundant CUs. The old 1024 placeholder produced se0=16,
     // which is impossible (an SE has 9 CUs) and would skew the driver's CU count.
     struct argl {
-      uint32_t cumask0;
-      uint32_t cumask1;
-      uint32_t cumask2;
-      uint32_t cumask3;
+      u32 cumask0;
+      u32 cumask1;
+      u32 cumask2;
+      u32 cumask3;
     };
     auto args = reinterpret_cast<argl *>(data);
     args->cumask0 = 0;
@@ -271,45 +272,45 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     // then dereferences it on every submit (`cmp dword[ptr],0` = trace-enable).
     // A bogus value here makes that deref fault. Hand back a real, zeroed guest
     // struct so the deref reads trace-disabled (0) and the logger is a no-op.
-    static uint8_t *traceInfo = nullptr;
+    static u8 *traceInfo = nullptr;
     if (!traceInfo)
       traceInfo = allocLowGuest(0x100);  // zero-filled; [+0] = trace flag (off)
-    auto args = static_cast<uint64_t *>(data);
-    *args = reinterpret_cast<uint64_t>(traceInfo);
+    auto args = static_cast<u64 *>(data);
+    *args = reinterpret_cast<u64>(traceInfo);
     BASE_LOGI("gc", "ioctl({:x}): trace-info -> {:p}", cmd, traceInfo);
     return 0;
   }
   case 0xC030810D:   // sceGnmMapComputeQueue
   case 0xC030811A: { // sceGnmMapComputeQueueWithPriority (same 0x30 struct)
     struct Args {
-      uint32_t me;
-      uint32_t pipe;
-      uint32_t queue;
-      uint32_t vqueue;
-      uint64_t ringBase;
-      uint64_t readPtr;
-      uint64_t state;
-      uint32_t ringSizeLog2Dw;
-      uint32_t reserved;
+      u32 me;
+      u32 pipe;
+      u32 queue;
+      u32 vqueue;
+      u64 ringBase;
+      u64 readPtr;
+      u64 state;
+      u32 ringSizeLog2Dw;
+      u32 reserved;
     };
     static_assert(sizeof(Args) == 0x30);
     const auto* args = static_cast<const Args*>(data);
     if (kGcTrace) {
-      const auto* words = static_cast<const uint32_t*>(data);
+      const auto* words = static_cast<const u32*>(data);
       base::String wordsOut;
       base::FormatTo(wordsOut, "map compute queue ioctl={:#x}:", cmd);
-      for (uint32_t i = 0; i < 12; i++)
+      for (u32 i = 0; i < 12; i++)
         base::FormatTo(wordsOut, " {:08x}", words[i]);
       BASE_LOGI("gc", "{}", wordsOut.c_str());
     }
     if (kGcAcb && args && args->ringSizeLog2Dw < 31) {
-      const uint32_t ring_size_dw = 1u << args->ringSizeLog2Dw;
-      const uint64_t ring_bytes = static_cast<uint64_t>(ring_size_dw) * 4;
+      const u32 ring_size_dw = 1u << args->ringSizeLog2Dw;
+      const u64 ring_bytes = static_cast<u64>(ring_size_dw) * 4;
       if (ring_size_dw >= 2 && utl::isMemoryRangeMapped(
                                    reinterpret_cast<const void*>(args->ringBase),
                                    ring_bytes) &&
           utl::isMemoryRangeMapped(reinterpret_cast<const void*>(args->readPtr),
-                                   sizeof(uint32_t))) {
+                                   sizeof(u32))) {
         std::lock_guard lock(computeMutex);
         ComputeQueue* slot = nullptr;
         for (ComputeQueue& entry : computeQueues) {
@@ -332,7 +333,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                    .ringSizeDw = ring_size_dw,
                    .readOffsetDw = 0,
                    .mapped = true};
-          *reinterpret_cast<uint32_t*>(args->readPtr) = 0;
+          *reinterpret_cast<u32*>(args->readPtr) = 0;
         }
       }
     }
@@ -347,7 +348,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   }
   case 0xC00C810E: { // sceGnmUnmapComputeQueue
     if (kGcAcb && data) {
-      const auto* args = static_cast<const uint32_t*>(data);
+      const auto* args = static_cast<const u32*>(data);
       std::lock_guard lock(computeMutex);
       for (ComputeQueue& entry : computeQueues)
         if (entry.mapped && entry.me == args[0] && entry.pipe == args[1] &&
@@ -360,8 +361,8 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     // kernel: VA->GPU-physical translate, arg[0] -> arg[1]. Used for GPU-visible buffers. Guest GPU space is identity-mapped to host,
     // so the translation is the input VA itself.
     struct argl {
-      uint64_t vaddr;
-      uint64_t phys;
+      u64 vaddr;
+      u64 phys;
     };
     auto args = static_cast<argl *>(data);
     args->phys = args->vaddr;
@@ -371,15 +372,15 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                    // safe for boot but drops async-compute work; wire into the
                    // CP if a title depends on compute results.
     if (kGcTrace) {
-      static uint32_t traced = 0;
+      static u32 traced = 0;
       if (traced++ < 100) {
-        const auto* words = static_cast<const uint32_t*>(data);
+        const auto* words = static_cast<const u32*>(data);
         BASE_LOGI("gc", "DingDong: {:08x} {:08x} {:08x} {:08x}", words[0],
                   words[1], words[2], words[3]);
       }
     }
     if (kGcAcb && data) {
-      const auto* args = static_cast<const uint32_t*>(data);
+      const auto* args = static_cast<const u32*>(data);
       std::lock_guard lock(computeMutex);
       // Periodic census of EVERY mapped queue, not just the kicked one. SotC
       // maps seven and only 1/0/0 ever arrives here, which leaves two very
@@ -388,12 +389,12 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
       // writing to its /dev/gc mapping instead of calling this ioctl). Reading
       // the first packet of each ring separates them.
       if (kGcTrace) {
-        static uint32_t kicks = 0;
+        static u32 kicks = 0;
         if ((kicks++ % 500) == 0) {
           for (const ComputeQueue &q : computeQueues) {
             if (!q.mapped)
               continue;
-            const auto *ring = reinterpret_cast<const uint32_t *>(q.ringBase);
+            const auto *ring = reinterpret_cast<const u32 *>(q.ringBase);
             const bool readable = utl::isMemoryRangeMapped(ring, 16);
             BASE_LOGI("acbcensus",
                       "{}/{}/{} read={:#x} ring={:08x} {:08x} {:08x} "
@@ -412,26 +413,26 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
         if (!entry.mapped || entry.me != args[0] || entry.pipe != args[1] ||
             entry.queue != args[2])
           continue;
-        const uint32_t next = args[3];
+        const u32 next = args[3];
         if (next >= entry.ringSizeDw)
           break;
-        const uint32_t available =
+        const u32 available =
             (next - entry.readOffsetDw) & (entry.ringSizeDw - 1);
         if (available) {
-          std::vector<uint32_t> commands(available);
-          const auto* ring = reinterpret_cast<const uint32_t*>(entry.ringBase);
-          for (uint32_t i = 0; i < available; i++)
+          std::vector<u32> commands(available);
+          const auto* ring = reinterpret_cast<const u32*>(entry.ringBase);
+          for (u32 i = 0; i < available; i++)
             commands[i] = ring[(entry.readOffsetDw + i) &
                                (entry.ringSizeDw - 1)];
           if (kGcTrace) {
             // The whole run, not a sample, when a comparison needs the full
             // set of ring IBs (DELTA_GC_TRACE_MAX=0 keeps the old 100).
-            static uint32_t traced_commands = 0;
+            static u32 traced_commands = 0;
             if (traced_commands++ < (kGcTraceMax ? kGcTraceMax : 100u)) {
               base::String acbWords;
               base::FormatTo(acbWords, "ACB {}/{}/{} {:#x}..{:#x}:", entry.me,
                              entry.pipe, entry.queue, entry.readOffsetDw, next);
-              for (uint32_t word : commands)
+              for (u32 word : commands)
                 base::FormatTo(acbWords, " {:08x}", word);
               BASE_LOGI("gc", "{}", acbWords.c_str());
             }
@@ -440,8 +441,8 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
         }
         entry.readOffsetDw = next;
         if (utl::isMemoryRangeMapped(reinterpret_cast<const void*>(entry.readPtr),
-                                     sizeof(uint32_t)))
-          *reinterpret_cast<uint32_t*>(entry.readPtr) = next;
+                                     sizeof(u32)))
+          *reinterpret_cast<u32*>(entry.readPtr) = next;
         break;
       }
     }
@@ -451,17 +452,17 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
                       // 0x208e/0x208f) and dumps the user debug registers.
                       // Debug-only, never writes back; log the tag and succeed.
     if (kGcTrace && data)
-      BASE_LOGI("gc", "coredump reason={:#x}", *static_cast<uint32_t *>(data));
+      BASE_LOGI("gc", "coredump reason={:#x}", *static_cast<u32 *>(data));
     return 0;
   }
   case 0xC0848119: {
     struct argl {
-      uint32_t unknown_00;
-      uint32_t unknown_04;
-      uint32_t unknown_08;
-      uint32_t unknown_0C;
-      uint8_t unknown_10[112];
-      uint32_t unknown_80;
+      u32 unknown_00;
+      u32 unknown_04;
+      u32 unknown_08;
+      u32 unknown_0C;
+      u8 unknown_10[112];
+      u32 unknown_80;
     };
     auto args = static_cast<argl *>(data);
     BASE_LOGI("gc", "ioctl({:x}): {:x}, {:x}, {:x}, {:x}, {:x}", cmd,
@@ -488,7 +489,7 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   // 0x16 submit-done handler). Length is encoded in the ioctl command (FreeBSD
   // IOCPARM_LEN). Only touch OUT ioctls (bit 0x40000000).
   if (data && (cmd & 0x40000000u)) {
-    uint32_t len = (cmd >> 16) & 0x1fff;
+    u32 len = (cmd >> 16) & 0x1fff;
     if (len)
       std::memset(data, 0, len);
   }
@@ -514,26 +515,26 @@ std::mutex gcDevice::computeMutex;
 // NOTE: the caller must already hold computeMutex. The doorbell handler runs
 // this from inside its own lock scope, and std::mutex is not recursive --
 // locking here as well deadlocked the title the instant it rang a doorbell.
-void gcDevice::drainQueues(uint32_t budget_dw) {
+void gcDevice::drainQueues(u32 budget_dw) {
   for (ComputeQueue &q : computeQueues) {
     if (!q.mapped || !q.ringSizeDw ||
         !utl::isMemoryRangeMapped(reinterpret_cast<const void *>(q.ringBase),
-                                  static_cast<uint64_t>(q.ringSizeDw) * 4))
+                                  static_cast<u64>(q.ringSizeDw) * 4))
       continue;
-    const auto *ring = reinterpret_cast<const uint32_t *>(q.ringBase);
-    const uint32_t mask = q.ringSizeDw - 1;
-    const uint32_t budget = std::min<uint32_t>(budget_dw, q.ringSizeDw);
-    uint32_t off = q.readOffsetDw, consumed = 0;
+    const auto *ring = reinterpret_cast<const u32 *>(q.ringBase);
+    const u32 mask = q.ringSizeDw - 1;
+    const u32 budget = std::min<u32>(budget_dw, q.ringSizeDw);
+    u32 off = q.readOffsetDw, consumed = 0;
     while (consumed < budget) {
-      uint32_t w[4];
-      for (uint32_t i = 0; i < 4; i++)
+      u32 w[4];
+      for (u32 i = 0; i < 4; i++)
         w[i] = ring[(off + i) & mask];
       if ((w[0] & 0xFFFFFF00u) != 0xC0023F00u)
         break;
-      const uint64_t addr = (static_cast<uint64_t>(w[2] & 0xFF) << 32) | w[1];
-      const uint32_t dw = w[3] & 0xFFFFF;
+      const u64 addr = (static_cast<u64>(w[2] & 0xFF) << 32) | w[1];
+      const u32 dw = w[3] & 0xFFFFF;
       if (!dw || !utl::isMemoryRangeMapped(reinterpret_cast<const void *>(addr),
-                                           static_cast<uint64_t>(dw) * 4))
+                                           static_cast<u64>(dw) * 4))
         break;
       prosperity_gc_submit_acb(w, sizeof(w));
       off = (off + 4) & mask;
@@ -542,8 +543,8 @@ void gcDevice::drainQueues(uint32_t budget_dw) {
     if (consumed) {
       q.readOffsetDw = off;
       if (utl::isMemoryRangeMapped(reinterpret_cast<const void *>(q.readPtr),
-                                   sizeof(uint32_t)))
-        *reinterpret_cast<uint32_t *>(q.readPtr) = off;
+                                   sizeof(u32)))
+        *reinterpret_cast<u32 *>(q.readPtr) = off;
       if (kGcTrace)
         BASE_LOGI("acbscan", "{}/{}/{} drained {} dwords -> {:#x}", q.me,
                   q.pipe, q.queue, consumed, off);
@@ -551,32 +552,32 @@ void gcDevice::drainQueues(uint32_t budget_dw) {
   }
 }
 
-uint8_t *gcDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) {
-  constexpr uint64_t kPoolSize = 256ull * 1024 * 1024;
+u8 *gcDevice::map(void *, size_t size, u32, u32, size_t offset) {
+  constexpr u64 kPoolSize = 256ull * 1024 * 1024;
   // The pool belongs to the device, not to the descriptor: sys_open news a
   // gcDevice per open, so a per-instance pool would hand two openers different
   // memory for the same offset. sys_mmap holds no lock across device::map
   // either, so the lazy creation needs its own.
   static std::mutex poolLock;
-  static uint8_t *pool = nullptr;
+  static u8 *pool = nullptr;
   std::lock_guard<std::mutex> lk(poolLock);
   if (!pool) {
     pool = allocLowGuest(kPoolSize);
     if (!pool)
-      return reinterpret_cast<uint8_t *>(-1);
+      return reinterpret_cast<u8 *>(-1);
   }
   poolBase = pool;
   poolSize = kPoolSize;
   // The guest picks the offset, so bound each side: offset + size wraps.
   if (offset < kPoolSize && size <= kPoolSize - offset)
     return pool + offset;
-  return reinterpret_cast<uint8_t *>(-1);
+  return reinterpret_cast<u8 *>(-1);
 }
 } // namespace krnl
 
 // Called once per flip: draining inside the doorbell handler charges the whole
 // backlog to whichever frame happened to ring it.
-extern "C" void prosperity_gc_drain_acb(uint32_t budget_dw) {
+extern "C" void prosperity_gc_drain_acb(u32 budget_dw) {
   if (!budget_dw)
     return;
   std::lock_guard lock(krnl::gcDevice::computeMutex);

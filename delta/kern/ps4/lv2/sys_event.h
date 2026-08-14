@@ -9,6 +9,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <condition_variable>
 #include <mutex>
 
@@ -22,17 +23,17 @@ class proc;
 // FreeBSD/SCE kevent (SceKernelEvent), 0x20 bytes. The game reads ident/data
 // to learn which flip completed and udata to find its own context.
 struct kevent_t {
-  uint64_t ident;
-  int16_t filter;
-  uint16_t flags;
-  uint32_t fflags;
-  int64_t data;
+  u64 ident;
+  i16 filter;
+  u16 flags;
+  u32 fflags;
+  i64 data;
   void *udata;
 };
 static_assert(sizeof(kevent_t) == 0x20, "kevent layout");
 
 // FreeBSD kevent action flags (the ones we honour).
-enum : uint16_t {
+enum : u16 {
   kEV_ADD = 0x0001,
   kEV_DELETE = 0x0002,
   kEV_ENABLE = 0x0004,
@@ -43,8 +44,8 @@ enum : uint16_t {
 
 // guest timespec (kevent timeout).
 struct ktimespec {
-  int64_t tv_sec;
-  int64_t tv_nsec;
+  i64 tv_sec;
+  i64 tv_nsec;
 };
 
 // An equeue is a FreeBSD kqueue: a set of registered knotes that become ready
@@ -61,21 +62,21 @@ public:
 
   // Mark every knote matching (ident,filter) ready and wake waiters. ident<0
   // matches any ident. Called by the vblank pump / dce on flip.
-  void trigger(int64_t ident, int16_t filter, int64_t data);
+  void trigger(i64 ident, i16 filter, i64 data);
 
   // Register a knote directly (no kevent syscall). Used by the HLE VideoOut
   // flip/vblank-event APIs, which add the equeue entry on the game's behalf.
-  void addEvent(uint64_t ident, int16_t filter, void *udata);
+  void addEvent(u64 ident, i16 filter, void *udata);
 
   // Remove a knote by (ident,filter). Returns true if one was removed.
-  bool removeEvent(uint64_t ident, int16_t filter);
+  bool removeEvent(u64 ident, i16 filter);
 
 private:
   struct knote {
     kevent_t ev;
     bool active = false;
   };
-  knote *find(uint64_t ident, int16_t filter);
+  knote *find(u64 ident, i16 filter);
 
   std::mutex m;
   std::condition_variable cv;
@@ -85,7 +86,7 @@ private:
 
 // Fan a (filter,data) trigger out to every live equeue. The vblank pump uses
 // this so it needn't know which equeue a flip event landed on.
-void triggerAllEqueues(int64_t ident, int16_t filter, int64_t data);
+void triggerAllEqueues(i64 ident, i16 filter, i64 data);
 
 // Count one submitted flip (LLE gc submit-and-flip / HLE SubmitFlip) and post a
 // display event carrying the new flip count. The engine's render-frame pacing
@@ -94,7 +95,7 @@ void triggerAllEqueues(int64_t ident, int16_t filter, int64_t data);
 // races ahead while the title is still loading -> GetRenderFrameParams asks for
 // a frame far beyond the last produced -> "frame number out of range" halt).
 void noteFlip();
-uint64_t flipCount();
+u64 flipCount();
 
 int PS4ABI sys_kqueue();
 int PS4ABI sys_kqueueex(const char *name, int flags);

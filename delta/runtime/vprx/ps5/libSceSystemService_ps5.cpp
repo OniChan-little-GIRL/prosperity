@@ -14,13 +14,14 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include "../sys_params.h"
 
 namespace {
 int PS4ABI systemServiceReportAbnormalTermination(void *) { return 0; }
 
-int PS4ABI systemServiceParamGetInt(int32_t paramId, int32_t *value) {
+int PS4ABI systemServiceParamGetInt(i32 paramId, i32 *value) {
   return runtime::sysparam::ParamGetInt(paramId, value);
 }
 }  // namespace

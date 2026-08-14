@@ -3,6 +3,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,29 +29,29 @@ bool zeroEntropy() {
 
 randomDevice::randomDevice(proc *p) : device(p) {}
 
-int64_t randomDevice::read(void *buf, size_t len) {
+i64 randomDevice::read(void *buf, size_t len) {
   if (!buf)
     return -SysError::eFAULT;
   if (zeroEntropy()) {
     std::memset(buf, 0, len);
-    return static_cast<int64_t>(len);
+    return static_cast<i64>(len);
   }
   static thread_local std::random_device rd;
   static thread_local std::mt19937_64 gen(rd());
-  auto *out = static_cast<uint8_t *>(buf);
+  auto *out = static_cast<u8 *>(buf);
   size_t done = 0;
   while (done < len) {
-    const uint64_t v = gen();
+    const u64 v = gen();
     const size_t n = std::min(sizeof(v), len - done);
     std::memcpy(out + done, &v, n);
     done += n;
   }
-  return static_cast<int64_t>(len);
+  return static_cast<i64>(len);
 }
 
 // A character device has no position; seeks succeed and stay at 0 so a caller
 // that rewinds before reading doesn't error out.
-int64_t randomDevice::lseek(int64_t, int) { return 0; }
+i64 randomDevice::lseek(i64, int) { return 0; }
 
 int randomDevice::fstat(void *stat) {
   if (!stat)

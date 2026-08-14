@@ -10,6 +10,7 @@
 // .pkg and inflate the inner PFSC image, exposing files on demand.
 
 #include "pkg_object.h"
+#include "base/arch.h"
 
 #include <cctype>
 #include <cstring>
@@ -79,38 +80,38 @@ static const char *kDDk3 =
     "ce82653e5790bca98b06b4f072f677df9864f1ecfe372dbcae8c08811fc3c989"
     "1ac742824b2edc8e8d73ceb1cc01d90870873c4408ec498f815ae240ff77fc0d";
 
-inline uint16_t rd16(const uint8_t *p) {
-  return static_cast<uint16_t>(p[0] | (p[1] << 8));
+inline u16 rd16(const u8 *p) {
+  return static_cast<u16>(p[0] | (p[1] << 8));
 }
-inline uint32_t rd32(const uint8_t *p) {
-  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-         (static_cast<uint32_t>(p[2]) << 16) |
-         (static_cast<uint32_t>(p[3]) << 24);
+inline u32 rd32(const u8 *p) {
+  return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
+         (static_cast<u32>(p[2]) << 16) |
+         (static_cast<u32>(p[3]) << 24);
 }
-inline uint64_t rd64(const uint8_t *p) {
-  uint64_t v = 0;
+inline u64 rd64(const u8 *p) {
+  u64 v = 0;
   for (int i = 0; i < 8; ++i)
-    v |= static_cast<uint64_t>(p[i]) << (8 * i);
+    v |= static_cast<u64>(p[i]) << (8 * i);
   return v;
 }
-inline uint32_t be32(const uint8_t *p) {
-  return (static_cast<uint32_t>(p[0]) << 24) |
-         (static_cast<uint32_t>(p[1]) << 16) |
-         (static_cast<uint32_t>(p[2]) << 8) | p[3];
+inline u32 be32(const u8 *p) {
+  return (static_cast<u32>(p[0]) << 24) |
+         (static_cast<u32>(p[1]) << 16) |
+         (static_cast<u32>(p[2]) << 8) | p[3];
 }
 
 // RSA-2048: m = ct^D mod N, then strip PKCS#1 v1.5 type-2 padding (like the
 // Python _rsa()). Returns the recovered payload, or empty on bad padding.
-std::vector<uint8_t> rsaDecrypt(const uint8_t *ct, size_t ctLen, const char *nHex,
+std::vector<u8> rsaDecrypt(const u8 *ct, size_t ctLen, const char *nHex,
                                 const char *dHex) {
-  std::vector<uint8_t> result;
+  std::vector<u8> result;
   mbedtls_mpi N, D, C, M;
   mbedtls_mpi_init(&N);
   mbedtls_mpi_init(&D);
   mbedtls_mpi_init(&C);
   mbedtls_mpi_init(&M);
 
-  uint8_t m[0x100];
+  u8 m[0x100];
   bool ok = mbedtls_mpi_read_string(&N, 16, nHex) == 0 &&
             mbedtls_mpi_read_string(&D, 16, dHex) == 0 &&
             mbedtls_mpi_read_binary(&C, ct, ctLen) == 0 &&
@@ -133,22 +134,22 @@ std::vector<uint8_t> rsaDecrypt(const uint8_t *ct, size_t ctLen, const char *nHe
   return result;
 }
 
-void sha256(const uint8_t *in, size_t len, uint8_t out[32]) {
+void sha256(const u8 *in, size_t len, u8 out[32]) {
   mbedtls_sha256_ret(in, len, out, 0);
 }
 
-void hmacSha256(const uint8_t *key, size_t keyLen, const uint8_t *in,
-                size_t len, uint8_t out[32]) {
+void hmacSha256(const u8 *key, size_t keyLen, const u8 *in,
+                size_t len, u8 out[32]) {
   const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
   mbedtls_md_hmac(info, key, keyLen, in, len, out);
 }
 
-void aes128CbcDecrypt(const uint8_t key[16], const uint8_t iv[16],
-                      const uint8_t *in, size_t len, uint8_t *out) {
+void aes128CbcDecrypt(const u8 key[16], const u8 iv[16],
+                      const u8 *in, size_t len, u8 *out) {
   mbedtls_aes_context c;
   mbedtls_aes_init(&c);
   mbedtls_aes_setkey_dec(&c, key, 128);
-  uint8_t ivCopy[16];
+  u8 ivCopy[16];
   std::memcpy(ivCopy, iv, 16);
   mbedtls_aes_crypt_cbc(&c, MBEDTLS_AES_DECRYPT, len, ivCopy, in, out);
   mbedtls_aes_free(&c);
@@ -160,14 +161,14 @@ void aes128CbcDecrypt(const uint8_t key[16], const uint8_t iv[16],
 // ----------------------------------------------------------------------------
 struct DataSource {
   virtual ~DataSource() = default;
-  virtual void read(uint64_t off, uint64_t len, uint8_t *dst) = 0;
+  virtual void read(u64 off, u64 len, u8 *dst) = 0;
 };
 
 // Bottom of the chain: a window into the host pkg file at a fixed base offset.
 class RawSource : public DataSource {
 public:
-  RawSource(utl::File &f, uint64_t base) : f_(f), base_(base) {}
-  void read(uint64_t off, uint64_t len, uint8_t *dst) override {
+  RawSource(utl::File &f, u64 base) : f_(f), base_(base) {}
+  void read(u64 off, u64 len, u8 *dst) override {
     std::memset(dst, 0, len); // zero-fill short reads past EOF
     f_.Seek(base_ + off, utl::seekMode::seek_set);
     f_.Read(dst, len);
@@ -175,27 +176,27 @@ public:
 
 private:
   utl::File &f_;
-  uint64_t base_;
+  u64 base_;
 };
 
 class SubSource : public DataSource {
 public:
-  SubSource(DataSource *inner, uint64_t off) : inner_(inner), off_(off) {}
-  void read(uint64_t off, uint64_t len, uint8_t *dst) override {
+  SubSource(DataSource *inner, u64 off) : inner_(inner), off_(off) {}
+  void read(u64 off, u64 len, u8 *dst) override {
     inner_->read(off_ + off, len, dst);
   }
 
 private:
   DataSource *inner_;
-  uint64_t off_;
+  u64 off_;
 };
 
 // AES-XTS over 0x1000-byte sectors. Sectors below skipSectors are plaintext
 // (the PFS superblock region).
 class XtsSource : public DataSource {
 public:
-  XtsSource(DataSource *inner, const uint8_t tweakKey[16],
-            const uint8_t dataKey[16], uint32_t skipSectors)
+  XtsSource(DataSource *inner, const u8 tweakKey[16],
+            const u8 dataKey[16], u32 skipSectors)
       : inner_(inner), skip_(skipSectors) {
     mbedtls_aes_init(&tweak_);
     mbedtls_aes_init(&data_);
@@ -207,12 +208,12 @@ public:
     mbedtls_aes_free(&data_);
   }
 
-  void read(uint64_t off, uint64_t len, uint8_t *dst) override {
-    uint8_t sector[0x1000];
-    uint64_t p = off, end = off + len;
+  void read(u64 off, u64 len, u8 *dst) override {
+    u8 sector[0x1000];
+    u64 p = off, end = off + len;
     while (p < end) {
-      uint64_t si = p / 0x1000, so = p % 0x1000;
-      uint64_t take = std::min<uint64_t>(0x1000 - so, end - p);
+      u64 si = p / 0x1000, so = p % 0x1000;
+      u64 take = std::min<u64>(0x1000 - so, end - p);
       inner_->read(si * 0x1000, 0x1000, sector);
       if (si >= skip_)
         decryptSector(si, sector);
@@ -223,23 +224,23 @@ public:
   }
 
 private:
-  void decryptSector(uint64_t si, uint8_t *buf) {
-    uint8_t seed[16] = {0};
+  void decryptSector(u64 si, u8 *buf) {
+    u8 seed[16] = {0};
     for (int i = 0; i < 8; ++i)
-      seed[i] = static_cast<uint8_t>(si >> (8 * i));
-    uint8_t tweak[16];
+      seed[i] = static_cast<u8>(si >> (8 * i));
+    u8 tweak[16];
     mbedtls_aes_crypt_ecb(&tweak_, MBEDTLS_AES_ENCRYPT, seed, tweak);
-    for (uint32_t b = 0; b < 0x1000; b += 16) {
-      uint8_t x[16], p[16];
+    for (u32 b = 0; b < 0x1000; b += 16) {
+      u8 x[16], p[16];
       for (int k = 0; k < 16; ++k)
         x[k] = buf[b + k] ^ tweak[k];
       mbedtls_aes_crypt_ecb(&data_, MBEDTLS_AES_DECRYPT, x, p);
       for (int k = 0; k < 16; ++k)
         buf[b + k] = p[k] ^ tweak[k];
-      uint8_t carry = 0;
+      u8 carry = 0;
       for (int k = 0; k < 16; ++k) {
-        uint8_t v = tweak[k];
-        tweak[k] = static_cast<uint8_t>((v << 1) | carry);
+        u8 v = tweak[k];
+        tweak[k] = static_cast<u8>((v << 1) | carry);
         carry = v >> 7;
       }
       if (carry)
@@ -250,18 +251,18 @@ private:
   DataSource *inner_;
   mbedtls_aes_context tweak_;
   mbedtls_aes_context data_;
-  uint32_t skip_;
+  u32 skip_;
 };
 
 // zlib-compressed inner image with a per-block offset map.
 class PfscSource : public DataSource {
 public:
   explicit PfscSource(DataSource *inner) : inner_(inner) {
-    uint8_t h[0x30];
+    u8 h[0x30];
     inner_->read(0, sizeof(h), h);
     bs_ = rd64(h + 0x10);
-    uint64_t bo = rd64(h + 0x18);
-    uint64_t dl = rd64(h + 0x28);
+    u64 bo = rd64(h + 0x18);
+    u64 dl = rd64(h + 0x28);
     if (kPfsDbg)
       BASE_LOGI("pfsc", "magic={:02x}{:02x}{:02x}{:02x} bs={} bo={} dl={}",
                 h[0], h[1], h[2], h[3], (unsigned long long)bs_,
@@ -270,23 +271,23 @@ public:
       return;
     n_ = dl / bs_;
     map_.resize(n_ + 1);
-    std::vector<uint8_t> raw((n_ + 1) * 8);
+    std::vector<u8> raw((n_ + 1) * 8);
     inner_->read(bo, raw.size(), raw.data());
-    for (uint64_t i = 0; i <= n_; ++i)
+    for (u64 i = 0; i <= n_; ++i)
       map_[i] = rd64(raw.data() + i * 8);
   }
 
-  void read(uint64_t off, uint64_t len, uint8_t *dst) override {
-    std::vector<uint8_t> block(bs_);
-    std::vector<uint8_t> comp;
+  void read(u64 off, u64 len, u8 *dst) override {
+    std::vector<u8> block(bs_);
+    std::vector<u8> comp;
     while (len > 0) {
-      uint64_t bi = off / bs_, bo = off % bs_;
+      u64 bi = off / bs_, bo = off % bs_;
       if (bi + 1 > n_) { // out of range
         std::memset(dst, 0, len);
         return;
       }
-      uint64_t a = map_[bi], b = map_[bi + 1];
-      uint64_t clen = b - a;
+      u64 a = map_[bi], b = map_[bi + 1];
+      u64 clen = b - a;
       comp.resize(clen);
       inner_->read(a, clen, comp.data());
       if (clen == bs_) {
@@ -296,7 +297,7 @@ public:
         uncompress(block.data(), &out, comp.data(),
                    static_cast<uLong>(clen));
       }
-      uint64_t take = std::min<uint64_t>(bs_ - bo, len);
+      u64 take = std::min<u64>(bs_ - bo, len);
       std::memcpy(dst, block.data() + bo, take);
       dst += take;
       off += take;
@@ -306,9 +307,9 @@ public:
 
 private:
   DataSource *inner_;
-  uint64_t bs_ = 0;
-  uint64_t n_ = 0;
-  std::vector<uint64_t> map_;
+  u64 bs_ = 0;
+  u64 n_ = 0;
+  std::vector<u64> map_;
 };
 } // namespace
 
@@ -318,7 +319,7 @@ struct PkgImpl {
   std::mutex io;
   std::vector<std::unique_ptr<DataSource>> nodes;
   DataSource *inner = nullptr;
-  uint32_t innerBs = 0;
+  u32 innerBs = 0;
   std::unordered_map<std::string, PkgFilesystem::Node> files;
   // lowercased path -> canonical key in `files`. PFS lookups on the console are
   // case-insensitive for app content; titles rely on it (SotC opens
@@ -341,27 +342,27 @@ struct PkgImpl {
     return raw;
   }
 
-  bool getEkpfs(uint8_t out[32]) {
-    auto R = [&](uint64_t o, uint64_t n, uint8_t *dst) {
+  bool getEkpfs(u8 out[32]) {
+    auto R = [&](u64 o, u64 n, u8 *dst) {
       pkg.Seek(o, utl::seekMode::seek_set);
       pkg.Read(dst, n);
     };
-    uint8_t tmp[4];
+    u8 tmp[4];
     R(0x10, 4, tmp);
-    uint32_t ec = be32(tmp);
+    u32 ec = be32(tmp);
     R(0x18, 4, tmp);
-    uint32_t to = be32(tmp);
+    u32 to = be32(tmp);
     if (ec == 0 || ec > 0x10000)
       return false;
 
-    std::vector<uint8_t> tb(static_cast<size_t>(ec) * 0x20);
+    std::vector<u8> tb(static_cast<size_t>(ec) * 0x20);
     R(to, tb.size(), tb.data());
 
-    const uint8_t *row20 = nullptr;
-    uint32_t ikOff = 0, ikSz = 0, ekOff = 0, ekSz = 0;
-    for (uint32_t i = 0; i < ec; ++i) {
-      const uint8_t *e = tb.data() + i * 0x20;
-      uint32_t id = be32(e);
+    const u8 *row20 = nullptr;
+    u32 ikOff = 0, ikSz = 0, ekOff = 0, ekSz = 0;
+    for (u32 i = 0; i < ec; ++i) {
+      const u8 *e = tb.data() + i * 0x20;
+      u32 id = be32(e);
       if (id == 0x20) {
         row20 = e;
         ikOff = be32(e + 16);
@@ -374,18 +375,18 @@ struct PkgImpl {
     if (!row20 || !ekOff || ekSz < 0x500 || ikSz < 0x100 || (ikSz % 16))
       return false;
 
-    std::vector<uint8_t> ek(ekSz);
+    std::vector<u8> ek(ekSz);
     R(ekOff, ekSz, ek.data());
     auto dk3 = rsaDecrypt(ek.data() + 0x400, 0x100, kNDk3, kDDk3);
     if (dk3.empty())
       return false;
 
-    std::vector<uint8_t> ivkIn(row20, row20 + 0x20);
+    std::vector<u8> ivkIn(row20, row20 + 0x20);
     ivkIn.insert(ivkIn.end(), dk3.begin(), dk3.end());
-    uint8_t ivk[32];
+    u8 ivk[32];
     sha256(ivkIn.data(), ivkIn.size(), ivk);
 
-    std::vector<uint8_t> ik(ikSz), imdec(ikSz);
+    std::vector<u8> ik(ikSz), imdec(ikSz);
     R(ikOff, ikSz, ik.data());
     aes128CbcDecrypt(ivk + 16, ivk, ik.data(), ikSz, imdec.data());
 
@@ -399,21 +400,21 @@ struct PkgImpl {
   // Parse a PFS superblock from `raw` and, if encrypted, wrap it in XTS. Returns
   // the reader to use for inode/data reads. signedFlag/nd/ndb come back via out
   // params.
-  DataSource *buildPfs(DataSource *raw, const uint8_t ekpfs[32], uint32_t &bs,
-                       bool &signedFlag, uint64_t &nd, uint64_t &ndb) {
-    uint8_t h[0x400];
+  DataSource *buildPfs(DataSource *raw, const u8 ekpfs[32], u32 &bs,
+                       bool &signedFlag, u64 &nd, u64 &ndb) {
+    u8 h[0x400];
     raw->read(0, sizeof(h), h);
     bs = rd32(h + 0x20);
-    uint16_t mode = rd16(h + 0x1c);
+    u16 mode = rd16(h + 0x1c);
     nd = rd64(h + 0x30);
     ndb = rd64(h + 0x40);
     signedFlag = mode & 1;
 
     DataSource *reader = raw;
     if (mode & 4) {
-      uint8_t msg[20] = {1, 0, 0, 0};
+      u8 msg[20] = {1, 0, 0, 0};
       std::memcpy(msg + 4, h + 0x370, 16); // seed
-      uint8_t d[32];
+      u8 d[32];
       hmacSha256(ekpfs, 32, msg, sizeof(msg), d);
       reader = make<XtsSource>(raw, d, d + 16, bs / 0x1000);
     }
@@ -421,24 +422,24 @@ struct PkgImpl {
   }
 
   struct Inode {
-    uint16_t type;
-    uint64_t size;
-    uint32_t blocks;
-    uint32_t start;
+    u16 type;
+    u64 size;
+    u32 blocks;
+    u32 start;
   };
   std::vector<Inode> ino;
 
-  void readInodes(DataSource *r, uint32_t bs, bool signedFlag, uint64_t nd,
-                  uint64_t ndb) {
-    uint32_t dsz = signedFlag ? 0x2C8 : 0xA8;
-    uint32_t per = bs / dsz;
-    std::vector<uint8_t> blk(bs);
-    uint64_t tot = 0;
-    uint64_t count = ndb < 1 ? 1 : ndb;
-    for (uint64_t bi = 0; bi < count && tot < nd; ++bi) {
+  void readInodes(DataSource *r, u32 bs, bool signedFlag, u64 nd,
+                  u64 ndb) {
+    u32 dsz = signedFlag ? 0x2C8 : 0xA8;
+    u32 per = bs / dsz;
+    std::vector<u8> blk(bs);
+    u64 tot = 0;
+    u64 count = ndb < 1 ? 1 : ndb;
+    for (u64 bi = 0; bi < count && tot < nd; ++bi) {
       r->read((1 + bi) * bs, bs, blk.data());
-      for (uint32_t j = 0; j < per && tot < nd; ++j) {
-        const uint8_t *d = blk.data() + j * dsz;
+      for (u32 j = 0; j < per && tot < nd; ++j) {
+        const u8 *d = blk.data() + j * dsz;
         Inode n;
         n.type = rd16(d);
         n.size = rd64(d + 8);
@@ -451,26 +452,26 @@ struct PkgImpl {
   }
 
   // Find a direct child directory of dirInode by name; -1 if absent.
-  int64_t findChildDir(uint32_t dirInode, const char *name, DataSource *r,
-                       uint32_t bs) {
+  i64 findChildDir(u32 dirInode, const char *name, DataSource *r,
+                       u32 bs) {
     if (dirInode >= ino.size())
       return -1;
-    uint32_t blocks = ino[dirInode].blocks, st = ino[dirInode].start;
-    std::vector<uint8_t> d(bs);
-    for (uint32_t bb = 0; bb < blocks; ++bb) {
-      r->read((uint64_t)(st + bb) * bs, bs, d.data());
-      uint64_t o = 0;
+    u32 blocks = ino[dirInode].blocks, st = ino[dirInode].start;
+    std::vector<u8> d(bs);
+    for (u32 bb = 0; bb < blocks; ++bb) {
+      r->read((u64)(st + bb) * bs, bs, d.data());
+      u64 o = 0;
       while (o + 17 < bs) {
-        uint32_t ch = rd32(d.data() + o);
-        uint32_t ty = rd32(d.data() + o + 4);
-        uint32_t nl = rd32(d.data() + o + 8);
-        uint32_t es = rd32(d.data() + o + 12);
+        u32 ch = rd32(d.data() + o);
+        u32 ty = rd32(d.data() + o + 4);
+        u32 nl = rd32(d.data() + o + 8);
+        u32 es = rd32(d.data() + o + 12);
         if (es == 0)
           break;
         if (ty == 3 && nl > 0 && nl < 256 && o + 16 + nl <= bs) {
           std::string nm(reinterpret_cast<const char *>(d.data() + o + 16), nl);
           if (nm == name && ch < ino.size())
-            return static_cast<int64_t>(ch);
+            return static_cast<i64>(ch);
         }
         o += es;
       }
@@ -478,19 +479,19 @@ struct PkgImpl {
     return -1;
   }
 
-  void walk(uint32_t i, const std::string &pre, DataSource *r, uint32_t bs) {
+  void walk(u32 i, const std::string &pre, DataSource *r, u32 bs) {
     if (i >= ino.size())
       return;
-    uint32_t blocks = ino[i].blocks, st = ino[i].start;
-    std::vector<uint8_t> d(bs);
-    for (uint32_t bb = 0; bb < blocks; ++bb) {
-      r->read((uint64_t)(st + bb) * bs, bs, d.data());
-      uint64_t o = 0;
+    u32 blocks = ino[i].blocks, st = ino[i].start;
+    std::vector<u8> d(bs);
+    for (u32 bb = 0; bb < blocks; ++bb) {
+      r->read((u64)(st + bb) * bs, bs, d.data());
+      u64 o = 0;
       while (o + 17 < bs) {
-        uint32_t ch = rd32(d.data() + o);
-        uint32_t ty = rd32(d.data() + o + 4);
-        uint32_t nl = rd32(d.data() + o + 8);
-        uint32_t es = rd32(d.data() + o + 12);
+        u32 ch = rd32(d.data() + o);
+        u32 ty = rd32(d.data() + o + 4);
+        u32 nl = rd32(d.data() + o + 8);
+        u32 es = rd32(d.data() + o + 12);
         if (es == 0)
           break;
         if (nl > 0 && nl < 256 && o + 16 + nl <= bs) {
@@ -515,7 +516,7 @@ struct PkgImpl {
   }
 
   void build() {
-    uint8_t ekpfs[32];
+    u8 ekpfs[32];
     if (!getEkpfs(ekpfs)) {
       LOG_ERROR("pkg: could not recover EKPFS (not a fake pkg?)");
       return;
@@ -523,18 +524,18 @@ struct PkgImpl {
 
     // Standard fpkg PFS image offset. Read the header field when it looks sane,
     // else fall back to the well-known constant pkg_extract.py hardcodes.
-    uint8_t off[8];
+    u8 off[8];
     pkg.Seek(0x410, utl::seekMode::seek_set);
     pkg.Read(off, 8);
-    uint64_t pfsOff = (static_cast<uint64_t>(be32(off)) << 32) | be32(off + 4);
+    u64 pfsOff = (static_cast<u64>(be32(off)) << 32) | be32(off + 4);
     if (pfsOff < 0x1000 || pfsOff >= pkg.GetSize())
       pfsOff = 0x700000;
 
     // Outer PFS: only its block size and (XTS) reader are needed.
     auto *raw = make<RawSource>(pkg, pfsOff);
-    uint32_t outerBs = 0;
+    u32 outerBs = 0;
     bool outerSigned = false;
-    uint64_t outerNd = 0, outerNdb = 0;
+    u64 outerNd = 0, outerNdb = 0;
     DataSource *outer =
         buildPfs(raw, ekpfs, outerBs, outerSigned, outerNd, outerNdb);
     if (outerBs == 0)
@@ -544,11 +545,11 @@ struct PkgImpl {
     // PFS. Its start block depends on the size of the outer metadata (superblock
     // + inodes + dirents + flat_path_table), so locate it by its "PFSC" magic
     // rather than assuming a fixed block. (Isaac lands at block 11, P.T. at 19.)
-    uint64_t innerBlk = 11;
+    u64 innerBlk = 11;
     bool found = false;
-    uint64_t maxBlk = (pkg.GetSize() - pfsOff) / outerBs;
-    for (uint64_t bi = 1; bi < maxBlk; ++bi) {
-      uint8_t magic[4];
+    u64 maxBlk = (pkg.GetSize() - pfsOff) / outerBs;
+    for (u64 bi = 1; bi < maxBlk; ++bi) {
+      u8 magic[4];
       outer->read(bi * outerBs, sizeof(magic), magic);
       if (magic[0] == 'P' && magic[1] == 'F' && magic[2] == 'S' && magic[3] == 'C') {
         innerBlk = bi;
@@ -565,7 +566,7 @@ struct PkgImpl {
     auto *pfsc = make<PfscSource>(sub);
 
     bool innerSigned = false;
-    uint64_t innerNd = 0, innerNdb = 0;
+    u64 innerNd = 0, innerNdb = 0;
     inner = buildPfs(pfsc, ekpfs, innerBs, innerSigned, innerNd, innerNdb);
     if (innerBs == 0)
       return;
@@ -577,8 +578,8 @@ struct PkgImpl {
     // The PFS superroot holds `flat_path_table` + `uroot`; the game files live
     // under uroot. Present them game-relative (uroot == /app0) by walking from
     // there, falling back to the raw root if the image is laid out flat.
-    int64_t root = findChildDir(0, "uroot", inner, innerBs);
-    walk(root >= 0 ? static_cast<uint32_t>(root) : 0, "", inner, innerBs);
+    i64 root = findChildDir(0, "uroot", inner, innerBs);
+    walk(root >= 0 ? static_cast<u32>(root) : 0, "", inner, innerBs);
 
     for (const auto &kv : files) {
       std::string lower(kv.first);
@@ -608,14 +609,14 @@ struct PkgImpl {
          BASE_LOGI("qarself", "{} size={} startBlock={} innerBs={}",
                    nodePath.c_str(), (unsigned long long)node->size,
                    node->startBlock, innerBs);
-        uint64_t offs[] = {0, 1ull << 20, 100ull << 20, 400ull << 20,
+        u64 offs[] = {0, 1ull << 20, 100ull << 20, 400ull << 20,
                            800ull << 20,
                            node->size > 256 ? node->size - 256 : 0};
-        for (uint64_t o : offs) {
+        for (u64 o : offs) {
           if (o >= node->size)
             continue;
-          uint8_t buf[64] = {0};
-          int64_t r = readNode(*node, buf, static_cast<int64_t>(o), 64);
+          u8 buf[64] = {0};
+          i64 r = readNode(*node, buf, static_cast<i64>(o), 64);
           base::String bytes;
           base::FormatTo(bytes, "off={} r={}:",
                          (unsigned long long)o, (long long)r);
@@ -632,27 +633,27 @@ struct PkgImpl {
     }
   }
 
-  int64_t readNode(const PkgFilesystem::Node &n, void *buf, int64_t off,
-                   int64_t len) {
+  i64 readNode(const PkgFilesystem::Node &n, void *buf, i64 off,
+                   i64 len) {
     if (off < 0 || len < 0)
       return -1;
-    if (static_cast<uint64_t>(off) >= n.size)
+    if (static_cast<u64>(off) >= n.size)
       return 0;
-    uint64_t take =
-        std::min<uint64_t>(len, n.size - static_cast<uint64_t>(off));
+    u64 take =
+        std::min<u64>(len, n.size - static_cast<u64>(off));
     std::lock_guard<std::mutex> lk(io);
-    uint64_t innerOff =
-        static_cast<uint64_t>(n.startBlock) * innerBs + static_cast<uint64_t>(off);
-    inner->read(innerOff, take, static_cast<uint8_t *>(buf));
+    u64 innerOff =
+        static_cast<u64>(n.startBlock) * innerBs + static_cast<u64>(off);
+    inner->read(innerOff, take, static_cast<u8 *>(buf));
     if (kPkgReadTrace && take >= 1) {
-      auto *b = static_cast<const uint8_t *>(buf);
-      uint32_t w = b[0] | (take > 1 ? b[1] << 8 : 0) | (take > 2 ? b[2] << 16 : 0) |
-                   (take > 3 ? uint32_t(b[3]) << 24 : 0);
+      auto *b = static_cast<const u8 *>(buf);
+      u32 w = b[0] | (take > 1 ? b[1] << 8 : 0) | (take > 2 ? b[2] << 16 : 0) |
+                   (take > 3 ? u32(b[3]) << 24 : 0);
       BASE_LOGI("pkgread", "blk={} off={} len={} -> {}  first4={:08x}",
                 n.startBlock, (long long)off, (long long)len,
                 (unsigned long long)take, w);
     }
-    return static_cast<int64_t>(take);
+    return static_cast<i64>(take);
   }
 
   // Read a well-known outer-PKG entry (param.sfo = 0x1000, icon0.png = 0x1200)
@@ -661,33 +662,33 @@ struct PkgImpl {
   // whether the inner image decrypted. Same big-endian header layout getEkpfs
   // walks: entry count @0x10, table offset @0x18, 0x20-byte rows of
   // [id @0, data offset @16, data size @20].
-  bool readEntry(uint32_t wantId, std::vector<uint8_t> &out) {
+  bool readEntry(u32 wantId, std::vector<u8> &out) {
     if (!pkg.IsOpen())
       return false;
     std::lock_guard<std::mutex> lk(io);
-    auto R = [&](uint64_t o, uint64_t n, uint8_t *dst) {
+    auto R = [&](u64 o, u64 n, u8 *dst) {
       pkg.Seek(o, utl::seekMode::seek_set);
       pkg.Read(dst, n);
     };
-    uint8_t tmp[4];
+    u8 tmp[4];
     R(0x10, 4, tmp);
-    uint32_t ec = be32(tmp);
+    u32 ec = be32(tmp);
     R(0x18, 4, tmp);
-    uint32_t to = be32(tmp);
+    u32 to = be32(tmp);
     if (ec == 0 || ec > 0x10000)
       return false;
-    std::vector<uint8_t> tb(static_cast<size_t>(ec) * 0x20);
+    std::vector<u8> tb(static_cast<size_t>(ec) * 0x20);
     R(to, tb.size(), tb.data());
-    for (uint32_t i = 0; i < ec; ++i) {
-      const uint8_t *e = tb.data() + i * 0x20;
+    for (u32 i = 0; i < ec; ++i) {
+      const u8 *e = tb.data() + i * 0x20;
       if (be32(e) != wantId)
         continue;
-      uint32_t off = be32(e + 16), sz = be32(e + 20);
-      const uint32_t maxSize =
+      u32 off = be32(e + 16), sz = be32(e + 20);
+      const u32 maxSize =
           wantId == 0x1000 ? 1u << 20
                            : (wantId == 0x1200 ? 16u << 20 : UINT32_MAX);
       if (sz == 0 || sz > maxSize ||
-          static_cast<uint64_t>(off) + sz > pkg.GetSize())
+          static_cast<u64>(off) + sz > pkg.GetSize())
         return false;
       out.resize(sz);
       R(off, sz, out.data());
@@ -737,8 +738,8 @@ const PkgFilesystem::Node *PkgFilesystem::find(const char *relPath) const {
   return nullptr;
 }
 
-int64_t PkgFilesystem::read(const Node &node, void *buf, int64_t off,
-                            int64_t len) {
+i64 PkgFilesystem::read(const Node &node, void *buf, i64 off,
+                            i64 len) {
   return impl_->readNode(node, buf, off, len);
 }
 
@@ -750,9 +751,9 @@ void PkgFilesystem::paths(std::vector<std::string> &out) const {
     out.push_back(kv.first);
 }
 
-int64_t PkgFilesystem::readPkgEntry(uint32_t entryId, std::vector<uint8_t> &out) {
+i64 PkgFilesystem::readPkgEntry(u32 entryId, std::vector<u8> &out) {
   if (!impl_)
     return -1;
-  return impl_->readEntry(entryId, out) ? static_cast<int64_t>(out.size()) : -1;
+  return impl_->readEntry(entryId, out) ? static_cast<i64>(out.size()) : -1;
 }
 } // namespace vfs

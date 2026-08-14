@@ -9,21 +9,22 @@
  */
 
 #include <utl/file.h>
+#include "base/arch.h"
 
 namespace formats {
 struct slb2_header {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t flags;
-  uint32_t fileCount;
-  uint32_t blockCount;
-  uint32_t unk[3];
+  u32 magic;
+  u32 version;
+  u32 flags;
+  u32 fileCount;
+  u32 blockCount;
+  u32 unk[3];
 };
 
 struct slb2_entry {
-  uint32_t offset;
-  uint32_t fileSize;
-  uint32_t unk[2];
+  u32 offset;
+  u32 fileSize;
+  u32 unk[2];
   char fileName[32];
 };
 

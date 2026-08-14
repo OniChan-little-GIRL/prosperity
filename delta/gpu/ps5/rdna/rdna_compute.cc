@@ -5,17 +5,18 @@
  */
 
 #include "gpu/ps5/rdna/rdna_compute.h"
+#include "base/arch.h"
 
 #ifndef DELTA_HAVE_SPIRV_BACKEND
 namespace gpu::rdna {
 
-gpu::gcn::RecompiledCs RecompileCompute(const uint32_t*,
-                                        uint32_t,
-                                        uint32_t,
-                                        uint32_t,
-                                        uint32_t,
-                                        uint32_t,
-                                        uint32_t) {
+gpu::gcn::RecompiledCs RecompileCompute(const u32*,
+                                        u32,
+                                        u32,
+                                        u32,
+                                        u32,
+                                        u32,
+                                        u32) {
   return {};  // no SPIR-V backend: the caller skips the dispatch
 }
 
@@ -66,23 +67,23 @@ using gpu::gcn::Translator;
 // moved into place would resolve to whatever those registers happen to hold. A
 // compute dispatch writes guest memory, so that is declined, not guessed.
 bool PlanResources(const Program& program,
-                   uint32_t lds_dwords,
-                   uint32_t user_sgpr,
+                   u32 lds_dwords,
+                   u32 user_sgpr,
                    RecompiledCs& r,
-                   std::unordered_map<uint32_t, uint32_t>& bind) {
+                   std::unordered_map<u32, u32>& bind) {
   bool scalar_written[136] = {};
-  const auto inline_user_data = [&](uint32_t sgpr, uint32_t dwords) {
+  const auto inline_user_data = [&](u32 sgpr, u32 dwords) {
     if (sgpr + dwords > user_sgpr || sgpr + dwords > 136)
       return false;
-    for (uint32_t k = 0; k < dwords; k++)
+    for (u32 k = 0; k < dwords; k++)
       if (scalar_written[sgpr + k])
         return false;
     return true;
   };
 
-  std::unordered_map<uint32_t, uint32_t> resource_by_descriptor;
-  const auto resource = [&](uint32_t pc, uint32_t base_sgpr, uint32_t dwords,
-                            uint8_t kind, bool written, uint32_t min_bytes,
+  std::unordered_map<u32, u32> resource_by_descriptor;
+  const auto resource = [&](u32 pc, u32 base_sgpr, u32 dwords,
+                            u8 kind, bool written, u32 min_bytes,
                             bool replayable = false) {
     // A descriptor an SRT chain produced is resolved at dispatch time by
     // replaying the shader's scalar ops (rdna::ResolveBuffers), keyed on this
@@ -92,7 +93,7 @@ bool PlanResources(const Program& program,
       gpu::gcn::WarnUnsupported("cs.descriptor-not-inline.rdna", base_sgpr);
       return false;
     }
-    const uint32_t key = (base_sgpr << 8) | kind;
+    const u32 key = (base_sgpr << 8) | kind;
     const auto it = resource_by_descriptor.find(key);
     if (it != resource_by_descriptor.end()) {
       CsResource& res = r.resources[it->second];
@@ -101,7 +102,7 @@ bool PlanResources(const Program& program,
       bind[pc] = it->second;
       return true;
     }
-    const uint32_t idx = static_cast<uint32_t>(r.resources.size());
+    const u32 idx = static_cast<u32>(r.resources.size());
     if (idx >= kMaxCsResources) {
       gpu::gcn::WarnUnsupported("cs.resource-count", idx + 1);
       return false;
@@ -113,11 +114,11 @@ bool PlanResources(const Program& program,
   };
 
   for (const Inst& inst : program) {
-    const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+    const u32 w = inst.raw[0], w1 = inst.raw[1];
     switch (inst.enc) {
       case Enc::kSmrd: {
         const Smem smem = DecodeSmem(inst);
-        const uint32_t n = SmemLoadCount(smem.op);
+        const u32 n = SmemLoadCount(smem.op);
         // A negative immediate reads below the descriptor's base, which the
         // staged range cannot cover.
         if (!n || smem.offset < 0)
@@ -125,12 +126,12 @@ bool PlanResources(const Program& program,
         const bool buffer = smem.op >= 0x08;  // s_buffer_load_* takes a V#
         // The immediate is a BYTE offset on RDNA2 (a dword index on GFX7).
         if (!resource(inst.pc, smem.sbase, buffer ? 4 : 2, buffer ? 0 : 2,
-                      false, static_cast<uint32_t>(smem.offset) + n * 4))
+                      false, static_cast<u32>(smem.offset) + n * 4))
           return false;
         break;
       }
       case Enc::kMubuf: {
-        const uint32_t op = inst.opcode;
+        const u32 op = inst.opcode;
         const bool load = op <= 0x03 || (op >= 0x08 && op <= 0x0f);
         const bool store = (op >= 0x04 && op <= 0x07) || op == 0x18 ||
                            op == 0x1a || (op >= 0x1c && op <= 0x1f);
@@ -144,7 +145,7 @@ bool PlanResources(const Program& program,
         break;
       }
       case Enc::kMtbuf: {
-        const uint32_t op = inst.opcode;
+        const u32 op = inst.opcode;
         if (op > 0x07 || ((w1 >> 23) & 1))
           return false;  // op[3] selects the d16 forms
         if (!resource(inst.pc, ((w1 >> 16) & 0x1F) * 4, 4, 0, op >= 4, 0))
@@ -161,8 +162,8 @@ bool PlanResources(const Program& program,
       case Enc::kMimg: {
         // The shared emitter reads the T# with the gfx10.3 field positions when
         // the translator is in RDNA mode, so the plan is the same as GCN's.
-        const uint32_t op = inst.opcode;
-        const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
+        const u32 op = inst.opcode;
+        const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
         if (op == 0x0e)
           break;  // get_resinfo reads only descriptor SGPRs
         const bool store = op == 0x08 || op == 0x09;
@@ -185,7 +186,7 @@ bool PlanResources(const Program& program,
         break;
     }
     const ScalarWrite sw = DecodeScalarWrite(inst);
-    for (uint32_t k = 0; k < sw.count && sw.first + k < 136; k++)
+    for (u32 k = 0; k < sw.count && sw.first + k < 136; k++)
       scalar_written[sw.first + k] = true;
   }
   return true;
@@ -195,7 +196,7 @@ bool PlanResources(const Program& program,
 // buffer planned for this instruction.
 void EmitSmem(Translator& t, const Inst& inst, StageContext& sc) {
   const Smem smem = DecodeSmem(inst);
-  const uint32_t n = SmemLoadCount(smem.op);
+  const u32 n = SmemLoadCount(smem.op);
   const int b = gpu::gcn::CsBindingFor(sc, inst.pc);
   if (!n || b < 0) {
     sc.cs_unsupported = true;
@@ -203,14 +204,14 @@ void EmitSmem(Translator& t, const Inst& inst, StageContext& sc) {
   }
   // Both offsets are in BYTES on RDNA2 (GFX7's immediate was a dword index);
   // soffset field 125 is NULL, meaning no register offset at all.
-  const Id immediate = t.U32(static_cast<uint32_t>(smem.offset));
+  const Id immediate = t.U32(static_cast<u32>(smem.offset));
   const Id byte_off = smem.soffset == 125
                           ? immediate
                           : t.Add(t.SrcRaw(smem.soffset, 0), immediate);
   const Id dword0 = t.Shr(byte_off, t.U32(2));
-  for (uint32_t k = 0; k < n; k++)
+  for (u32 k = 0; k < n; k++)
     t.SetSdst(smem.sdst, k,
-              gpu::gcn::CsSsboLoad(t, sc, static_cast<uint32_t>(b),
+              gpu::gcn::CsSsboLoad(t, sc, static_cast<u32>(b),
                                    t.Add(dword0, t.U32(k))));
 }
 
@@ -220,9 +221,9 @@ bool NoOpt() {
 
 // A declined dispatch leaves the buffers it was meant to fill untouched, which
 // is otherwise invisible in the frame. One line per distinct shader.
-void ReportDecline(const uint32_t* cs_code, size_t insts) {
-  static std::unordered_set<uint64_t> reported;
-  const uint64_t address = reinterpret_cast<uintptr_t>(cs_code);
+void ReportDecline(const u32* cs_code, size_t insts) {
+  static std::unordered_set<u64> reported;
+  const u64 address = reinterpret_cast<uintptr_t>(cs_code);
   if (!reported.insert(address).second)
     return;
   BASE_LOGI("rdnacs", "declined CS @{:#x} ({} insts); dispatch skipped",
@@ -230,12 +231,12 @@ void ReportDecline(const uint32_t* cs_code, size_t insts) {
 }
 
 bool TranslateCs(const Program& program,
-                 uint32_t num_thread_x,
-                 uint32_t num_thread_y,
-                 uint32_t num_thread_z,
-                 uint32_t user_sgpr,
-                 uint32_t tgid_enable,
-                 uint32_t lds_dwords,
+                 u32 num_thread_x,
+                 u32 num_thread_y,
+                 u32 num_thread_z,
+                 u32 user_sgpr,
+                 u32 tgid_enable,
+                 u32 lds_dwords,
                  RecompiledCs& r,
                  Translator& t) {
   if (program.empty())
@@ -299,10 +300,10 @@ bool TranslateCs(const Program& program,
   const Id p_in_v3 = t.m.TypePointer(spv::StorageClass::Input, t_uv3);
   const Id local_id = t.m.Variable(p_in_v3, spv::StorageClass::Input);
   t.m.Decorate(local_id, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::LocalInvocationId)});
+               {static_cast<u32>(spv::BuiltIn::LocalInvocationId)});
   const Id group_id = t.m.Variable(p_in_v3, spv::StorageClass::Input);
   t.m.Decorate(group_id, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::WorkgroupId)});
+               {static_cast<u32>(spv::BuiltIn::WorkgroupId)});
   std::vector<Id> iface{local_id, group_id};
   if (uses_ds_swizzle) {
     t.m.Capability(spv::Capability::GroupNonUniform);
@@ -312,28 +313,28 @@ bool TranslateCs(const Program& program,
                      spv::StorageClass::Input);
     t.m.Decorate(
         sc.subgroup_local_id, spv::Decoration::BuiltIn,
-        {static_cast<uint32_t>(spv::BuiltIn::SubgroupLocalInvocationId)});
+        {static_cast<u32>(spv::BuiltIn::SubgroupLocalInvocationId)});
     iface.push_back(sc.subgroup_local_id);
   }
 
   const Id main_fn = t.m.BeginFunction(t.t_void, t.t_fn);
   sc.main_fn = main_fn;
   const Id p_pc_u = t.m.TypePointer(spv::StorageClass::PushConstant, t.t_u);
-  for (uint32_t i = 0; i < 16; i++)  // user data -> s0..s15
+  for (u32 i = 0; i < 16; i++)  // user data -> s0..s15
     t.SetSg(i, t.m.Load(t.t_u,
                         t.m.AccessChain(p_pc_u, pc_var, {t.U32(0), t.U32(i)})));
   const Id p_in_u = t.m.TypePointer(spv::StorageClass::Input, t.t_u);
-  const auto group_comp = [&](uint32_t c) {
+  const auto group_comp = [&](u32 c) {
     return t.m.Load(t.t_u, t.m.AccessChain(p_in_u, group_id, {t.U32(c)}));
   };
-  uint32_t sg = user_sgpr;
+  u32 sg = user_sgpr;
   if ((tgid_enable & 1) && sg < 106)
     t.SetSg(sg++, group_comp(0));
   if ((tgid_enable & 2) && sg < 106)
     t.SetSg(sg++, group_comp(1));
   if ((tgid_enable & 4) && sg < 106)
     t.SetSg(sg++, group_comp(2));
-  for (uint32_t c = 0; c < 3; c++)  // local invocation id (tidig) -> v0..v2
+  for (u32 c = 0; c < 3; c++)  // local invocation id (tidig) -> v0..v2
     t.SetVg(c, t.m.Load(t.t_u, t.m.AccessChain(p_in_u, local_id, {t.U32(c)})));
   t.SeedExec();
   t.predicate_vector = true;
@@ -373,17 +374,17 @@ bool EmitCsMemory(Translator& t, const Inst& inst, StageContext& sc) {
       // Same lowering as the graphics path: dim 3 (cube) and 5 (2D array)
       // become the shared emitter's DA bit, and NSA names each address
       // component in its own VGPR.
-      const uint32_t w = inst.raw[0];
-      const uint32_t dim = (w >> 3) & 0x7;
+      const u32 w = inst.raw[0];
+      const u32 dim = (w >> 3) & 0x7;
       const bool arrayed_dim = dim == 3 || dim == 5;
       Inst lowered = inst;
       lowered.raw[0] = (w & ~0x4000u) | (arrayed_dim ? 0x4000u : 0u);
-      const uint32_t nsa = (w >> 1) & 0x3;
+      const u32 nsa = (w >> 1) & 0x3;
       if (nsa) {
         std::array<gpu::gcn::Id, 13> address{};
         address[0] = t.Vg(inst.raw[1] & 0xFF);
-        for (uint32_t d = 0; d < nsa; d++)
-          for (uint32_t c = 0; c < 4; c++)
+        for (u32 d = 0; d < nsa; d++)
+          for (u32 c = 0; c < 4; c++)
             address[1 + d * 4 + c] = t.Vg((inst.raw[2 + d] >> (c * 8)) & 0xFF);
         gpu::gcn::EmitCsMimg(t, lowered, sc, address.data());
         return true;
@@ -399,15 +400,15 @@ bool EmitCsMemory(Translator& t, const Inst& inst, StageContext& sc) {
   }
 }
 
-gpu::gcn::RecompiledCs RecompileCompute(const uint32_t* cs_code,
-                                        uint32_t num_thread_x,
-                                        uint32_t num_thread_y,
-                                        uint32_t num_thread_z,
-                                        uint32_t user_sgpr,
-                                        uint32_t tgid_enable,
-                                        uint32_t lds_dwords) {
+gpu::gcn::RecompiledCs RecompileCompute(const u32* cs_code,
+                                        u32 num_thread_x,
+                                        u32 num_thread_y,
+                                        u32 num_thread_z,
+                                        u32 user_sgpr,
+                                        u32 tgid_enable,
+                                        u32 lds_dwords) {
   RecompiledCs r;
-  constexpr uint64_t kMaxShaderBytes = 4096 * sizeof(uint32_t);
+  constexpr u64 kMaxShaderBytes = 4096 * sizeof(u32);
   if (!cs_code || !gpu::IsReadableRange(reinterpret_cast<uintptr_t>(cs_code),
                                         kMaxShaderBytes))
     return r;
@@ -423,7 +424,7 @@ gpu::gcn::RecompiledCs RecompileCompute(const uint32_t* cs_code,
     return r;
   }
 
-  const std::vector<uint32_t> spv_bin = t.m.Assemble();
+  const std::vector<u32> spv_bin = t.m.Assemble();
   // A module the translator emitted but the validator rejects is a translator
   // bug (wrong codegen, not a guest gap): always loud.
   std::string err;

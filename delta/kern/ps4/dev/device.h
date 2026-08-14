@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 
@@ -22,7 +23,7 @@ class device : public kObject {
 public:
   inline device(proc *p) : kObject(p, kObject::oType::device) {}
 
-  virtual bool init(const char *, uint32_t, uint32_t) { return true; }
+  virtual bool init(const char *, u32, u32) { return true; }
 
   // True for host/pfs-backed regular files. Titles read these from async worker
   // threads that can lag behind the opening thread's close+reopen; sys_close
@@ -37,11 +38,11 @@ public:
 
   // Unknown map/ioctl on a device: soft-fail (and log) instead of trapping, so
   // the boot keeps advancing and we can see what the guest actually wanted.
-  virtual uint8_t *map(void *, size_t, uint32_t, uint32_t, size_t) {
+  virtual u8 *map(void *, size_t, u32, u32, size_t) {
     BASE_LOGI("dev", "UNHANDLED map on {}", name.c_str());
-    return reinterpret_cast<uint8_t *>(-1);
+    return reinterpret_cast<u8 *>(-1);
   }
-  virtual int32_t ioctl(uint32_t command, void *args) {
+  virtual i32 ioctl(u32 command, void *args) {
     BASE_LOGI("dev", "UNHANDLED ioctl({:#x}) on {} -> 0", command,
               name.c_str());
     return 0;
@@ -50,15 +51,15 @@ public:
   // File-like operations. Default to "not supported"; real files and char
   // devices override what they implement. Convention follows lv2: >= 0 on
   // success (byte count / offset), negative SysError on failure.
-  virtual int64_t read(void *, size_t) { return -SysError::eNODEV; }
-  virtual int64_t write(const void *, size_t) { return -SysError::eNODEV; }
-  virtual int64_t lseek(int64_t, int) { return -SysError::eNODEV; }
+  virtual i64 read(void *, size_t) { return -SysError::eNODEV; }
+  virtual i64 write(const void *, size_t) { return -SysError::eNODEV; }
+  virtual i64 lseek(i64, int) { return -SysError::eNODEV; }
   // Read `n` bytes at absolute `off` into `buf` WITHOUT moving the file position
   // (pread). Used to back a file mmap with the file's content. Returns bytes read
   // (0 at/after EOF), or -1 if this device isn't a readable file.
-  virtual int64_t readAt(void *, size_t, int64_t) { return -1; }
+  virtual i64 readAt(void *, size_t, i64) { return -1; }
   virtual int fstat(void * /*SceKernelStat*/) { return -SysError::eNODEV; }
   // Directory enumeration (FreeBSD dirents). Non-directories aren't one.
-  virtual int64_t getdents(void *, size_t) { return -SysError::eNOTDIR; }
+  virtual i64 getdents(void *, size_t) { return -SysError::eNOTDIR; }
 };
 }

@@ -11,11 +11,12 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
 extern "C" {
 // Generic FMOD export stub: returns FMOD_OK (0). Used for every imported NID
 // during discovery; out-param-bearing calls get specific handlers (see .cpp).
-uint64_t PS4ABI fmodStub();
+u64 PS4ABI fmodStub();
 }  // extern "C"

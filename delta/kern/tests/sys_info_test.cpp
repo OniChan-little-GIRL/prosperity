@@ -1,4 +1,5 @@
 #include <cstdint>
+#include "base/arch.h"
 #include <cstdlib>
 #include <cstring>
 
@@ -9,7 +10,7 @@
 
 namespace {
 
-uint32_t ReadSysctlByName(const char *name) {
+u32 ReadSysctlByName(const char *name) {
   int translate_mib[] = {0, 3};
   int mib[4]{};
   size_t mib_size = sizeof(mib);
@@ -17,9 +18,9 @@ uint32_t ReadSysctlByName(const char *name) {
                              std::strlen(name)),
             0);
 
-  uint32_t value = UINT32_MAX;
+  u32 value = UINT32_MAX;
   size_t value_size = sizeof(value);
-  EXPECT_EQ(krnl::sys_sysctl(mib, static_cast<uint32_t>(mib_size / sizeof(int)),
+  EXPECT_EQ(krnl::sys_sysctl(mib, static_cast<u32>(mib_size / sizeof(int)),
                              &value, &value_size, nullptr, 0),
             0);
   EXPECT_EQ(value_size, sizeof(value));
@@ -32,14 +33,14 @@ public:
   ~TitleAttributesScope() { krnl::ps4::setTitleAttributes(saved_); }
 
 private:
-  uint32_t saved_;
+  u32 saved_;
 };
 
 } // namespace
 
 TEST(SysInfo, ReportsPs4PageSize) {
   int mib[] = {6, 7};
-  uint32_t page_size = 0;
+  u32 page_size = 0;
   size_t result_size = sizeof(page_size);
 
   EXPECT_EQ(krnl::sys_sysctl(mib, 2, &page_size, &result_size, nullptr, 0), 0);
@@ -73,8 +74,8 @@ TEST(SysInfo, ReportsConfiguredPs4HardwareMode) {
 TEST(SysInfo, ReportsCpuModeFromTitleAttributes) {
   const TitleAttributesScope restore_attributes;
   struct Case {
-    uint32_t attributes;
-    uint32_t expected;
+    u32 attributes;
+    u32 expected;
   };
   constexpr Case cases[] = {
       {0, 0},
@@ -86,7 +87,7 @@ TEST(SysInfo, ReportsCpuModeFromTitleAttributes) {
   int cpu_mode_mib[] = {1, 14, 42};
   for (const Case &test : cases) {
     krnl::ps4::setTitleAttributes(test.attributes);
-    uint32_t direct_cpu_mode = UINT32_MAX;
+    u32 direct_cpu_mode = UINT32_MAX;
     size_t cpu_mode_size = sizeof(direct_cpu_mode);
     ASSERT_EQ(krnl::sys_sysctl(cpu_mode_mib, 3, &direct_cpu_mode,
                                &cpu_mode_size, nullptr, 0),

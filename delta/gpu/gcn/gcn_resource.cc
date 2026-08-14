@@ -5,6 +5,7 @@
  */
 
 #include "gpu/gcn/gcn_resource.h"
+#include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"
 
@@ -26,9 +27,9 @@ DELTA_OPTION(bool, kGpuEudfail, "DELTA_GPU_EUDFAIL", false);
 DELTA_OPTION(bool, kGpuEudtrace, "DELTA_GPU_EUDTRACE", false);
 DELTA_OPTION(bool, kGpuTilehist, "DELTA_GPU_TILEHIST", false);
 DELTA_OPTION(bool, kTrace, "DELTA_GPU_TRACE", false);
-DELTA_OPTION(uint64_t, kSotcCompositeRt, "DELTA_GPU_SOTC_COMPOSITE_RT", 0);
-DELTA_OPTION(uint64_t, kTexSrc, "DELTA_GPU_TEXSRC", 0);
-DELTA_OPTION(uint64_t, kTscan, "DELTA_GPU_TSCAN", 0);
+DELTA_OPTION(u64, kSotcCompositeRt, "DELTA_GPU_SOTC_COMPOSITE_RT", 0);
+DELTA_OPTION(u64, kTexSrc, "DELTA_GPU_TEXSRC", 0);
+DELTA_OPTION(u64, kTscan, "DELTA_GPU_TSCAN", 0);
 DELTA_OPTION(int, kTscanAfter, "DELTA_GPU_TSCAN_AFTER", 0);
 DELTA_OPTION(bool, kTwatch, "DELTA_GPU_TWATCH", false);
 DELTA_OPTION(bool, kNullDis, "DELTA_GPU_NULLDIS", false);
@@ -44,15 +45,15 @@ DELTA_OPTION(int, kArenaProbe, "DELTA_GPU_ARENA_PROBE", 0);
 
 namespace gpu::gcn {
 
-void (*g_flush_guest_range)(uint64_t address, uint64_t bytes) = nullptr;
+void (*g_flush_guest_range)(u64 address, u64 bytes) = nullptr;
 
 namespace {
 
 
-constexpr uint64_t kGuestLo = 0x1000000000ull;
-constexpr uint64_t kGuestHi = 0x20000000000ull;
+constexpr u64 kGuestLo = 0x1000000000ull;
+constexpr u64 kGuestHi = 0x20000000000ull;
 
-bool GuestRange(uint64_t address, uint64_t size) {
+bool GuestRange(u64 address, u64 size) {
   return size && address >= kGuestLo && address < kGuestHi &&
          size <= kGuestHi - address &&
          utl::isMemoryRangeMapped(reinterpret_cast<const void*>(address), size);
@@ -65,9 +66,9 @@ bool GuestRange(uint64_t address, uint64_t size) {
 // pointer chain does not reach" -- the second case shows the descriptor sitting
 // in a table we never look at, and the distance to the address the shader read
 // names the mistake.
-uint64_t ScanForDescriptor(uint64_t want_base) {
-  const uint32_t want_word0 = static_cast<uint32_t>(want_base >> 8);
-  const uint32_t want_hi = static_cast<uint32_t>((want_base >> 40) & 0x3F);
+u64 ScanForDescriptor(u64 want_base) {
+  const u32 want_word0 = static_cast<u32>(want_base >> 8);
+  const u32 want_hi = static_cast<u32>((want_base >> 40) & 0x3F);
   std::FILE* maps = std::fopen("/proc/self/maps", "r");
   if (!maps) {
     BASE_LOGI("tscan", "cannot read /proc/self/maps");
@@ -76,24 +77,24 @@ uint64_t ScanForDescriptor(uint64_t want_base) {
   BASE_LOGI("tscan", "sweeping for base={:#x} (word0={:08x} hi={})",
             static_cast<unsigned long>(want_base), want_word0, want_hi);
   char line[512];
-  uint64_t scanned = 0, hits = 0, first_valid = 0;
+  u64 scanned = 0, hits = 0, first_valid = 0;
   while (std::fgets(line, sizeof(line), maps)) {
-    uint64_t lo = 0, hi = 0;
+    u64 lo = 0, hi = 0;
     char perms[8] = {};
     if (std::sscanf(line, "%lx-%lx %7s", &lo, &hi, perms) != 3)
       continue;
     if (perms[0] != 'r' || lo < kGuestLo || hi > kGuestHi || hi <= lo)
       continue;
     scanned += hi - lo;
-    const uint32_t* p = reinterpret_cast<const uint32_t*>(lo);
-    const uint64_t n = (hi - lo) / 4;
-    for (uint64_t i = 0; i + 8 <= n; i++) {
+    const u32* p = reinterpret_cast<const u32*>(lo);
+    const u64 n = (hi - lo) / 4;
+    for (u64 i = 0; i + 8 <= n; i++) {
       if (p[i] != want_word0 || (p[i + 1] & 0x3F) != want_hi)
         continue;
       hits++;
       if (hits > 64)
         continue;
-      const uint64_t at = lo + i * 4;
+      const u64 at = lo + i * 4;
       const TImage t = DecodeTImage(&p[i]);
       if (t.valid && !first_valid)
         first_valid = at;
@@ -115,17 +116,17 @@ uint64_t ScanForDescriptor(uint64_t want_base) {
 // How much of the 4 MiB pool block around `address` was ever written. A block
 // the title filled reads mostly non-zero; a block it only reserved reads zero
 // end to end, which is what tells a stale pointer apart from a torn write.
-void CensusBlock(const char* what, uint64_t address) {
-  constexpr uint64_t kBlock = 0x400000;
-  const uint64_t base = address & ~(kBlock - 1);
+void CensusBlock(const char* what, u64 address) {
+  constexpr u64 kBlock = 0x400000;
+  const u64 base = address & ~(kBlock - 1);
   if (!GuestRange(base, kBlock)) {
     BASE_LOGI("census", "{} block {:#x} not mapped", what,
               static_cast<unsigned long>(base));
     return;
   }
-  const uint32_t* p = reinterpret_cast<const uint32_t*>(base);
-  uint64_t nz = 0, first_nz = 0, last_nz = 0;
-  for (uint64_t i = 0; i < kBlock / 4; i++) {
+  const u32* p = reinterpret_cast<const u32*>(base);
+  u64 nz = 0, first_nz = 0, last_nz = 0;
+  for (u64 i = 0; i < kBlock / 4; i++) {
     if (!p[i])
       continue;
     nz++;
@@ -150,20 +151,20 @@ void CensusBlock(const char* what, uint64_t address) {
 // pointer never named live data at all. Those two need opposite fixes, and
 // nothing else distinguishes them.
 struct NullSite {
-  uint64_t address;
-  uint64_t code_base;
-  uint64_t draw_seen;
+  u64 address;
+  u64 code_base;
+  u64 draw_seen;
   bool filled;
   // Highest offset in the containing 4 MiB arena that has ever been non-zero
   // while we watched. If this never reaches the offset the shader read, the
   // pointer names a fill level the arena no longer has (a stale pointer); if it
   // passes it, we walked the command buffer at the wrong moment.
-  uint64_t peak_watermark;
+  u64 peak_watermark;
 };
 std::vector<NullSite> g_null_sites;
-uint64_t g_track_draws = 0;
+u64 g_track_draws = 0;
 
-void NoteNullDescriptor(uint64_t address, uint64_t code_base) {
+void NoteNullDescriptor(u64 address, u64 code_base) {
   if (!address)
     return;
   for (const NullSite& s : g_null_sites)
@@ -174,30 +175,30 @@ void NoteNullDescriptor(uint64_t address, uint64_t code_base) {
 }
 
 // Highest non-zero dword offset inside the 4 MiB arena holding `address`.
-uint64_t BlockWatermark(uint64_t address) {
-  constexpr uint64_t kBlock = 0x400000;
-  const uint64_t base = address & ~(kBlock - 1);
+u64 BlockWatermark(u64 address) {
+  constexpr u64 kBlock = 0x400000;
+  const u64 base = address & ~(kBlock - 1);
   if (!GuestRange(base, kBlock))
     return 0;
-  const uint32_t* p = reinterpret_cast<const uint32_t*>(base);
-  for (uint64_t i = kBlock / 4; i-- > 0;)
+  const u32* p = reinterpret_cast<const u32*>(base);
+  for (u64 i = kBlock / 4; i-- > 0;)
     if (p[i])
       return i * 4;
   return 0;
 }
 
 void PollNullDescriptors() {
-  uint32_t filled = 0, still_zero = 0;
+  u32 filled = 0, still_zero = 0;
   // The watermark sweep is 4 MiB per site, so only the first few are tracked.
-  uint32_t watched = 0;
+  u32 watched = 0;
   for (NullSite& s : g_null_sites) {
     if (watched >= 6 || s.filled)
       continue;
     watched++;
-    const uint64_t mark = BlockWatermark(s.address);
+    const u64 mark = BlockWatermark(s.address);
     if (mark > s.peak_watermark)
       s.peak_watermark = mark;
-    const uint64_t want = s.address & 0x3FFFFF;
+    const u64 want = s.address & 0x3FFFFF;
     BASE_LOGI("wmark", "{:#x} offset={:#x} arena peak={:#x} now={:#x} -> {}",
               static_cast<unsigned long>(s.address), (unsigned long)want,
               (unsigned long)s.peak_watermark, (unsigned long)mark,
@@ -211,8 +212,8 @@ void PollNullDescriptors() {
     }
     if (!GuestRange(s.address, 32))
       continue;
-    const uint32_t* p = reinterpret_cast<const uint32_t*>(s.address);
-    if (std::all_of(p, p + 8, [](uint32_t w) { return w == 0; })) {
+    const u32* p = reinterpret_cast<const u32*>(s.address);
+    if (std::all_of(p, p + 8, [](u32 w) { return w == 0; })) {
       still_zero++;
       continue;
     }
@@ -232,14 +233,14 @@ void PollNullDescriptors() {
 
 // SMRD operand fields (GFX7).
 struct Smrd {
-  uint32_t op;
-  uint32_t sdst;
-  uint32_t sbase;  // SGPR pair index; actual base SGPR = sbase * 2
-  uint32_t offset;
+  u32 op;
+  u32 sdst;
+  u32 sbase;  // SGPR pair index; actual base SGPR = sbase * 2
+  u32 offset;
   bool imm;
 };
 
-Smrd DecodeSmrd(uint32_t w) {
+Smrd DecodeSmrd(u32 w) {
   return {
       .op = (w >> 22) & 0x1F,
       .sdst = (w >> 15) & 0x7F,
@@ -249,12 +250,12 @@ Smrd DecodeSmrd(uint32_t w) {
   };
 }
 
-uint64_t UserDataPointer(const uint32_t* user_data, uint32_t sgpr) {
-  return (static_cast<uint64_t>(user_data[sgpr + 1] & 0xFFFF) << 32) |
+u64 UserDataPointer(const u32* user_data, u32 sgpr) {
+  return (static_cast<u64>(user_data[sgpr + 1] & 0xFFFF) << 32) |
          user_data[sgpr];
 }
 
-uint32_t NextPow2(uint32_t v) {
+u32 NextPow2(u32 v) {
   v -= 1;
   v |= v >> 1;
   v |= v >> 2;
@@ -268,16 +269,16 @@ uint32_t NextPow2(uint32_t v) {
 // the T#/S# SGPR indices plus WHICH s_load last wrote each of them (0xFFFF =
 // inline user data), plus the access-type bits that select a distinct Vulkan
 // binding (arrayed / depth-compare / gather-lz). Packs into one dword-pair key.
-uint64_t MimgDescriptorKey(uint32_t srsrc,
-                           uint32_t ssamp,
-                           uint32_t load_rsrc,
-                           uint32_t load_samp,
-                           uint32_t flags) {
-  return (static_cast<uint64_t>(srsrc) << 0) |
-         (static_cast<uint64_t>(ssamp) << 8) |
-         (static_cast<uint64_t>(load_rsrc & 0xFFFF) << 16) |
-         (static_cast<uint64_t>(load_samp & 0xFFFF) << 32) |
-         (static_cast<uint64_t>(flags) << 48);
+u64 MimgDescriptorKey(u32 srsrc,
+                           u32 ssamp,
+                           u32 load_rsrc,
+                           u32 load_samp,
+                           u32 flags) {
+  return (static_cast<u64>(srsrc) << 0) |
+         (static_cast<u64>(ssamp) << 8) |
+         (static_cast<u64>(load_rsrc & 0xFFFF) << 16) |
+         (static_cast<u64>(load_samp & 0xFFFF) << 32) |
+         (static_cast<u64>(flags) << 48);
 }
 
 // Concrete evaluation of a graphics stage's scalar register file. Seed s0..s15
@@ -295,7 +296,7 @@ uint64_t MimgDescriptorKey(uint32_t srsrc,
 // value (seeded user data, or a value read from guest memory).
 // SOP1/SOP2 opcodes whose destination is an SGPR pair, so an unmodelled one
 // invalidates both halves (Sea Islands numbering, as in gcn_disasm's tables).
-bool Sop1DestIs64(uint32_t op) {
+bool Sop1DestIs64(u32 op) {
   switch (op) {
     case 0x04:  // s_mov_b64
     case 0x06:  // s_cmov_b64
@@ -323,7 +324,7 @@ bool Sop1DestIs64(uint32_t op) {
   }
 }
 
-bool Sop2DestIs64(uint32_t op) {
+bool Sop2DestIs64(u32 op) {
   switch (op) {
     case 0x0b:  // s_cselect_b64
     case 0x0f:  // s_and_b64
@@ -349,7 +350,7 @@ bool Sop2DestIs64(uint32_t op) {
 // VOP3b: the forms that carry a second, SCALAR destination (a carry-out or a
 // division-scale flag) in bits 14:8 of the first dword, where a plain VOP3a
 // keeps its abs/clamp bits.
-bool Vop3bWritesSdst(uint32_t op) {
+bool Vop3bWritesSdst(u32 op) {
   switch (op) {
     case 0x125:  // v_add_i32
     case 0x126:  // v_sub_i32
@@ -368,12 +369,12 @@ bool Vop3bWritesSdst(uint32_t op) {
 }
 
 struct ScalarEval {
-  static constexpr uint32_t kRegs = 136;
-  uint32_t sgpr[kRegs] = {};
+  static constexpr u32 kRegs = 136;
+  u32 sgpr[kRegs] = {};
   bool known[kRegs] = {};
-  uint64_t src[kRegs] = {};  // guest address each dword was s_loaded from
+  u64 src[kRegs] = {};  // guest address each dword was s_loaded from
   bool trace = false;
-  uint64_t code_base = 0;  // guest address of the program, for s_getpc_b64
+  u64 code_base = 0;  // guest address of the program, for s_getpc_b64
 
   // A shader that runs out of SGPRs parks scalars in the LANES of a VGPR with
   // v_writelane_b32 and reads them back with v_readlane_b32. Both of that
@@ -385,11 +386,11 @@ struct ScalarEval {
   // so a walk that skips the pair reads whatever those SGPRs held earlier and
   // decodes a descriptor from the wrong address. Keyed vgpr*64 + lane; a slot
   // that is absent is unknown and invalidates its destination.
-  std::unordered_map<uint32_t, uint32_t> lane_spill;
-  std::unordered_map<uint32_t, uint64_t> lane_spill_src;
+  std::unordered_map<u32, u32> lane_spill;
+  std::unordered_map<u32, u64> lane_spill_src;
 
-  explicit ScalarEval(const uint32_t* user_data, uint64_t base = 0) {
-    for (uint32_t i = 0; i < 16; i++) {
+  explicit ScalarEval(const u32* user_data, u64 base = 0) {
+    for (u32 i = 0; i < 16; i++) {
       sgpr[i] = user_data[i];
       known[i] = true;
     }
@@ -397,28 +398,28 @@ struct ScalarEval {
     trace = kGpuEudtrace;
   }
 
-  uint64_t Ptr(uint32_t s) const {  // 48-bit descriptor-table pointer pair
-    return (static_cast<uint64_t>(sgpr[s + 1] & 0xFFFF) << 32) | sgpr[s];
+  u64 Ptr(u32 s) const {  // 48-bit descriptor-table pointer pair
+    return (static_cast<u64>(sgpr[s + 1] & 0xFFFF) << 32) | sgpr[s];
   }
-  bool AllKnown(uint32_t s, uint32_t n) const {
+  bool AllKnown(u32 s, u32 n) const {
     if (s + n > kRegs)
       return false;
-    for (uint32_t i = 0; i < n; i++)
+    for (u32 i = 0; i < n; i++)
       if (!known[s + i])
         return false;
     return true;
   }
-  void Set(uint32_t s, uint32_t v) {
+  void Set(u32 s, u32 v) {
     if (s < kRegs) {
       sgpr[s] = v;
       known[s] = true;
     }
   }
-  void Clear(uint32_t s) {
+  void Clear(u32 s) {
     if (s < kRegs)
       known[s] = false;
   }
-  bool Source(uint32_t field, uint32_t literal, uint32_t& value) const {
+  bool Source(u32 field, u32 literal, u32& value) const {
     if (field <= 127) {
       if (!known[field])
         return false;
@@ -430,7 +431,7 @@ struct ScalarEval {
     else if (field >= 129 && field <= 192)
       value = field - 128;
     else if (field >= 193 && field <= 208)
-      value = static_cast<uint32_t>(-static_cast<int32_t>(field - 192));
+      value = static_cast<u32>(-static_cast<i32>(field - 192));
     else if (field == 240)
       value = 0x3f000000u;
     else if (field == 241)
@@ -453,7 +454,7 @@ struct ScalarEval {
       return false;
     return true;
   }
-  bool SourceHi(uint32_t field, uint32_t& value) const {
+  bool SourceHi(u32 field, u32& value) const {
     if (field <= 126)
       return Source(field + 1, 0, value);
     value = 0;
@@ -468,25 +469,25 @@ struct ScalarEval {
     const bool vop3 = inst.enc == Enc::kVop3;
     if (!vop1 && !vop2 && !vop3)
       return false;
-    const uint32_t w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
+    const u32 w = inst.raw[0], w1 = inst.raw[1], op = inst.opcode;
     // VOP3 re-encodes the VOP1 (0x180+) and VOP2 (0x100+) opcodes and moves
     // the operands into the second dword.
     const bool readlane = (vop2 && op == 0x01) || (vop3 && op == 0x101);
     const bool writelane = (vop2 && op == 0x02) || (vop3 && op == 0x102);
     const bool readfirstlane = (vop1 && op == 0x02) || (vop3 && op == 0x182);
-    const uint32_t dst = vop3 ? (w & 0xFF) : ((w >> 17) & 0xFF);
-    const uint32_t src0 = vop3 ? (w1 & 0x1FF) : (w & 0x1FF);
-    const uint32_t src1 = vop3 ? ((w1 >> 9) & 0x1FF) : ((w >> 9) & 0xFF);
-    const auto forget = [&](uint32_t slot) {
+    const u32 dst = vop3 ? (w & 0xFF) : ((w >> 17) & 0xFF);
+    const u32 src0 = vop3 ? (w1 & 0x1FF) : (w & 0x1FF);
+    const u32 src1 = vop3 ? ((w1 >> 9) & 0x1FF) : ((w >> 9) & 0xFF);
+    const auto forget = [&](u32 slot) {
       lane_spill.erase(slot);
       lane_spill_src.erase(slot);
     };
     if (writelane) {
-      uint32_t value = 0, lane = 0;
+      u32 value = 0, lane = 0;
       const bool lane_known = Source(src1, inst.literal, lane);
       const bool value_known = Source(src0, inst.literal, value);
       if (!lane_known) {
-        for (uint32_t i = 0; i < 64; i++)  // could have landed anywhere
+        for (u32 i = 0; i < 64; i++)  // could have landed anywhere
           forget(dst * 64 + i);
       } else if (!value_known) {
         forget(dst * 64 + (lane & 63));
@@ -500,9 +501,9 @@ struct ScalarEval {
       // readfirstlane names the lowest EXEC-active lane. The walk does not
       // model EXEC, so it can only answer when the shader spilled to lane 0 --
       // which is what a spill/reload pair does when it uses one slot.
-      uint32_t lane = 0;
+      u32 lane = 0;
       const bool lane_known = readfirstlane || Source(src1, inst.literal, lane);
-      const uint32_t slot = (src0 - 256) * 64 + (lane & 63);
+      const u32 slot = (src0 - 256) * 64 + (lane & 63);
       const auto it = lane_known && src0 >= 256 && src0 < 512
                           ? lane_spill.find(slot)
                           : lane_spill.end();
@@ -520,7 +521,7 @@ struct ScalarEval {
     // must invalidate its destination rather than leave a stale pointer for a
     // later descriptor decode to read.
     if (vop3 && (op < 0x100 || Vop3bWritesSdst(op))) {
-      const uint32_t sdst = op < 0x100 ? dst : ((w >> 8) & 0x7F);
+      const u32 sdst = op < 0x100 ? dst : ((w >> 8) & 0x7F);
       Clear(sdst);
       Clear(sdst + 1);
       return true;
@@ -535,17 +536,17 @@ struct ScalarEval {
   // here.
   void Step(const Inst& inst) {
     if (inst.enc == Enc::kSop1) {
-      const uint32_t w = inst.raw[0];
-      const uint32_t sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
+      const u32 w = inst.raw[0];
+      const u32 sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
       if (inst.opcode ==
           0x03) {  // s_mov_b32: stage a pointer via a scalar move
-        uint32_t value;
+        u32 value;
         if (Source(ssrc0, inst.literal, value))
           Set(sdst, value);
         else
           Clear(sdst);
       } else if (inst.opcode == 0x04) {  // s_mov_b64
-        uint32_t lo, hi;
+        u32 lo, hi;
         const bool source_known =
             Source(ssrc0, inst.literal, lo) && SourceHi(ssrc0, hi);
         if (source_known) {
@@ -557,10 +558,10 @@ struct ScalarEval {
         }
       } else if (inst.opcode == 0x1f) {  // s_getpc_b64: address of the NEXT inst
         if (code_base) {
-          const uint64_t pc =
-              code_base + static_cast<uint64_t>(inst.pc + inst.size) * 4;
-          Set(sdst, static_cast<uint32_t>(pc));
-          Set(sdst + 1, static_cast<uint32_t>(pc >> 32));
+          const u64 pc =
+              code_base + static_cast<u64>(inst.pc + inst.size) * 4;
+          Set(sdst, static_cast<u32>(pc));
+          Set(sdst + 1, static_cast<u32>(pc >> 32));
         } else {
           Clear(sdst);
           Clear(sdst + 1);
@@ -577,10 +578,10 @@ struct ScalarEval {
       return;
     }
     if (inst.enc == Enc::kSopk) {
-      const uint32_t w = inst.raw[0];
-      const uint32_t sdst = (w >> 16) & 0x7F;
-      const uint32_t simm =
-          static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(w)));
+      const u32 w = inst.raw[0];
+      const u32 sdst = (w >> 16) & 0x7F;
+      const u32 simm =
+          static_cast<u32>(static_cast<i32>(static_cast<i16>(w)));
       switch (inst.opcode) {
         case 0x00:  // s_movk_i32
           Set(sdst, simm);
@@ -618,10 +619,10 @@ struct ScalarEval {
     if (StepLaneOp(inst))
       return;
     if (inst.enc == Enc::kSop2) {
-      const uint32_t w = inst.raw[0], op = inst.opcode;
-      const uint32_t sdst = (w >> 16) & 0x7F;
+      const u32 w = inst.raw[0], op = inst.opcode;
+      const u32 sdst = (w >> 16) & 0x7F;
       const bool dest64 = Sop2DestIs64(op);
-      uint32_t a, b;
+      u32 a, b;
       const bool inputs_known = Source(w & 0xFF, inst.literal, a) &&
                                 Source((w >> 8) & 0xFF, inst.literal, b);
       if (!inputs_known) {
@@ -630,24 +631,24 @@ struct ScalarEval {
           Clear(sdst + 1);
         return;
       }
-      uint32_t value;
+      u32 value;
       switch (op) {
         case 0x06:
-          value = static_cast<uint32_t>(
-              std::min(static_cast<int32_t>(a), static_cast<int32_t>(b)));
+          value = static_cast<u32>(
+              std::min(static_cast<i32>(a), static_cast<i32>(b)));
           break;
         case 0x07:
           value = std::min(a, b);
           break;
         case 0x08:
-          value = static_cast<uint32_t>(
-              std::max(static_cast<int32_t>(a), static_cast<int32_t>(b)));
+          value = static_cast<u32>(
+              std::max(static_cast<i32>(a), static_cast<i32>(b)));
           break;
         case 0x09:
           value = std::max(a, b);
           break;
         case 0x27: {  // s_bfe_u32: src1[4:0] offset, src1[22:16] width
-          const uint32_t width = (b >> 16) & 0x7F;
+          const u32 width = (b >> 16) & 0x7F;
           value = width >= 32 ? (a >> (b & 31))
                               : ((a >> (b & 31)) & ((1u << width) - 1));
           break;
@@ -691,7 +692,7 @@ struct ScalarEval {
           value = a >> (b & 31);
           break;
         case 0x22:
-          value = static_cast<uint32_t>(static_cast<int32_t>(a) >> (b & 31));
+          value = static_cast<u32>(static_cast<i32>(a) >> (b & 31));
           break;
         case 0x26:
           value = a * b;
@@ -715,18 +716,18 @@ struct ScalarEval {
     const bool buffer_load = s.op >= 0x08 && s.op <= 0x0c;
     if (s.op > 0x04 && !buffer_load)
       return;  // s_load / s_buffer_load only
-    const uint32_t dwords = buffer_load ? (1u << (s.op - 0x08)) : (1u << s.op);
-    const uint32_t base = s.sbase * 2;
-    const uint32_t desc_dwords = buffer_load ? 4 : 2;
+    const u32 dwords = buffer_load ? (1u << (s.op - 0x08)) : (1u << s.op);
+    const u32 base = s.sbase * 2;
+    const u32 desc_dwords = buffer_load ? 4 : 2;
     const bool base_known = AllKnown(base, desc_dwords);
-    const uint64_t table =
+    const u64 table =
         base_known ? (buffer_load ? DecodeVBuffer(&sgpr[base]).base : Ptr(base))
                    : 0;
     bool offset_known = true;
-    uint64_t byte_off = 0;
+    u64 byte_off = 0;
     const SmrdOffset so = DecodeSmrdOffset(inst);
     if (!so.in_sgpr) {
-      byte_off = static_cast<uint64_t>(so.dwords) * 4;
+      byte_off = static_cast<u64>(so.dwords) * 4;
     } else if (so.sgpr < kRegs && known[so.sgpr]) {
       byte_off = sgpr[so.sgpr];
     } else {
@@ -734,7 +735,7 @@ struct ScalarEval {
     }
     // A load rewrites its destination SGPRs even if it cannot be resolved;
     // snapshot its inputs before invalidating an overlapping destination.
-    for (uint32_t i = 0; i < dwords; i++)
+    for (u32 i = 0; i < dwords; i++)
       Clear(s.sdst + i);
     if (!base_known || !offset_known) {
       if (kGpuEudfail)
@@ -744,8 +745,8 @@ struct ScalarEval {
     }
     if (byte_off > UINT64_MAX - table)
       return;
-    const uint64_t address = table + byte_off;
-    if (!GuestRange(address, static_cast<uint64_t>(dwords) * 4)) {
+    const u64 address = table + byte_off;
+    if (!GuestRange(address, static_cast<u64>(dwords) * 4)) {
       if (kGpuEudfail)
         BASE_LOGI("eudfail",
                   "s_load UNMAPPED x{} s{} <- [s{}={:#x} + {:#x}] = {:#x}",
@@ -762,9 +763,9 @@ struct ScalarEval {
     // (TEXMISS's "src holds a valid descriptor" signature). One branch when
     // nothing is dirty anywhere; one page probe when something is.
     if (g_flush_guest_range)
-      g_flush_guest_range(address, static_cast<uint64_t>(dwords) * 4);
-    const uint32_t* mem = reinterpret_cast<const uint32_t*>(address);
-    for (uint32_t i = 0; i < dwords; i++) {
+      g_flush_guest_range(address, static_cast<u64>(dwords) * 4);
+    const u32* mem = reinterpret_cast<const u32*>(address);
+    for (u32 i = 0; i < dwords; i++) {
       Set(s.sdst + i, mem[i]);
       if (s.sdst + i < kRegs)
         src[s.sdst + i] = address + i * 4;
@@ -782,7 +783,7 @@ struct ScalarEval {
                      static_cast<unsigned long>(byte_off),
                      static_cast<unsigned long>(address));
       base::FormatTo(bytes, "   data:");
-      for (uint32_t i = 0; i < dwords; i++)
+      for (u32 i = 0; i < dwords; i++)
         base::FormatTo(bytes, " {:08x}", mem[i]);
       BASE_LOGI("eud", "{}", bytes.c_str());
     }
@@ -836,9 +837,9 @@ const ScalarPassInfo& CachedScalarInfo(
     cache.clear();  // unbounded-growth backstop
   Entry e;
   e.pin = program;
-  const std::vector<uint8_t> reachable = ComputeReachability(*program);
+  const std::vector<u8> reachable = ComputeReachability(*program);
   e.info.plan = PlanMimgBindings(*program, reachable.data());
-  uint32_t index = 0;
+  u32 index = 0;
   for (const Inst& inst : *program) {
     if (!reachable[index++])
       continue;
@@ -857,30 +858,30 @@ const ScalarPassInfo& CachedScalarInfo(
 }  // namespace
 
 MimgBindingPlan PlanMimgBindings(const Program& program,
-                                 const uint8_t* reachable) {
+                                 const u8* reachable) {
   MimgBindingPlan plan;
   // Track, per SGPR range, the index of the last SMRD instruction covering it.
   struct Load {
-    uint32_t sgpr, dwords, index;
+    u32 sgpr, dwords, index;
   };
   std::vector<Load> loads;
-  const auto covering_load = [&](uint32_t sgpr, uint32_t dwords) -> uint32_t {
+  const auto covering_load = [&](u32 sgpr, u32 dwords) -> u32 {
     for (auto it = loads.rbegin(); it != loads.rend(); ++it)
       if (sgpr >= it->sgpr && sgpr + dwords <= it->sgpr + it->dwords)
         return it->index;
     return 0xFFFF;  // inline user data (no covering load)
   };
 
-  std::unordered_map<uint64_t, uint32_t> binding_of;
-  uint32_t inst_index = 0;
+  std::unordered_map<u64, u32> binding_of;
+  u32 inst_index = 0;
   for (const Inst& inst : program) {
-    const uint32_t idx = inst_index++;
+    const u32 idx = inst_index++;
     if (reachable && !reachable[idx])
       continue;
     if (inst.enc == Enc::kSmrd) {
       const Smrd s = DecodeSmrd(inst.raw[0]);
       if (s.op <= 0x04) {  // s_load_dword..x16 can rewrite descriptor SGPRs
-        const uint32_t dwords = 1u << s.op;
+        const u32 dwords = 1u << s.op;
         loads.erase(std::remove_if(loads.begin(), loads.end(),
                                    [&](const Load& ld) {
                                      return s.sdst < ld.sgpr + ld.dwords &&
@@ -893,22 +894,22 @@ MimgBindingPlan PlanMimgBindings(const Program& program,
     }
     if (inst.enc != Enc::kMimg)
       continue;
-    const uint32_t w0 = inst.raw[0], w1 = inst.raw[1];
-    const uint32_t op = (w0 >> 18) & 0x7F;
-    const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
+    const u32 w0 = inst.raw[0], w1 = inst.raw[1];
+    const u32 op = (w0 >> 18) & 0x7F;
+    const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
     const bool sampling = op >= 0x20;
     const bool storage = op == 0x08 || op == 0x09;
-    const uint32_t ssamp = sampling ? ((w1 >> 21) & 0x1F) * 4 : 0xFF;
-    const uint32_t flags =
+    const u32 ssamp = sampling ? ((w1 >> 21) & 0x1F) * 4 : 0xFF;
+    const u32 flags =
         (((w0 >> 14) & 1) << 0) |                      // DA
         (((op == 0x28 || op == 0x2f) ? 1 : 0) << 1) |  // dref
         ((op == 0x47 ? 1 : 0) << 2) |                  // gather4_lz
-        (static_cast<uint32_t>(storage) << 3);
-    const uint64_t key =
+        (static_cast<u32>(storage) << 3);
+    const u64 key =
         MimgDescriptorKey(srsrc, ssamp, covering_load(srsrc, 8),
                           sampling ? covering_load(ssamp, 4) : 0xFFFE, flags);
     const auto [it, inserted] = binding_of.emplace(
-        key, static_cast<uint32_t>(plan.binding_srsrc.size()));
+        key, static_cast<u32>(plan.binding_srsrc.size()));
     if (inserted) {
       plan.binding_srsrc.push_back(srsrc);
       plan.binding_storage.push_back(storage);
@@ -918,7 +919,7 @@ MimgBindingPlan PlanMimgBindings(const Program& program,
   return plan;
 }
 
-VBuffer DecodeVBuffer(const uint32_t* p) {
+VBuffer DecodeVBuffer(const u32* p) {
   // GCN V# (buffer resource descriptor), 4 dwords:
   //  [0]  base_address[31:0]
   //  [1]  base_address[43:32] in [11:0]; [15:12] reserved;
@@ -931,7 +932,7 @@ VBuffer DecodeVBuffer(const uint32_t* p) {
   // PS4 process' ~1 TB address space -- so every descriptor carrying that
   // nibble was rejected as out of range and read back as zero.
   return {
-      .base = (static_cast<uint64_t>(p[1] & 0xFFF) << 32) | p[0],
+      .base = (static_cast<u64>(p[1] & 0xFFF) << 32) | p[0],
       .stride = (p[1] >> 16) & 0x3FFF,
       .num_records = p[2],
       .dfmt = (p[3] >> 15) & 0xF,
@@ -939,7 +940,7 @@ VBuffer DecodeVBuffer(const uint32_t* p) {
   };
 }
 
-TImage DecodeTImage(const uint32_t* p) {
+TImage DecodeTImage(const u32* p) {
   // GCN T# (image resource), 8 dwords:
   //  [0] base[39:8] (base = [0] << 8 with high bits from [1])
   //  [1] base_hi[5:0]; mtype_l2[7:6]; min_lod[19:8]; formats
@@ -950,17 +951,17 @@ TImage DecodeTImage(const uint32_t* p) {
   //  [5] base_array[12:0]; last_array[25:13]
   TImage t;
   t.null_descriptor =
-      std::all_of(p, p + 8, [](uint32_t word) { return word == 0; });
-  t.base = ((static_cast<uint64_t>(p[1] & 0x3F) << 32) | p[0]) << 8;
+      std::all_of(p, p + 8, [](u32 word) { return word == 0; });
+  t.base = ((static_cast<u64>(p[1] & 0x3F) << 32) | p[0]) << 8;
   t.min_lod = (p[1] >> 8) & 0xFFF;
   t.dfmt = (p[1] >> 20) & 0x3F;
   t.nfmt = (p[1] >> 26) & 0xF;
   t.width = (p[2] & 0x3FFF) + 1;
   t.height = ((p[2] >> 14) & 0x3FFF) + 1;
-  for (uint32_t i = 0; i < 4; i++)
+  for (u32 i = 0; i < 4; i++)
     t.dst_sel[i] = (p[3] >> (i * 3)) & 0x7;
   t.base_mip = (p[3] >> 12) & 0xF;
-  const uint32_t last_mip = (p[3] >> 16) & 0xF;
+  const u32 last_mip = (p[3] >> 16) & 0xF;
   t.mip_levels = last_mip + 1;
   t.view_mips = last_mip >= t.base_mip ? last_mip - t.base_mip + 1 : 0;
   t.tiling_idx = (p[3] >> 20) & 0x1F;
@@ -979,10 +980,10 @@ TImage DecodeTImage(const uint32_t* p) {
     if (t.pow2_pad)
       t.layers = NextPow2(t.layers);
     if (t.type == 11)
-      t.layers = std::max<uint32_t>(t.layers, 6);
+      t.layers = std::max<u32>(t.layers, 6);
     t.base_array = p[5] & 0x1FFF;
     t.view_layers = 0;
-    const uint32_t last_array = (p[5] >> 13) & 0x1FFF;
+    const u32 last_array = (p[5] >> 13) & 0x1FFF;
     if (t.base_array < t.layers && last_array >= t.base_array)
       t.view_layers = std::min(last_array, t.layers - 1) - t.base_array + 1;
   }
@@ -1003,8 +1004,8 @@ TImage DecodeTImage(const uint32_t* p) {
                               t.type == 11 || t.type == 12 || t.type == 13;
   const bool valid_view = (t.type != 13 && t.type != 12 && t.type != 11) ||
                           (t.base_array < t.layers && t.view_layers > 0);
-  uint32_t max_levels = 1;
-  for (uint32_t extent = std::max(t.width, t.height); extent > 1; extent >>= 1)
+  u32 max_levels = 1;
+  for (u32 extent = std::max(t.width, t.height); extent > 1; extent >>= 1)
     max_levels++;
   const bool valid_mips = t.view_mips && t.mip_levels <= max_levels;
   // A volume image only halves width/height per mip in our layout builder, so
@@ -1018,7 +1019,7 @@ TImage DecodeTImage(const uint32_t* p) {
 }
 
 std::vector<VBuffer> TrackVertexBuffers(const Program& fetch_program,
-                                        const uint32_t* vs_user_data) {
+                                        const u32* vs_user_data) {
   std::vector<VBuffer> result;
   if (!vs_user_data)
     return result;
@@ -1033,18 +1034,18 @@ std::vector<VBuffer> TrackVertexBuffers(const Program& fetch_program,
     const Smrd s = DecodeSmrd(inst.raw[0]);
     if (s.op != 0x02)
       continue;                              // s_load_dwordx4 (a 4-dword V#)
-    const uint32_t base_sgpr = s.sbase * 2;  // user_data index of the table ptr
+    const u32 base_sgpr = s.sbase * 2;  // user_data index of the table ptr
     if (base_sgpr + 1 >= 16)
       continue;
-    const uint64_t table = UserDataPointer(vs_user_data, base_sgpr);
+    const u64 table = UserDataPointer(vs_user_data, base_sgpr);
     if (!GuestRange(table, 16))
       continue;
     const SmrdOffset so = DecodeSmrdOffset(inst);
     if (so.in_sgpr)
       continue;  // a register offset needs the scalar walk, not this scan
-    const uint32_t byte_off = so.dwords * 4;
+    const u32 byte_off = so.dwords * 4;
     const VBuffer v =
-        DecodeVBuffer(reinterpret_cast<const uint32_t*>(table + byte_off));
+        DecodeVBuffer(reinterpret_cast<const u32*>(table + byte_off));
     if (v.base >= kGuestLo && v.base < kGuestHi && v.stride &&
         v.stride <= 256 && v.num_records && v.num_records <= 0x100000) {
       if (kTrace)
@@ -1062,9 +1063,9 @@ std::vector<VBuffer> TrackVertexBuffers(const Program& fetch_program,
 
 std::vector<TImage> TrackTextures(
     const std::shared_ptr<const Program>& ps_program,
-    const uint32_t* ps_user_data,
+    const u32* ps_user_data,
     bool trace,
-    uint64_t code_base) {
+    u64 code_base) {
   std::vector<TImage> result;
   if (!ps_program || !ps_user_data)
     return result;
@@ -1090,17 +1091,17 @@ std::vector<TImage> TrackTextures(
     const auto plan_it = plan.binding_by_pc.find(inst.pc);
     if (plan_it == plan.binding_by_pc.end())
       continue;  // unreachable
-    const uint32_t binding = plan_it->second;
-    const uint32_t word1 = inst.raw[1];
-    const uint32_t srsrc = ((word1 >> 16) & 0x1F) * 4;  // T# base SGPR
-    const uint32_t op = (inst.raw[0] >> 18) & 0x7F;
+    const u32 binding = plan_it->second;
+    const u32 word1 = inst.raw[1];
+    const u32 srsrc = ((word1 >> 16) & 0x1F) * 4;  // T# base SGPR
+    const u32 op = (inst.raw[0] >> 18) & 0x7F;
 
     // Resolve the sampler for sampling ops (used both for new bindings and to
     // backfill a binding first seen through a non-sampling op like resinfo).
-    uint32_t sampler[4] = {};
+    u32 sampler[4] = {};
     bool sampler_ok = false;
     if (op >= 0x20) {
-      const uint32_t ssamp = ((word1 >> 21) & 0x1F) * 4;
+      const u32 ssamp = ((word1 >> 21) & 0x1F) * 4;
       if (eval.AllKnown(ssamp, 4)) {
         std::memcpy(sampler, &eval.sgpr[ssamp], sizeof(sampler));
         sampler_ok = true;
@@ -1128,7 +1129,7 @@ std::vector<TImage> TrackTextures(
       // arena away from where it looked, the title and we disagree about which
       // arena is current -- a constant bias, not a lost write.
       static int probes = 0;
-      const uint64_t at = eval.src[srsrc];
+      const u64 at = eval.src[srsrc];
       if (at && probes < 24) {
         probes++;
         // Widened to +-16: the registers at the write say the arena stride is
@@ -1137,11 +1138,11 @@ std::vector<TImage> TrackTextures(
         for (int slot = -16; slot <= 16; slot++) {
           if (!slot)
             continue;
-          const uint64_t probe = at + static_cast<int64_t>(slot) * 0x200000;
+          const u64 probe = at + static_cast<i64>(slot) * 0x200000;
           if (!GuestRange(probe, 32))
             continue;
-          const uint32_t* w = reinterpret_cast<const uint32_t*>(probe);
-          if (std::all_of(w, w + 8, [](uint32_t v) { return v == 0; }))
+          const u32* w = reinterpret_cast<const u32*>(probe);
+          if (std::all_of(w, w + 8, [](u32 v) { return v == 0; }))
             continue;
           const TImage probe_t = DecodeTImage(w);
           BASE_LOGI("arena",
@@ -1167,7 +1168,7 @@ std::vector<TImage> TrackTextures(
     // goes through utl rather than an env var parsed at startup.
     if (kNullWatch && t.null_descriptor) {
       static bool armed = false;
-      const uint64_t root = UserDataPointer(ps_user_data, 0);
+      const u64 root = UserDataPointer(ps_user_data, 0);
       if (!armed && root && GuestRange(root, 64)) {
         armed = true;
         BASE_LOGI("nullwatch",
@@ -1213,11 +1214,11 @@ std::vector<TImage> TrackTextures(
         // One level up: the SRT block the draw's user data points at. If that
         // is empty too, the title never built the resource block at all and the
         // descriptor table below it is a red herring.
-        const uint64_t srt = UserDataPointer(ps_user_data, 0);
+        const u64 srt = UserDataPointer(ps_user_data, 0);
         BASE_LOGI("tscan", "SRT root (user s[0:1]) = {:#x}",
                   static_cast<unsigned long>(srt));
         if (GuestRange(srt, 64)) {
-          const uint32_t* p = reinterpret_cast<const uint32_t*>(srt);
+          const u32* p = reinterpret_cast<const u32*>(srt);
           base::String srt_words;
           base::FormatTo(srt_words, "  SRT[0..15]:");
           for (int i = 0; i < 16; i++)
@@ -1227,19 +1228,19 @@ std::vector<TImage> TrackTextures(
         } else {
           BASE_LOGI("tscan", "  SRT root not mapped");
         }
-        const uint64_t good = ScanForDescriptor(kTscan);
+        const u64 good = ScanForDescriptor(kTscan);
         if (good)
           CensusBlock("first valid copy", good);
       }
     }
     if (kArenaProbe && t.null_descriptor && eval.src[srsrc]) {
-      const uint64_t at = eval.src[srsrc];
+      const u64 at = eval.src[srsrc];
       for (int slot = -1; slot >= -kArenaProbe; slot--) {
-        const uint64_t probe = at + static_cast<int64_t>(slot) * 0x200000;
+        const u64 probe = at + static_cast<i64>(slot) * 0x200000;
         if (!GuestRange(probe, 32))
           continue;
-        const uint32_t* w = reinterpret_cast<const uint32_t*>(probe);
-        if (std::all_of(w, w + 8, [](uint32_t v) { return v == 0; }))
+        const u32* w = reinterpret_cast<const u32*>(probe);
+        if (std::all_of(w, w + 8, [](u32 v) { return v == 0; }))
           continue;
         const TImage cand = DecodeTImage(w);
         if (!cand.valid)
@@ -1272,10 +1273,10 @@ std::vector<TImage> TrackTextures(
     }
     if (code_base == 0x80720da900 && binding == 0 && t.null_descriptor &&
         kSotcCompositeRt) {
-      const uint64_t base = kSotcCompositeRt;
-      const uint32_t descriptor[8] = {
-          static_cast<uint32_t>(base >> 8),
-          static_cast<uint32_t>((base >> 40) & 0x3f) | 0x1c400000,
+      const u64 base = kSotcCompositeRt;
+      const u32 descriptor[8] = {
+          static_cast<u32>(base >> 8),
+          static_cast<u32>((base >> 40) & 0x3f) | 0x1c400000,
           ((270 - 1) << 14) | (960 - 1),
           0x94000fac,
           (1024 - 1) << 13,
@@ -1285,16 +1286,16 @@ std::vector<TImage> TrackTextures(
       };
       t = DecodeTImage(descriptor);
       t.src = eval.src[srsrc];
-      const uint64_t descriptor_at = eval.src[srsrc];
-      const uint64_t style_at = eval.src[16];
+      const u64 descriptor_at = eval.src[srsrc];
+      const u64 style_at = eval.src[16];
       if (GuestRange(style_at - 4, 12)) {
-        auto* style = reinterpret_cast<uint32_t*>(style_at - 4);
+        auto* style = reinterpret_cast<u32*>(style_at - 4);
         style[0] = 0x3f800000;  // outline threshold (disabled below)
         style[1] = 0x3f000000;  // SDF edge threshold
         style[2] = 0x42000000;  // atlas footprint scale
       }
       if (GuestRange(descriptor_at - 32, 20)) {
-        auto* outline = reinterpret_cast<uint32_t*>(descriptor_at - 32);
+        auto* outline = reinterpret_cast<u32*>(descriptor_at - 32);
         outline[0] = 0;
         outline[1] = 0;
         outline[2] = 0;
@@ -1329,8 +1330,8 @@ std::vector<TImage> TrackTextures(
     // DELTA_GPU_TEXSRC=<base>: where in guest memory the T# for this surface
     // lives. A surface the GPU samples but nothing ever fills is only
     // explainable from the code that publishes its address.
-    if (kTexSrc && t.base >= (uint64_t)kTexSrc) {
-      static std::set<uint64_t> seen;
+    if (kTexSrc && t.base >= (u64)kTexSrc) {
+      static std::set<u64> seen;
       if (seen.size() < 64 && seen.insert(t.base).second)
         BASE_LOGI("texsrc", "base={:#x} T# at {:#x} (sgpr{})",
                   static_cast<unsigned long>(t.base),
@@ -1348,8 +1349,8 @@ std::vector<TImage> TrackTextures(
       // Empirical tiling census (DELTA_GPU_TILEHIST): tally tiling_idx of
       // every sampled texture to confirm which modes are linear vs tiled.
       if (kGpuTilehist) {
-        static uint32_t hist[32] = {0};
-        static uint64_t n = 0, pitch_ne = 0;
+        static u32 hist[32] = {0};
+        static u64 n = 0, pitch_ne = 0;
         hist[t.tiling_idx & 31]++;
         if (t.pitch != t.width)
           pitch_ne++;
@@ -1376,10 +1377,10 @@ std::vector<TImage> TrackTextures(
   return result;
 }
 
-std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
+std::unordered_map<u32, VBuffer> ResolveCbuffers(
     const std::shared_ptr<const Program>& program,
-    const uint32_t* user_data) {
-  std::unordered_map<uint32_t, VBuffer> result;
+    const u32* user_data) {
+  std::unordered_map<u32, VBuffer> result;
   if (!program || !user_data)
     return result;
 
@@ -1404,10 +1405,10 @@ std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
     // s_load_dword{,x2..x16} / s_buffer_load_dword{,x2..x16}.
     // s_load addresses a raw 2-dword pointer, s_buffer_load a 4-dword V#.
     const bool pointer = s.op <= 0x04;
-    const uint32_t base = s.sbase * 2;
+    const u32 base = s.sbase * 2;
     // Keyed like the translator's bindings (see CbufBindKey): the same SGPR
     // can serve as a pointer pair for one load and a V# for another.
-    const uint32_t key = base | (pointer ? 0x100u : 0u);
+    const u32 key = base | (pointer ? 0x100u : 0u);
     const bool known = candidate && eval.AllKnown(base, pointer ? 2 : 4);
     VBuffer v{};
     if (known) {
@@ -1431,7 +1432,7 @@ std::unordered_map<uint32_t, VBuffer> ResolveCbuffers(
 std::vector<VBuffer> ResolveDirectVertexBuffers(
     const std::shared_ptr<const Program>& program,
     const std::vector<ShaderAttr>& attrs,
-    const uint32_t* user_data) {
+    const u32* user_data) {
   std::vector<VBuffer> result(attrs.size());
   if (!program || !user_data || attrs.empty())
     return result;
@@ -1448,7 +1449,7 @@ std::vector<VBuffer> ResolveDirectVertexBuffers(
         continue;
       result[i] = DecodeVBuffer(&eval.sgpr[attr.table_sgpr]);
       if (eval.trace) {
-        uint32_t data[3] = {};
+        u32 data[3] = {};
         if (GuestRange(result[i].base, sizeof(data)))
           std::memcpy(data, reinterpret_cast<const void*>(result[i].base),
                       sizeof(data));
@@ -1473,7 +1474,7 @@ std::vector<VBuffer> ResolveDirectVertexBuffers(
 std::vector<VBuffer> ResolveShaderBuffers(
     const std::shared_ptr<const Program>& program,
     const std::vector<ShaderBuffer>& buffers,
-    const uint32_t* user_data) {
+    const u32* user_data) {
   std::vector<VBuffer> result(buffers.size());
   if (!program || !user_data || buffers.empty())
     return result;
@@ -1505,7 +1506,7 @@ std::vector<VBuffer> ResolveShaderBuffers(
 
 std::vector<ResolvedCsResource> ResolveCsResources(const Program& program,
                                                    const RecompiledCs& plan,
-                                                   const uint32_t* user_data) {
+                                                   const u32* user_data) {
   std::vector<ResolvedCsResource> result(plan.resources.size());
   if (!user_data)
     return result;
@@ -1517,14 +1518,14 @@ std::vector<ResolvedCsResource> ResolveCsResources(const Program& program,
     for (const CsResource& resource : plan.resources) {
       if (resource.use_pc != inst.pc || resource.binding >= result.size())
         continue;
-      const uint32_t dwords = resource.kind == 1   ? 8
+      const u32 dwords = resource.kind == 1   ? 8
                               : resource.kind == 2 ? 2
                                                    : 4;
       if (!eval.AllKnown(resource.base_sgpr, dwords))
         continue;
       ResolvedCsResource& resolved = result[resource.binding];
       std::memcpy(resolved.descriptor, &eval.sgpr[resource.base_sgpr],
-                  dwords * sizeof(uint32_t));
+                  dwords * sizeof(u32));
       resolved.valid = true;
     }
     eval.Step(inst);

@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -55,8 +56,8 @@ struct VirtualFile {
   virtual ~VirtualFile() = default;
   // Read up to len bytes at byte offset off. Returns bytes read (0 past EOF) or
   // -1 on error.
-  virtual int64_t read(void *buf, int64_t off, int64_t len) = 0;
-  virtual int64_t size() = 0;
+  virtual i64 read(void *buf, i64 off, i64 len) = 0;
+  virtual i64 size() = 0;
 };
 
 // Serves files for a virtual mount prefix. relPath is the remainder after the
@@ -64,7 +65,7 @@ struct VirtualFile {
 struct VirtualProvider {
   virtual ~VirtualProvider() = default;
   virtual std::unique_ptr<VirtualFile> open(const char *relPath) = 0;
-  virtual bool stat(const char *relPath, int64_t &size) = 0;
+  virtual bool stat(const char *relPath, i64 &size) = 0;
   // List the immediate children of a directory. Returns false if relPath is not
   // a directory (or listing is unsupported). Default: not a directory.
   virtual bool list(const char * /*relPath*/, std::vector<DirEntry> & /*out*/) {
@@ -83,7 +84,7 @@ void mountVirtual(const char *guestPrefix,
 utl::File openRead(const char *guestPath);
 
 // Stat a guest path across host and virtual mounts. Returns false if absent.
-bool stat(const char *guestPath, int64_t &size, bool &isDir);
+bool stat(const char *guestPath, i64 &size, bool &isDir);
 
 // List a directory's immediate children. Returns false if not a directory.
 bool listDir(const char *guestPath, std::vector<DirEntry> &out);
@@ -98,6 +99,6 @@ const std::string &titleId();
 // Small content cache keyed by a short name (SOTTR workaround: the engine's
 // async manifest reader races, so we cache the real manifest contents at mount
 // and let the count-setter fill the header buffer with correct data).
-void cacheFile(const std::string &key, std::vector<uint8_t> data);
-const std::vector<uint8_t> *getCachedFile(const char *key);
+void cacheFile(const std::string &key, std::vector<u8> data);
+const std::vector<u8> *getCachedFile(const char *key);
 } // namespace krnl::vfs

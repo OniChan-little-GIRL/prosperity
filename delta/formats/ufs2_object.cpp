@@ -10,6 +10,7 @@
 // read on demand. Field offsets follow sys/ufs/ffs/fs.h and sys/ufs/ufs/dinode.h.
 
 #include "ufs2_object.h"
+#include "base/arch.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -27,13 +28,13 @@ DELTA_OPTION(bool, kUfsDbg, "DELTA_UFS_DBG", false);
 
 namespace vfs {
 namespace {
-constexpr uint64_t kSblockUfs2 = 65536; // SBLOCK_UFS2
-constexpr uint32_t kUfs2Magic = 0x19540119u;
-constexpr uint32_t kRootIno = 2;   // ROOTINO
-constexpr uint32_t kDinodeSize = 256; // sizeof(struct ufs2_dinode)
+constexpr u64 kSblockUfs2 = 65536; // SBLOCK_UFS2
+constexpr u32 kUfs2Magic = 0x19540119u;
+constexpr u32 kRootIno = 2;   // ROOTINO
+constexpr u32 kDinodeSize = 256; // sizeof(struct ufs2_dinode)
 constexpr int kNumDirect = 12;     // UFS_NDADDR
 constexpr int kNumIndirect = 3;    // UFS_NIADDR
-constexpr uint8_t kDtDir = 4;      // DT_DIR
+constexpr u8 kDtDir = 4;      // DT_DIR
 
 // Superblock field offsets (struct fs).
 constexpr size_t kSbIblkno = 0x10;
@@ -43,7 +44,7 @@ constexpr size_t kSbIpg = 0xb8;
 constexpr size_t kSbFpg = 0xbc;
 constexpr size_t kSbMagic = 0x55c;
 
-template <typename T> T rdle(const uint8_t *p) {
+template <typename T> T rdle(const u8 *p) {
   T v;
   std::memcpy(&v, p, sizeof(T));
   return v;
@@ -56,19 +57,19 @@ bool dbg() {
 
 struct Ufs2Impl {
   utl::File file;
-  uint64_t imageSize = 0;
+  u64 imageSize = 0;
   bool ok = false;
 
-  uint32_t bsize = 0, fsize = 0, iblkno = 0, ipg = 0, fpg = 0;
-  uint32_t nindir = 0; // pointers per indirect block = bsize/8
+  u32 bsize = 0, fsize = 0, iblkno = 0, ipg = 0, fpg = 0;
+  u32 nindir = 0; // pointers per indirect block = bsize/8
 
   std::unordered_map<std::string, Ufs2Filesystem::Node> files;
 
   struct Dinode {
-    uint16_t mode = 0;
-    uint64_t size = 0;
-    int64_t db[kNumDirect]{};
-    int64_t ib[kNumIndirect]{};
+    u16 mode = 0;
+    u64 size = 0;
+    i64 db[kNumDirect]{};
+    i64 ib[kNumIndirect]{};
   };
 
   explicit Ufs2Impl(const base::String &path) : file(path) {
@@ -81,7 +82,7 @@ struct Ufs2Impl {
     ok = true;
   }
 
-  bool readAt(uint64_t off, void *buf, size_t n) {
+  bool readAt(u64 off, void *buf, size_t n) {
     if (off + n > imageSize)
       return false;
     file.Seek(off, utl::seekMode::seek_set);
@@ -89,16 +90,16 @@ struct Ufs2Impl {
   }
 
   bool parseSuperblock() {
-    uint8_t sb[0x600];
+    u8 sb[0x600];
     if (!readAt(kSblockUfs2, sb, sizeof(sb)))
       return false;
-    if (rdle<uint32_t>(sb + kSbMagic) != kUfs2Magic)
+    if (rdle<u32>(sb + kSbMagic) != kUfs2Magic)
       return false;
-    bsize = rdle<uint32_t>(sb + kSbBsize);
-    fsize = rdle<uint32_t>(sb + kSbFsize);
-    iblkno = rdle<uint32_t>(sb + kSbIblkno);
-    ipg = rdle<uint32_t>(sb + kSbIpg);
-    fpg = rdle<uint32_t>(sb + kSbFpg);
+    bsize = rdle<u32>(sb + kSbBsize);
+    fsize = rdle<u32>(sb + kSbFsize);
+    iblkno = rdle<u32>(sb + kSbIblkno);
+    ipg = rdle<u32>(sb + kSbIpg);
+    fpg = rdle<u32>(sb + kSbFpg);
     // Sanity: block/frag sizes are powers of two and the group geometry is set.
     if (bsize == 0 || fsize == 0 || (bsize & (bsize - 1)) ||
         (fsize & (fsize - 1)) || bsize < fsize || ipg == 0 || fpg == 0)
@@ -110,97 +111,97 @@ struct Ufs2Impl {
     return true;
   }
 
-  uint64_t inodeOffset(uint32_t ino) const {
-    uint64_t cg = ino / ipg;
-    uint64_t idx = ino % ipg;
-    uint64_t frag = static_cast<uint64_t>(fpg) * cg + iblkno;
+  u64 inodeOffset(u32 ino) const {
+    u64 cg = ino / ipg;
+    u64 idx = ino % ipg;
+    u64 frag = static_cast<u64>(fpg) * cg + iblkno;
     return frag * fsize + idx * kDinodeSize;
   }
 
-  bool readDinode(uint32_t ino, Dinode &out) {
-    uint8_t d[kDinodeSize];
+  bool readDinode(u32 ino, Dinode &out) {
+    u8 d[kDinodeSize];
     if (!readAt(inodeOffset(ino), d, sizeof(d)))
       return false;
-    out.mode = rdle<uint16_t>(d + 0x00);
-    out.size = rdle<uint64_t>(d + 0x10);
+    out.mode = rdle<u16>(d + 0x00);
+    out.size = rdle<u64>(d + 0x10);
     for (int i = 0; i < kNumDirect; i++)
-      out.db[i] = rdle<int64_t>(d + 0x70 + i * 8);
+      out.db[i] = rdle<i64>(d + 0x70 + i * 8);
     for (int i = 0; i < kNumIndirect; i++)
-      out.ib[i] = rdle<int64_t>(d + 0xd0 + i * 8);
+      out.ib[i] = rdle<i64>(d + 0xd0 + i * 8);
     return true;
   }
 
   // Read one indirect pointer: entry `idx` of the pointer block at frag `ptr`.
-  int64_t indirect(int64_t ptr, uint64_t idx) {
+  i64 indirect(i64 ptr, u64 idx) {
     if (ptr <= 0)
       return 0;
-    int64_t v = 0;
-    if (!readAt(static_cast<uint64_t>(ptr) * fsize + idx * 8, &v, 8))
+    i64 v = 0;
+    if (!readAt(static_cast<u64>(ptr) * fsize + idx * 8, &v, 8))
       return 0;
     return v;
   }
 
   // Logical block number -> frag address of that block (0 == sparse hole).
-  int64_t blockAddr(const Dinode &din, uint64_t lbn) {
+  i64 blockAddr(const Dinode &din, u64 lbn) {
     if (lbn < kNumDirect)
       return din.db[lbn];
     lbn -= kNumDirect;
     if (lbn < nindir)
       return indirect(din.ib[0], lbn);
     lbn -= nindir;
-    if (lbn < static_cast<uint64_t>(nindir) * nindir) {
-      int64_t mid = indirect(din.ib[1], lbn / nindir);
+    if (lbn < static_cast<u64>(nindir) * nindir) {
+      i64 mid = indirect(din.ib[1], lbn / nindir);
       return indirect(mid, lbn % nindir);
     }
-    lbn -= static_cast<uint64_t>(nindir) * nindir;
-    int64_t l1 = indirect(din.ib[2], lbn / (static_cast<uint64_t>(nindir) * nindir));
-    int64_t l2 = indirect(l1, (lbn / nindir) % nindir);
+    lbn -= static_cast<u64>(nindir) * nindir;
+    i64 l1 = indirect(din.ib[2], lbn / (static_cast<u64>(nindir) * nindir));
+    i64 l2 = indirect(l1, (lbn / nindir) % nindir);
     return indirect(l2, lbn % nindir);
   }
 
-  int64_t readInode(const Dinode &din, void *buf, int64_t off, int64_t len) {
+  i64 readInode(const Dinode &din, void *buf, i64 off, i64 len) {
     if (off < 0 || len < 0)
       return -1;
-    uint64_t size = din.size;
-    if (static_cast<uint64_t>(off) >= size)
+    u64 size = din.size;
+    if (static_cast<u64>(off) >= size)
       return 0;
-    uint64_t want = std::min<uint64_t>(len, size - off);
-    auto *dst = static_cast<uint8_t *>(buf);
-    uint64_t done = 0;
+    u64 want = std::min<u64>(len, size - off);
+    auto *dst = static_cast<u8 *>(buf);
+    u64 done = 0;
     while (done < want) {
-      uint64_t pos = off + done;
-      uint64_t lbn = pos / bsize;
-      uint64_t boff = pos % bsize;
-      uint64_t chunk = std::min<uint64_t>(bsize - boff, want - done);
-      int64_t frag = blockAddr(din, lbn);
+      u64 pos = off + done;
+      u64 lbn = pos / bsize;
+      u64 boff = pos % bsize;
+      u64 chunk = std::min<u64>(bsize - boff, want - done);
+      i64 frag = blockAddr(din, lbn);
       if (frag <= 0) {
         std::memset(dst + done, 0, chunk); // hole
-      } else if (!readAt(static_cast<uint64_t>(frag) * fsize + boff, dst + done,
+      } else if (!readAt(static_cast<u64>(frag) * fsize + boff, dst + done,
                          chunk)) {
-        return done > 0 ? static_cast<int64_t>(done) : -1;
+        return done > 0 ? static_cast<i64>(done) : -1;
       }
       done += chunk;
     }
-    return static_cast<int64_t>(done);
+    return static_cast<i64>(done);
   }
 
-  void walk(uint32_t dirIno, const std::string &prefix, int depth) {
+  void walk(u32 dirIno, const std::string &prefix, int depth) {
     if (depth > 64 || files.size() > 200000)
       return;
     Dinode din;
     if (!readDinode(dirIno, din) || din.size == 0 || din.size > (64u << 20))
       return;
-    std::vector<uint8_t> data(static_cast<size_t>(din.size));
+    std::vector<u8> data(static_cast<size_t>(din.size));
     if (readInode(din, data.data(), 0, data.size()) !=
-        static_cast<int64_t>(data.size()))
+        static_cast<i64>(data.size()))
       return;
 
     size_t p = 0;
     while (p + 8 <= data.size()) {
-      uint32_t ino = rdle<uint32_t>(&data[p]);
-      uint16_t reclen = rdle<uint16_t>(&data[p + 4]);
-      uint8_t type = data[p + 6];
-      uint8_t namlen = data[p + 7];
+      u32 ino = rdle<u32>(&data[p]);
+      u16 reclen = rdle<u16>(&data[p + 4]);
+      u8 type = data[p + 6];
+      u8 namlen = data[p + 7];
       if (reclen == 0 || p + reclen > data.size())
         break;
       if (ino != 0 && namlen != 0 && p + 8 + namlen <= data.size()) {
@@ -235,8 +236,8 @@ const Ufs2Filesystem::Node *Ufs2Filesystem::find(const char *relPath) const {
   return it == impl_->files.end() ? nullptr : &it->second;
 }
 
-int64_t Ufs2Filesystem::read(const Node &node, void *buf, int64_t off,
-                             int64_t len) {
+i64 Ufs2Filesystem::read(const Node &node, void *buf, i64 off,
+                             i64 len) {
   if (!impl_)
     return -1;
   Ufs2Impl::Dinode din;

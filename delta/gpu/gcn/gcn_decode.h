@@ -13,16 +13,17 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <memory>
 #include <vector>
 
 namespace gpu::gcn {
 
-enum class IsaMode : uint8_t { kBase, kNeo };
+enum class IsaMode : u8 { kBase, kNeo };
 
 // Instruction encoding families (top-bit dispatch). Determines operand layout
 // and whether a 32-bit literal/inline constant dword follows.
-enum class Enc : uint8_t {
+enum class Enc : u8 {
   kUnknown,
   kSop1,
   kSop2,
@@ -44,7 +45,7 @@ enum class Enc : uint8_t {
   kFlat,   // RDNA flat/global/scratch memory
 };
 
-enum class InstExtension : uint8_t {
+enum class InstExtension : u8 {
   kNone,
   kLiteral,
   kSdwa,
@@ -56,12 +57,12 @@ enum class InstExtension : uint8_t {
 struct Inst {
   IsaMode isa = IsaMode::kBase;
   Enc enc = Enc::kUnknown;
-  uint32_t opcode = 0;   // encoding-relative opcode
-  uint32_t raw[5] = {};  // largest base encoding: RDNA MIMG with NSA=3
-  uint32_t size = 1;     // length in dwords (incl. literal)
-  uint32_t pc = 0;       // dword offset within the program
+  u32 opcode = 0;   // encoding-relative opcode
+  u32 raw[5] = {};  // largest base encoding: RDNA MIMG with NSA=3
+  u32 size = 1;     // length in dwords (incl. literal)
+  u32 pc = 0;       // dword offset within the program
   bool has_literal = false;
-  uint32_t literal = 0;
+  u32 literal = 0;
   InstExtension extension = InstExtension::kNone;
 };
 
@@ -87,13 +88,13 @@ using Program = std::vector<Inst>;
 //                       first; the texmiss count alone will not.
 //   IMM=0 otherwise     OFFSET names an SGPR holding a BYTE offset.
 struct SmrdOffset {
-  uint32_t dwords = 0;    // resolved offset, when it is not in an SGPR
-  uint32_t sgpr = 0;      // SGPR index carrying a byte offset
+  u32 dwords = 0;    // resolved offset, when it is not in an SGPR
+  u32 sgpr = 0;      // SGPR index carrying a byte offset
   bool in_sgpr = false;   // read `sgpr` instead of `dwords`
 };
 
 inline SmrdOffset DecodeSmrdOffset(const Inst& inst) {
-  const uint32_t w = inst.raw[0], field = w & 0xFF;
+  const u32 w = inst.raw[0], field = w & 0xFF;
   SmrdOffset o;
   if ((w >> 8) & 1)
     o.dwords = field;
@@ -115,28 +116,28 @@ inline SmrdOffset DecodeSmrdOffset(const Inst& inst) {
 IsaMode DefaultIsaMode();
 void SetDefaultIsaMode(IsaMode mode);
 
-Program Decode(const uint32_t* code,
-               uint32_t max_dwords,
+Program Decode(const u32* code,
+               u32 max_dwords,
                bool stop_at_endpgm = true,
                IsaMode mode = DefaultIsaMode());
 
 // Recover the real GCN code length (in dwords) from the trailing Gnm
 // ShaderBinaryInfo ("OrbShdr") footer that the Orbis toolchain appends after
 // the bytecode. Returns 0 if no footer is found within `max_dwords`.
-uint32_t CodeLength(const uint32_t* code, uint32_t max_dwords);
+u32 CodeLength(const u32* code, u32 max_dwords);
 
 // Decode a shader bounded by its real code length (from the OrbShdr footer) so
 // an early-out s_endpgm does not truncate the stream. Falls back to the
 // stop-at-first-endpgm scan when no footer is present (e.g. a driver-generated
 // sub-shader), which never over-reads into the footer/padding.
-Program DecodeShader(const uint32_t* code,
-                     uint32_t max_dwords,
+Program DecodeShader(const u32* code,
+                     u32 max_dwords,
                      IsaMode mode = DefaultIsaMode());
 
 // Mark instructions reachable from the entry block. Shader binaries may
 // contain footer padding after an early s_endpgm; decoded dead data must not
 // influence translation or resource planning.
-std::vector<uint8_t> ComputeReachability(const Program& program);
+std::vector<u8> ComputeReachability(const Program& program);
 
 // Shared, cached DecodeShader for per-draw analysis (resource tracking runs on
 // every draw; decoding 4K dwords each time is measurable). The cache key is the
@@ -144,8 +145,8 @@ std::vector<uint8_t> ComputeReachability(const Program& program);
 // shader rewrite is picked up. Returns a shared_ptr so entries stay valid even
 // if the cache evicts. Not thread-safe: callers already serialize on the
 // command-processor lock.
-std::shared_ptr<const Program> CachedProgram(uint64_t addr,
-                                             uint32_t max_dwords);
+std::shared_ptr<const Program> CachedProgram(u64 addr,
+                                             u32 max_dwords);
 
 // Content hash of the shader at `addr`, covering its instructions only: the
 // footer-bounded body, or, for a shader the guest generates at runtime and has
@@ -153,7 +154,7 @@ std::shared_ptr<const Program> CachedProgram(uint64_t addr,
 // the address it happens to sit at, which matters for shaders a title emits
 // into scratch memory per draw. Cached per address per generation, as
 // CachedProgram is.
-uint64_t CachedCodeHash(uint64_t addr, uint32_t max_dwords);
+u64 CachedCodeHash(u64 addr, u32 max_dwords);
 
 // Does this program transfer to a fetch shader (s_swappc_b64)? The fetch
 // pointer convention parks the target in s[0:1], but s[0:1] holds SOMETHING in

@@ -7,6 +7,7 @@
  */
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -19,8 +20,8 @@ int PS4ABI sceMsgDialogClose();
 int PS4ABI sceMsgDialogUpdateStatus();
 int PS4ABI sceMsgDialogGetStatus();
 int PS4ABI sceMsgDialogGetResult(void *result);
-int PS4ABI sceMsgDialogProgressBarSetValue(uint32_t target, uint32_t rate);
-int PS4ABI sceMsgDialogProgressBarInc(uint32_t target, uint32_t delta);
-int PS4ABI sceMsgDialogProgressBarSetMsg(uint32_t target, const char *msg);
+int PS4ABI sceMsgDialogProgressBarSetValue(u32 target, u32 rate);
+int PS4ABI sceMsgDialogProgressBarInc(u32 target, u32 delta);
+int PS4ABI sceMsgDialogProgressBarSetMsg(u32 target, const char *msg);
 
 }  // extern "C"

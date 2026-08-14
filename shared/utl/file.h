@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include "base/arch.h"
 #include <cstdint>
 #include <memory>
 #include <type_traits>
@@ -25,7 +26,7 @@ using native_handle = void *;
 
 enum class fileMode { read, write, append, create, trunc, readWrite };
 
-enum class seekMode : uint32_t {
+enum class seekMode : u32 {
   seek_set,
   seek_cur,
   seek_end,
@@ -37,12 +38,12 @@ public:
 
   virtual void Close(){};
   virtual bool IsOpen() { return true; }
-  virtual uint64_t Read(void *, size_t) = 0;
-  virtual uint64_t Write(const void *, size_t) = 0;
+  virtual u64 Read(void *, size_t) = 0;
+  virtual u64 Write(const void *, size_t) = 0;
   virtual void Flush() {}
-  virtual uint64_t Seek(int64_t, seekMode) = 0;
-  virtual uint64_t Tell() = 0;
-  virtual uint64_t GetSize() = 0;
+  virtual u64 Seek(i64, seekMode) = 0;
+  virtual u64 Tell() = 0;
+  virtual u64 GetSize() = 0;
   virtual native_handle GetNativeHandle() = 0;
 };
 
@@ -68,19 +69,19 @@ public:
 
   inline base::UniquePointer<fileBase> GetBase() { return std::move(file); }
 
-  inline uint64_t Read(void *ptr, size_t size) { return file->Read(ptr, size); }
-  inline uint64_t Write(const void *ptr, size_t size) {
+  inline u64 Read(void *ptr, size_t size) { return file->Read(ptr, size); }
+  inline u64 Write(const void *ptr, size_t size) {
     return file->Write(ptr, size);
   }
   inline void Flush() {
     if (file)
       file->Flush();
   }
-  inline uint64_t Seek(uint64_t ofs, seekMode mods) {
+  inline u64 Seek(u64 ofs, seekMode mods) {
     return file->Seek(ofs, mods);
   }
-  inline uint64_t GetSize() { return file->GetSize(); }
-  inline uint64_t Tell() { return file->Tell(); }
+  inline u64 GetSize() { return file->GetSize(); }
+  inline u64 Tell() { return file->Tell(); }
   inline native_handle GetNativeHandle() { return file->GetNativeHandle(); }
   inline bool IsOpen() { return file->IsOpen(); }
   inline bool Exists() { return static_cast<bool>(file); }
@@ -130,17 +131,17 @@ template <typename T> struct ContainerStream final : fileBase {
   using value_type = typename std::remove_reference_t<T>::value_type;
 
   T obj;
-  uint64_t pos;
+  u64 pos;
 
   ContainerStream(T &&obj) : obj(std::forward<T>(obj)), pos(0) {}
 
   ~ContainerStream() override {}
 
-  uint64_t Read(void *buffer, uint64_t size) override {
-    const uint64_t end = obj.size();
+  u64 Read(void *buffer, u64 size) override {
+    const u64 end = obj.size();
 
     if (pos < end) {
-      if (const uint64_t max = std::min<uint64_t>(size, end - pos)) {
+      if (const u64 max = std::min<u64>(size, end - pos)) {
         std::copy(obj.begin() + pos, obj.begin() + pos + max,
                   static_cast<value_type *>(buffer));
         pos = pos + max;
@@ -151,8 +152,8 @@ template <typename T> struct ContainerStream final : fileBase {
     return 0;
   }
 
-  uint64_t Write(const void *buffer, uint64_t size) override {
-    const uint64_t old_size = obj.size();
+  u64 Write(const void *buffer, u64 size) override {
+    const u64 old_size = obj.size();
     (void)old_size;
 
     if (pos > obj.size()) {
@@ -161,7 +162,7 @@ template <typename T> struct ContainerStream final : fileBase {
 
     const auto src = static_cast<const value_type *>(buffer);
 
-    const uint64_t overlap = std::min<uint64_t>(obj.size() - pos, size);
+    const u64 overlap = std::min<u64>(obj.size() - pos, size);
     std::copy(src, src + overlap, obj.begin() + pos);
 
     obj.insert(obj.end(), src + overlap, src + size);
@@ -170,8 +171,8 @@ template <typename T> struct ContainerStream final : fileBase {
     return size;
   }
 
-  uint64_t Seek(int64_t offset, seekMode whence) override {
-    const int64_t new_pos =
+  u64 Seek(i64 offset, seekMode whence) override {
+    const i64 new_pos =
         whence == seekMode::seek_set
             ? offset
             : whence == seekMode::seek_cur
@@ -186,11 +187,11 @@ template <typename T> struct ContainerStream final : fileBase {
     return pos;
   }
 
-  uint64_t GetSize() override { return obj.size(); }
+  u64 GetSize() override { return obj.size(); }
 
   native_handle GetNativeHandle() override { return nullptr; }
 
-  uint64_t Tell() override { return pos; }
+  u64 Tell() override { return pos; }
 };
 
 template <typename T> File make_stream(T &&container = T{}) {

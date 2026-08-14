@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_device.h"
+#include "base/arch.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -65,8 +66,8 @@ std::string PipelineCachePath() {
   return path;
 }
 
-std::vector<uint8_t> ReadPipelineCacheBlob() {
-  std::vector<uint8_t> out;
+std::vector<u8> ReadPipelineCacheBlob() {
+  std::vector<u8> out;
   const std::string p = PipelineCachePath();
   if (p.empty())
     return out;
@@ -99,7 +100,7 @@ void SavePipelineCache(bool force) {
   // Only write when the driver has actually added something.
   if (!force && size == last_size)
     return;
-  std::vector<uint8_t> blob(size);
+  std::vector<u8> blob(size);
   if (vkGetPipelineCacheData(g_dev.device, g_dev.pipeline_cache, &size,
                              blob.data()) != VK_SUCCESS)
     return;
@@ -179,10 +180,10 @@ void ReportDeviceFault(DeviceState& device) {
               (unsigned long long)v.vendorFaultData);
 }
 
-uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags props) {
+u32 FindMemoryType(u32 type_bits, VkMemoryPropertyFlags props) {
   VkPhysicalDeviceMemoryProperties mp;
   vkGetPhysicalDeviceMemoryProperties(g_dev.phys, &mp);
-  for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+  for (u32 i = 0; i < mp.memoryTypeCount; i++)
     if ((type_bits & (1u << i)) &&
         (mp.memoryTypes[i].propertyFlags & props) == props)
       return i;
@@ -195,12 +196,12 @@ uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags props) {
 // (write-combined, uncached) staging memory byte-by-byte is ~30x slower and was
 // dominating frame time. CACHED+COHERENT (present on desktop GPUs) needs no
 // manual invalidate.
-uint32_t FindMemoryTypePref(uint32_t type_bits,
+u32 FindMemoryTypePref(u32 type_bits,
                             VkMemoryPropertyFlags pref,
                             VkMemoryPropertyFlags req) {
   VkPhysicalDeviceMemoryProperties mp;
   vkGetPhysicalDeviceMemoryProperties(g_dev.phys, &mp);
-  for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+  for (u32 i = 0; i < mp.memoryTypeCount; i++)
     if ((type_bits & (1u << i)) &&
         (mp.memoryTypes[i].propertyFlags & pref) == pref)
       return i;
@@ -231,8 +232,8 @@ void ImageBarrier(VkCommandBuffer c,
                   VkImageLayout to,
                   VkAccessFlags src_a,
                   VkAccessFlags dst_a,
-                  uint32_t layers,
-                  uint32_t mip_levels) {
+                  u32 layers,
+                  u32 mip_levels) {
   VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
   b.oldLayout = from;
   b.newLayout = to;
@@ -302,7 +303,7 @@ bool CreateDevice() {
   // but formatting labels for nobody costs real frame time.
   bool debug_utils = false;
   if (WantDebugUtils() || trace::WantValidation()) {
-    uint32_t ext_n = 0;
+    u32 ext_n = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &ext_n, nullptr);
     std::vector<VkExtensionProperties> exts(ext_n);
     vkEnumerateInstanceExtensionProperties(nullptr, &ext_n, exts.data());
@@ -321,7 +322,7 @@ bool CreateDevice() {
   // when the layer path is on the environment.
   const char* validation_layer = trace::ValidationLayerName();
   if (trace::WantValidation()) {
-    uint32_t layer_n = 0;
+    u32 layer_n = 0;
     vkEnumerateInstanceLayerProperties(&layer_n, nullptr);
     std::vector<VkLayerProperties> layers(layer_n);
     vkEnumerateInstanceLayerProperties(&layer_n, layers.data());
@@ -350,7 +351,7 @@ bool CreateDevice() {
   InitDebugUtils(g_dev.instance, debug_utils);
   trace::InstallValidationMessenger(g_dev.instance);
 
-  uint32_t n = 0;
+  u32 n = 0;
   vkEnumeratePhysicalDevices(g_dev.instance, &n, nullptr);
   if (!n) {
     BASE_LOGI("gpuvk", "no device");
@@ -367,7 +368,7 @@ bool CreateDevice() {
   int best = -1;
   g_dev.phys = VK_NULL_HANDLE;
   for (VkPhysicalDevice d : devs) {
-    uint32_t dqn = 0;
+    u32 dqn = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(d, &dqn, nullptr);
     std::vector<VkQueueFamilyProperties> dq(dqn);
     vkGetPhysicalDeviceQueueFamilyProperties(d, &dqn, dq.data());
@@ -411,12 +412,12 @@ bool CreateDevice() {
     return false;
   }
 
-  uint32_t qn = 0;
+  u32 qn = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(g_dev.phys, &qn, nullptr);
   std::vector<VkQueueFamilyProperties> qprops(qn);
   vkGetPhysicalDeviceQueueFamilyProperties(g_dev.phys, &qn, qprops.data());
   bool found = false;
-  for (uint32_t i = 0; i < qn; i++)
+  for (u32 i = 0; i < qn; i++)
     if (qprops[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
       g_dev.qfam = i;
       found = true;
@@ -461,9 +462,9 @@ bool CreateDevice() {
   // a pixel shader needs for v_interp_mov_f32's P10/P20 parameters (the deltas
   // P1-P0 and P2-P0), which an interpolated input cannot express.
   const char* dev_exts[3] = {};
-  uint32_t dev_ext_count = 0;
+  u32 dev_ext_count = 0;
   {
-    uint32_t en = 0;
+    u32 en = 0;
     vkEnumerateDeviceExtensionProperties(g_dev.phys, nullptr, &en, nullptr);
     std::vector<VkExtensionProperties> eprops(en);
     vkEnumerateDeviceExtensionProperties(g_dev.phys, nullptr, &en,
@@ -553,7 +554,7 @@ bool CreateDevice() {
   // recompiles every pipeline from scratch, which on SotC is several hundred.
   // A blob from another driver/device is rejected by the driver itself (it
   // checks its own header), so a stale file costs nothing but the read.
-  std::vector<uint8_t> cache_blob = ReadPipelineCacheBlob();
+  std::vector<u8> cache_blob = ReadPipelineCacheBlob();
   VkPipelineCacheCreateInfo pipeline_cache_info{
       VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
   pipeline_cache_info.initialDataSize = cache_blob.size();
@@ -601,7 +602,7 @@ bool CreateDevice() {
   return true;
 }
 
-VkShaderModule MakeModule(const uint32_t* spv, size_t bytes) {
+VkShaderModule MakeModule(const u32* spv, size_t bytes) {
   VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   ci.codeSize = bytes;
   ci.pCode = spv;
@@ -610,7 +611,7 @@ VkShaderModule MakeModule(const uint32_t* spv, size_t bytes) {
   return m;
 }
 
-VkShaderModule MakeModuleVec(const std::vector<uint32_t>& spv) {
+VkShaderModule MakeModuleVec(const std::vector<u32>& spv) {
   return MakeModule(spv.data(), spv.size() * 4);
 }
 

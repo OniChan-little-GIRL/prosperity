@@ -13,6 +13,7 @@
  */
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -22,16 +23,16 @@ namespace {
 // debug-label helper bail before the alloca.
 constexpr int kAgcUnsupported = 0x8a6c0044;
 
-// f(uint32_t *out): caller reads *out unconditionally and ignores the return.
-int PS4ABI agcDriverQueryU32(uint32_t *out) {
+// f(u32 *out): caller reads *out unconditionally and ignores the return.
+int PS4ABI agcDriverQueryU32(u32 *out) {
   if (out)
     *out = 0;
   return 0;
 }
 
-// f(uint32_t *sizeOut): on success the caller allocas *sizeOut. We have no size to
+// f(u32 *sizeOut): on success the caller allocas *sizeOut. We have no size to
 // report, so fail instead -- the caller then returns -1 without touching the stack.
-int PS4ABI agcDriverQuerySize(uint32_t *sizeOut) {
+int PS4ABI agcDriverQuerySize(u32 *sizeOut) {
   if (sizeOut)
     *sizeOut = 0;
   return kAgcUnsupported;

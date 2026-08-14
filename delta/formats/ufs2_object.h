@@ -9,6 +9,7 @@
  */
 
 #include <cstdint>
+#include "base/arch.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,8 +30,8 @@ class Ufs2Filesystem {
 public:
   // A regular file inside the image, identified by its UFS2 inode number.
   struct Node {
-    uint64_t size = 0;
-    uint32_t inode = 0;
+    u64 size = 0;
+    u32 inode = 0;
   };
 
   explicit Ufs2Filesystem(const base::String &imagePath);
@@ -48,7 +49,7 @@ public:
   // Read up to len bytes of a file starting at byte offset off. Returns the
   // number of bytes read (clamped to the file size, 0 past the end), or -1 on
   // error. Sparse holes read back as zeros.
-  int64_t read(const Node &node, void *buf, int64_t off, int64_t len);
+  i64 read(const Node &node, void *buf, i64 off, i64 len);
 
   // Collect every regular-file path in the image (leading '/'), for tooling.
   void paths(std::vector<std::string> &out) const;

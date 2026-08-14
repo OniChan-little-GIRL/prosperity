@@ -4,6 +4,7 @@
 // This file was generated on 10/12/2019
 
 #include "../../vprx.h"
+#include "base/arch.h"
 
 #include <chrono>
 #include <cstdint>
@@ -24,10 +25,10 @@ namespace {
 DELTA_OPTION(const char *, kMemWatch, "DELTA_MEMWATCH", nullptr);
 DELTA_OPTION(const char *, kMemPoke, "DELTA_MEMPOKE", nullptr);
 DELTA_OPTION(const char *, kPadScript, "DELTA_PAD_SCRIPT", nullptr);
-DELTA_OPTION(uint64_t, kAutoskipStop, "DELTA_PAD_AUTOSKIP_STOP", 0);
-DELTA_OPTION(uint64_t, kAutoskipStart, "DELTA_PAD_AUTOSKIP_START", 0);
+DELTA_OPTION(u64, kAutoskipStop, "DELTA_PAD_AUTOSKIP_STOP", 0);
+DELTA_OPTION(u64, kAutoskipStart, "DELTA_PAD_AUTOSKIP_START", 0);
 DELTA_OPTION(bool, kPadKeyboard, "DELTA_PAD_KEYBOARD", true);
-DELTA_OPTION(uint64_t, kExploreReads, "DELTA_PAD_EXPLORE_READS", 130);
+DELTA_OPTION(u64, kExploreReads, "DELTA_PAD_EXPLORE_READS", 130);
 DELTA_OPTION(int, kExploreDir, "DELTA_PAD_EXPLORE_DIR", 0);
 DELTA_OPTION(bool, kPadAutoskip, "DELTA_PAD_AUTOSKIP", false);
 DELTA_OPTION(bool, kPadAutoskipDoom, "DELTA_PAD_AUTOSKIP_DOOM", false);
@@ -46,7 +47,7 @@ DELTA_OPTION(bool, kPadTrace, "DELTA_PAD_TRACE", false);
 namespace {
 
 // Orbis button bitmasks (ScePadButtonDataOffset).
-enum : uint32_t {
+enum : u32 {
   kL3 = 0x0002, kR3 = 0x0004, kOptions = 0x0008,
   kUp = 0x0010, kRight = 0x0020, kDown = 0x0040, kLeft = 0x0080,
   kL2 = 0x0100, kR2 = 0x0200, kL1 = 0x0400, kR1 = 0x0800,
@@ -54,53 +55,53 @@ enum : uint32_t {
   kTouchPad = 0x100000,
 };
 
-struct AnalogStick { uint8_t x, y; };
-struct AnalogButtons { uint8_t l2, r2; };
+struct AnalogStick { u8 x, y; };
+struct AnalogButtons { u8 l2, r2; };
 struct FQuaternion { float x, y, z, w; };
 struct FVector3 { float x, y, z; };
-struct PadTouch { uint16_t x, y; uint8_t id; uint8_t reserve[3]; };
+struct PadTouch { u16 x, y; u8 id; u8 reserve[3]; };
 struct PadTouchData {
-  uint8_t touchNum; uint8_t reserve[3]; uint32_t reserve1; PadTouch touch[2];
+  u8 touchNum; u8 reserve[3]; u32 reserve1; PadTouch touch[2];
 };
-struct PadExtUnitData { uint32_t id; uint8_t reserve; uint8_t dataLen; uint8_t data[10]; };
+struct PadExtUnitData { u32 id; u8 reserve; u8 dataLen; u8 data[10]; };
 
 // ScePadData: offsets verified against the orbis layout (connected@0x4C,
 // timestamp@0x50). Written into the game's buffer on read.
 struct PadData {
-  uint32_t buttons;             // 0x00
+  u32 buttons;             // 0x00
   AnalogStick leftStick;        // 0x04
   AnalogStick rightStick;       // 0x06
   AnalogButtons analogButtons;  // 0x08
-  uint8_t pad0[2];              // 0x0A
+  u8 pad0[2];              // 0x0A
   FQuaternion orientation;      // 0x0C
   FVector3 acceleration;        // 0x1C
   FVector3 angularVelocity;     // 0x28
   PadTouchData touchData;       // 0x34
   bool connected;               // 0x4C
-  uint8_t pad1[3];
-  uint64_t timestamp;           // 0x50
+  u8 pad1[3];
+  u64 timestamp;           // 0x50
   PadExtUnitData extUnit;       // 0x58
-  uint8_t connectedCount;       // 0x68
-  uint8_t reserve[2];
-  uint8_t deviceUniqueDataLen;  // 0x6B
-  uint8_t deviceUniqueData[12]; // 0x6C
+  u8 connectedCount;       // 0x68
+  u8 reserve[2];
+  u8 deviceUniqueDataLen;  // 0x6B
+  u8 deviceUniqueData[12]; // 0x6C
 };
 static_assert(sizeof(PadData) >= 0x78, "PadData layout");
 
 struct PadControllerInformation {
   float touchpadDensity;        // 0x00
-  uint16_t touchResolutionX;    // 0x04
-  uint16_t touchResolutionY;    // 0x06
-  uint8_t stickDeadZoneLeft;    // 0x08
-  uint8_t stickDeadZoneRight;   // 0x09
-  uint8_t connectionType;       // 0x0A
-  uint8_t connectedCount;       // 0x0B
+  u16 touchResolutionX;    // 0x04
+  u16 touchResolutionY;    // 0x06
+  u8 stickDeadZoneLeft;    // 0x08
+  u8 stickDeadZoneRight;   // 0x09
+  u8 connectionType;       // 0x0A
+  u8 connectedCount;       // 0x0B
   bool connected;               // 0x0C
-  uint8_t deviceClass;          // 0x0D (ORBIS_PAD_DEVICE_CLASS_STANDARD = 0)
-  uint8_t reserve[8];
+  u8 deviceClass;          // 0x0D (ORBIS_PAD_DEVICE_CLASS_STANDARD = 0)
+  u8 reserve[8];
 };
 
-uint64_t g_readSeq = 0;
+u64 g_readSeq = 0;
 
 // DELTA_MEMWATCH=addr[,addr...]: spawn a background thread that prints the qword
 // at each guest VA every ~250ms with a wall-clock delta, so the lifecycle of a
@@ -111,11 +112,11 @@ uint64_t g_readSeq = 0;
 void startMemWatch() {
   const char *e = kMemWatch;
   if (!e) return;
-  std::vector<uint64_t> addrs;
+  std::vector<u64> addrs;
   for (const char *p = e; *p;) {
     while (*p == ',' || *p == ' ') p++;
     char *end = nullptr;
-    uint64_t v = std::strtoull(p, &end, 0);
+    u64 v = std::strtoull(p, &end, 0);
     if (end == p) break;
     if (v >= 0x1000) addrs.push_back(v);
     p = end;
@@ -123,13 +124,13 @@ void startMemWatch() {
   if (addrs.empty()) return;
   std::thread([addrs] {
     const auto t0 = std::chrono::steady_clock::now();
-    std::vector<uint64_t> last(addrs.size(), 0xdeadbeefdeadbeefull);
+    std::vector<u64> last(addrs.size(), 0xdeadbeefdeadbeefull);
     for (;;) {
       double t = std::chrono::duration<double>(
                      std::chrono::steady_clock::now() - t0).count();
       bool any = false;
       for (size_t i = 0; i < addrs.size(); i++) {
-        uint64_t cur = *reinterpret_cast<volatile uint64_t *>(addrs[i]);
+        u64 cur = *reinterpret_cast<volatile u64 *>(addrs[i]);
         if (cur != last[i]) {
           BASE_LOGI("memwatch", "t={:.2f}  *{:#x}: {:016x} -> {:016x}", t,
                     (unsigned long long)addrs[i], (unsigned long long)last[i],
@@ -159,11 +160,11 @@ void startMemWatch() {
 // Guest memory is identity-mapped, so a resolved VA is written as a host pointer.
 struct PokeSpec {
   bool indirect = false;
-  uint64_t ptrAddr = 0;   // for indirect: address holding the object pointer
-  uint64_t off = 0;       // offset added to literal addr or to *ptrAddr
+  u64 ptrAddr = 0;   // for indirect: address holding the object pointer
+  u64 off = 0;       // offset added to literal addr or to *ptrAddr
   int width = 8;
-  uint64_t value = 0;
-  uint64_t delayMs = 0;
+  u64 value = 0;
+  u64 delayMs = 0;
 };
 
 void startMemPoke() {
@@ -212,9 +213,9 @@ void startMemPoke() {
       for (size_t k = 0; k < specs.size(); k++) {
         const auto &p = specs[k];
         if (ms < (double)p.delayMs) continue;
-        uint64_t target;
+        u64 target;
         if (p.indirect) {
-          uint64_t obj = *reinterpret_cast<volatile uint64_t *>(p.ptrAddr);
+          u64 obj = *reinterpret_cast<volatile u64 *>(p.ptrAddr);
           if (obj < 0x1000) continue;  // singleton not constructed yet
           target = obj + p.off;
         } else {
@@ -222,10 +223,10 @@ void startMemPoke() {
         }
         if (target < 0x1000) continue;
         switch (p.width) {
-        case 1: *reinterpret_cast<volatile uint8_t *>(target)  = (uint8_t)p.value; break;
-        case 2: *reinterpret_cast<volatile uint16_t *>(target) = (uint16_t)p.value; break;
-        case 4: *reinterpret_cast<volatile uint32_t *>(target) = (uint32_t)p.value; break;
-        case 8: *reinterpret_cast<volatile uint64_t *>(target) = p.value; break;
+        case 1: *reinterpret_cast<volatile u8 *>(target)  = (u8)p.value; break;
+        case 2: *reinterpret_cast<volatile u16 *>(target) = (u16)p.value; break;
+        case 4: *reinterpret_cast<volatile u32 *>(target) = (u32)p.value; break;
+        case 8: *reinterpret_cast<volatile u64 *>(target) = p.value; break;
         }
         if (!announced[k]) {
           announced[k] = true;
@@ -252,14 +253,14 @@ void startMemPoke() {
 // whose default entry is the one we want; a scripted run drives an arbitrary
 // path (e.g. title -> Play -> world list -> load) for headless verification.
 // Names are the button constants below plus "none" for a gap.
-uint32_t scriptButtons(bool &active) {
-  struct Step { uint32_t mask; uint64_t reads; };
+u32 scriptButtons(bool &active) {
+  struct Step { u32 mask; u64 reads; };
   static const std::vector<Step> steps = [] {
     std::vector<Step> out;
     const char *e = kPadScript;
     if (!e)
       return out;
-    static const struct { const char *name; uint32_t mask; } kNames[] = {
+    static const struct { const char *name; u32 mask; } kNames[] = {
         {"none", 0},        {"cross", kCross},   {"circle", kCircle},
         {"square", kSquare}, {"triangle", kTriangle}, {"up", kUp},
         {"down", kDown},    {"left", kLeft},     {"right", kRight},
@@ -272,7 +273,7 @@ uint32_t scriptButtons(bool &active) {
       spec = comma == std::string::npos ? std::string() : spec.substr(comma + 1);
       const size_t colon = tok.find(':');
       const std::string name = tok.substr(0, colon);
-      const uint64_t reads =
+      const u64 reads =
           colon == std::string::npos ? 30 : std::strtoull(tok.c_str() + colon + 1, nullptr, 10);
       for (const auto &n : kNames)
         if (name == n.name) {
@@ -287,7 +288,7 @@ uint32_t scriptButtons(bool &active) {
   active = !steps.empty();
   if (!active)
     return 0;
-  uint64_t at = g_readSeq;
+  u64 at = g_readSeq;
   for (size_t i = 0; i < steps.size(); i++) {
     if (at < steps[i].reads) {
       static size_t last = ~size_t(0);
@@ -303,10 +304,10 @@ uint32_t scriptButtons(bool &active) {
   return 0;  // sequence done: hold neutral
 }
 
-uint32_t autoSkipButtons() {
+u32 autoSkipButtons() {
   {
     bool scripted = false;
-    const uint32_t m = scriptButtons(scripted);
+    const u32 m = scriptButtons(scripted);
     if (scripted)
       return m;
   }
@@ -351,19 +352,19 @@ uint32_t autoSkipButtons() {
   // whose menu we cannot see. The [pad] log prints the current button so a draw-
   // count jump (level load) can be correlated to the button that caused it.
   if (kPadAutoskipSweep) {
-    static const uint32_t btns[] = {kCross, kOptions, kCircle, kTriangle, kSquare,
+    static const u32 btns[] = {kCross, kOptions, kCircle, kTriangle, kSquare,
                                     kDown, kUp, kLeft, kRight, kL1, kR1, kTouchPad};
     static const char *names[] = {"Cross", "Options", "Circle", "Triangle", "Square",
                                    "Down", "Up", "Left", "Right", "L1", "R1", "TouchPad"};
-    uint32_t n = sizeof(btns) / sizeof(btns[0]);
-    uint32_t slot = (uint32_t)((g_readSeq / 60) % n);
-    static uint32_t lastSlot = 0xffffffff;
+    u32 n = sizeof(btns) / sizeof(btns[0]);
+    u32 slot = (u32)((g_readSeq / 60) % n);
+    static u32 lastSlot = 0xffffffff;
     if (slot != lastSlot) {
       lastSlot = slot;
       BASE_LOGI("sweep", "readSeq={} now pressing {}", (unsigned long long)g_readSeq,
                 names[slot]);
     }
-    uint32_t ph = g_readSeq % 60;
+    u32 ph = g_readSeq % 60;
     return (ph < 30) ? btns[slot] : 0;  // hold ~30 reads, release ~30
   }
   // DELTA_PAD_AUTOSKIP_DOOM: Doom64's title/menu flow. Press Options ("START")
@@ -372,11 +373,11 @@ uint32_t autoSkipButtons() {
   // out, looping at the title) and never Down (the cursor defaults to "New
   // Game"). Drives title -> New Game -> skill -> level load.
   if (kPadAutoskipDoom) {
-    uint32_t ph = g_readSeq % 30;
+    u32 ph = g_readSeq % 30;
     if (g_readSeq < 240) return (ph < 8) ? kOptions : 0;  // leave the title
     return (ph < 8) ? kCross : 0;                          // confirm down the menu
   }
-  uint32_t phase = g_readSeq % 24;
+  u32 phase = g_readSeq % 24;
   if (kPadAutoskipNav) {
     if (phase < 3) return kOptions;            // pass the "press start" title
     if (phase >= 6 && phase < 8) return kDown;  // move cursor down
@@ -400,7 +401,7 @@ static const bool g_keyboard = true;
 #endif
 
 // Symbolic name <-> Orbis bitmask table, shared by the script parser and tracer.
-struct BtnName { uint32_t mask; const char *name; };
+struct BtnName { u32 mask; const char *name; };
 constexpr BtnName kBtnNames[] = {
     {kCross, "cross"},    {kCircle, "circle"}, {kSquare, "square"},
     {kTriangle, "triangle"}, {kOptions, "options"}, {kUp, "up"},
@@ -431,7 +432,7 @@ const AxisName *axisByName(const std::string &name) {
   return nullptr;
 }
 
-uint32_t buttonMask(const std::string &name) {
+u32 buttonMask(const std::string &name) {
   for (const auto &b : kBtnNames)
     if (name == b.name) return b.mask;
   if (axisByName(name)) return 0;  // an axis, reported by the caller instead
@@ -439,7 +440,7 @@ uint32_t buttonMask(const std::string &name) {
   return 0;
 }
 
-std::string buttonNames(uint32_t buttons) {
+std::string buttonNames(u32 buttons) {
   std::string out;
   for (const auto &b : kBtnNames)
     if (buttons & b.mask) { if (!out.empty()) out += '+'; out += b.name; }
@@ -460,7 +461,7 @@ std::string buttonNames(uint32_t buttons) {
 // each.
 struct ScriptStep {
   double start, end;
-  uint32_t buttons;
+  u32 buttons;
   int lx, ly, rx, ry;  // -1: leave alone
 };
 
@@ -494,7 +495,7 @@ std::vector<ScriptStep> parseScript(const char *s) {
     std::string btns =
         e.substr(c1 + 1, c2 == std::string::npos ? c2 : c2 - c1 - 1);
     double holdMs = c2 == std::string::npos ? 150.0 : std::atof(e.c_str() + c2 + 1);
-    uint32_t mask = 0;
+    u32 mask = 0;
     int lx = -1, ly = -1, rx = -1, ry = -1;
     size_t j = 0;
     while (j < btns.size()) {
@@ -531,8 +532,8 @@ void fillPadState(PadData *d) {
   if (!d) return;
   startPadExperiments();
   std::memset(d, 0, sizeof(*d));
-  uint32_t buttons = 0;
-  uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
+  u32 buttons = 0;
+  u8 lx = 128, ly = 128, rx = 128, ry = 128;
   gfx::PadKeys k;
   if (kPadAutoskip) {
     buttons = autoSkipButtons();
@@ -556,14 +557,14 @@ void fillPadState(PadData *d) {
   // Explore mode (DELTA_PAD_EXPLORE): once in gameplay, walk Isaac toward doors so a
   // headless run visits multiple rooms (to verify rendering beyond the start room).
   // Cycles direction every ~150 reads (up, right, down, left) on the left stick.
-  static uint64_t g_firstGameplaySeq = 0;
+  static u64 g_firstGameplaySeq = 0;
   if (kPadExplore && kPadAutoskip && gfx::inGameplay()) {
     if (!g_firstGameplaySeq) g_firstGameplaySeq = g_readSeq;
-    uint64_t since = g_readSeq - g_firstGameplaySeq;
+    u64 since = g_readSeq - g_firstGameplaySeq;
     // Walk up into the adjacent room and stop near its centre (a short burst), then
     // settle (hold neutral) so a clean, non-transition frame of a non-start room can
     // be captured. Tunable via DELTA_PAD_EXPLORE_READS.
-    const uint64_t walk = kExploreReads;
+    const u64 walk = kExploreReads;
     // Default walk right (the start room's exits are the side doors; up is the
     // hatch/wall). DELTA_PAD_EXPLORE_DIR: 0=right 1=left 2=up 3=down.
     const int dir = kExploreDir;
@@ -573,8 +574,8 @@ void fillPadState(PadData *d) {
       // Longer bursts (default 200 reads/dir) so Isaac actually crosses the room
       // and transits a door, not just jitter in place. Tunable via the same
       // DELTA_PAD_EXPLORE_READS knob.
-      uint64_t burst = walk ? walk : 200ull;
-      uint64_t ph = (since / burst) % 4;  // right, down, left, up
+      u64 burst = walk ? walk : 200ull;
+      u64 ph = (since / burst) % 4;  // right, down, left, up
       if (ph==0) lx=255; else if (ph==1) ly=255; else if (ph==2) lx=0; else ly=0;
     } else if (since < walk) {
       if (dir==0) lx=255; else if (dir==1) lx=0; else if (dir==2) ly=0; else ly=255;
@@ -591,18 +592,18 @@ void fillPadState(PadData *d) {
         buttons |= st.buttons;
         // A named axis REPLACES the neutral the read path filled in; OR-ing
         // would be meaningless on a 0..255 deflection where 128 is centre.
-        if (st.lx >= 0) lx = static_cast<uint8_t>(st.lx);
-        if (st.ly >= 0) ly = static_cast<uint8_t>(st.ly);
-        if (st.rx >= 0) rx = static_cast<uint8_t>(st.rx);
-        if (st.ry >= 0) ry = static_cast<uint8_t>(st.ry);
+        if (st.lx >= 0) lx = static_cast<u8>(st.lx);
+        if (st.ly >= 0) ly = static_cast<u8>(st.ly);
+        if (st.rx >= 0) rx = static_cast<u8>(st.rx);
+        if (st.ry >= 0) ry = static_cast<u8>(st.ry);
       }
   }
 
   if (kPadTrace) {
-    static uint32_t lastTraced = 0;
-    static uint32_t lastSticks = ~0u;
-    const uint32_t sticks = uint32_t(lx) | uint32_t(ly) << 8 |
-                            uint32_t(rx) << 16 | uint32_t(ry) << 24;
+    static u32 lastTraced = 0;
+    static u32 lastSticks = ~0u;
+    const u32 sticks = u32(lx) | u32(ly) << 8 |
+                            u32(rx) << 16 | u32(ry) << 24;
     static bool first = true;
     if (first || buttons != lastTraced || sticks != lastSticks) {
       first = false;
@@ -617,8 +618,8 @@ void fillPadState(PadData *d) {
   d->buttons = buttons;
   d->leftStick = {lx, ly};
   d->rightStick = {rx, ry};
-  d->analogButtons = {static_cast<uint8_t>((buttons & kL2) ? 255 : 0),
-                      static_cast<uint8_t>((buttons & kR2) ? 255 : 0)};
+  d->analogButtons = {static_cast<u8>((buttons & kL2) ? 255 : 0),
+                      static_cast<u8>((buttons & kR2) ? 255 : 0)};
   d->orientation = {0, 0, 0, 1};
   d->connected = true;
   d->connectedCount = 1;
@@ -825,7 +826,7 @@ int scePadSetTiltCorrectionState() {
 // ScePadVibrationParam: two 0..255 motor intensities (large = low-freq, small =
 // high-freq). Drive the active controller's haptics; logging is omitted because
 // games call this every frame and the spam dominated the trace.
-struct ScePadVibrationParam { uint8_t largeMotor; uint8_t smallMotor; };
+struct ScePadVibrationParam { u8 largeMotor; u8 smallMotor; };
 int scePadSetVibration(int /*handle*/, const ScePadVibrationParam *param) {
   if (param)
     gfx::setRumble(param->largeMotor, param->smallMotor);

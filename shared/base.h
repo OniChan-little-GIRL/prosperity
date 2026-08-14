@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "base/arch.h"
+
 /*fool intellisense*/
 #if defined(__clang__) || defined(__GNUC__)
 

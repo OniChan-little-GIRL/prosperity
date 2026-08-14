@@ -9,6 +9,7 @@
  */
 
 #include <vector>
+#include "base/arch.h"
 
 #include "kern/vfs.h"
 #include "device.h"
@@ -21,9 +22,9 @@ class dirDevice : public device {
 public:
   dirDevice(proc *p, std::vector<vfs::DirEntry> &&entries);
 
-  int64_t getdents(void *buf, size_t len) override;
+  i64 getdents(void *buf, size_t len) override;
   int fstat(void *stat) override;
-  int64_t read(void *, size_t) override;
+  i64 read(void *, size_t) override;
 
 private:
   std::vector<vfs::DirEntry> entries_;

@@ -8,6 +8,7 @@
 // to BGRA8. Pure tables: no device state, no caches.
 
 #include <vulkan/vulkan.h>
+#include "base/arch.h"
 
 #include <cstdint>
 
@@ -17,29 +18,29 @@ namespace gpu::vk {
 // CB_COLORn_INFO encoding we do not map.
 constexpr VkFormat kDefaultRtFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-VkFormat GuestTextureFormat(uint32_t dfmt, uint32_t nfmt);
-bool GuestFormatBlockCompressed(uint32_t dfmt);
-uint32_t GuestFormatElemBytes(uint32_t dfmt);
-VkFormat ColorTargetFormat(uint32_t info);
+VkFormat GuestTextureFormat(u32 dfmt, u32 nfmt);
+bool GuestFormatBlockCompressed(u32 dfmt);
+u32 GuestFormatElemBytes(u32 dfmt);
+VkFormat ColorTargetFormat(u32 info);
 
 // A colour target whose texels are integers. The fragment shader must declare
 // an integer output for one, blending is not allowed on one, and a sampler
 // reading one may not filter -- three rules that all key off this.
 bool IsIntegerColorFormat(VkFormat format);
-VkClearColorValue ColorTargetClearValue(uint32_t info,
-                                        uint32_t word0,
-                                        uint32_t word1);
-VkComponentMapping TextureComponents(uint32_t swizzle);
-uint32_t FormatBytes(VkFormat fmt);
+VkClearColorValue ColorTargetClearValue(u32 info,
+                                        u32 word0,
+                                        u32 word1);
+VkComponentMapping TextureComponents(u32 swizzle);
+u32 FormatBytes(VkFormat fmt);
 
-VkBlendFactor BlendFactor(uint32_t f);
-VkBlendOp BlendOp(uint32_t f);
-VkPipelineColorBlendAttachmentState BlendAttachment(uint32_t bc, bool en);
+VkBlendFactor BlendFactor(u32 f);
+VkBlendOp BlendOp(u32 f);
+VkPipelineColorBlendAttachmentState BlendAttachment(u32 bc, bool en);
 
-VkFormat VertexFormat(uint32_t dfmt, uint32_t nfmt);
-uint32_t VertexFormatBytes(uint32_t dfmt);
-VkPrimitiveTopology PrimitiveTopology(uint32_t prim);
+VkFormat VertexFormat(u32 dfmt, u32 nfmt);
+u32 VertexFormatBytes(u32 dfmt);
+VkPrimitiveTopology PrimitiveTopology(u32 prim);
 
-void ReadbackPixelBgra(const uint8_t* src, VkFormat fmt, uint8_t* dst);
+void ReadbackPixelBgra(const u8* src, VkFormat fmt, u8* dst);
 
 }  // namespace gpu::vk

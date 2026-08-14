@@ -8,6 +8,7 @@
  */
 
 #include "vprx.h"
+#include "base/arch.h"
 #include <crypto/sha1.h>
 #include <base/containers/vector.h>
 #include <base/logging.h>
@@ -138,7 +139,7 @@ void vprx_reg_ps5(const modInfo *info) { vprxTablePs5.push_back(info); }
 //   DELTA_HLE_NIDS_VO=0x1234...,0xabcd...
 // Lets us binary-search which single videoout/gnm export's real behavior triggers
 // the both-LLE Isaac crash, without recompiling per test.
-static bool nidForcedHle(const char *list, uint64_t hid) {
+static bool nidForcedHle(const char *list, u64 hid) {
   if (!list)
     return false;
   for (const char *p = list; *p;) {
@@ -147,7 +148,7 @@ static bool nidForcedHle(const char *list, uint64_t hid) {
     if (!*p)
       break;
     char *end = nullptr;
-    uint64_t v = std::strtoull(p, &end, 16);
+    u64 v = std::strtoull(p, &end, 16);
     if (end == p)
       break;
     if (v == hid)
@@ -217,7 +218,7 @@ static bool libListed(const char *list, const char *lib) {
 //
 // What IS verified: the switch itself is airtight -- under DELTA_LLE=all the HLE
 // trace records zero thunk calls, so every registered shim really is bypassed.
-static bool useHleShim(const char *lib, uint64_t hid) {
+static bool useHleShim(const char *lib, u64 hid) {
   if (libListed(kHleLibs, lib))
     return true;
   if (libListed(kLleLibs, lib))
@@ -231,7 +232,7 @@ static bool useHleShim(const char *lib, uint64_t hid) {
   return true;  // every other HLE module stays HLE
 }
 
-uintptr_t vprx_get_forced(const char *lib, uint64_t hid) {
+uintptr_t vprx_get_forced(const char *lib, u64 hid) {
   // PS5-only: resolve exclusively from the PS5 registry (runtime/vprx/ps5/*).
   // PS5 must NOT borrow the PS4 HLE modules -- each forced-HLE library has its own
   // full PS5 copy so behaviour can diverge safely. A miss here falls through to the
@@ -246,7 +247,7 @@ uintptr_t vprx_get_forced(const char *lib, uint64_t hid) {
   return 0;
 }
 
-uintptr_t vprx_get(const char *lib, uint64_t hid) {
+uintptr_t vprx_get(const char *lib, u64 hid) {
   // The Neo SPRX is a filename variant of the libSceGnmDriver ABI. Keep its
   // imports on the same HLE/LLE policy and HLE export table as the Base module.
   if (std::strcmp(lib, "libSceGnmDriver") == 0 ||
@@ -299,7 +300,7 @@ const char base64Lookup[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
 
 // base64 fast lookup
-bool decode_nid(const char *subset, size_t len, uint64_t &out) {
+bool decode_nid(const char *subset, size_t len, u64 &out) {
   for (size_t i = 0; i < len; i++) {
     auto pos = std::strchr(base64Lookup, subset[i]);
 
@@ -308,7 +309,7 @@ bool decode_nid(const char *subset, size_t len, uint64_t &out) {
       return false;
     }
 
-    auto offset = static_cast<uint32_t>(pos - base64Lookup);
+    auto offset = static_cast<u32>(pos - base64Lookup);
 
     // max NID is 11
     if (i < 10) {
@@ -323,33 +324,33 @@ bool decode_nid(const char *subset, size_t len, uint64_t &out) {
   return true;
 }
 
-static void obfuscate_sym(uint64_t in, uint8_t *out, size_t xlen) {
+static void obfuscate_sym(u64 in, u8 *out, size_t xlen) {
   out[xlen--] = 0;
   out[xlen--] = base64Lookup[(in & 0xF) * 4];
-  uint64_t exp = in >> 4;
+  u64 exp = in >> 4;
   while (exp != 0) {
     out[xlen--] = base64Lookup[exp & 0x3F];
     exp = exp >> 6;
   }
 }
 
-void encode_nid(const char *name, uint8_t *x) {
+void encode_nid(const char *name, u8 *x) {
   static const char suffix[] =
       "\x51\x8D\x64\xA6\x35\xDE\xD8\xC1\xE6\xB0\x39\xB1\xC3\xE5\x52\x30";
 
-  uint8_t sha[20]{};
+  u8 sha[20]{};
   sha1_context ctx;
 
   sha1_starts(&ctx);
-  sha1_update(&ctx, reinterpret_cast<const uint8_t *>(name), std::strlen(name));
-  sha1_update(&ctx, reinterpret_cast<const uint8_t *>(suffix),
+  sha1_update(&ctx, reinterpret_cast<const u8 *>(name), std::strlen(name));
+  sha1_update(&ctx, reinterpret_cast<const u8 *>(suffix),
               std::strlen(suffix));
   sha1_finish(&ctx, sha);
 
   /*the rest is ignored*/
-  uint64_t target = *(uint64_t *)(&sha);
+  u64 target = *(u64 *)(&sha);
 
-  // uint8_t out[11]{};
+  // u8 out[11]{};
   obfuscate_sym(target, x, 11);
 }
 } // namespace runtime

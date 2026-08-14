@@ -1,6 +1,7 @@
 // Copyright (C) Force67 2019
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -20,22 +21,22 @@ DELTA_OPTION(bool, kQuietGuest, "DELTA_QUIET_GUEST", false);
 namespace krnl {
 consoleDevice::consoleDevice(proc *p) : device(p) {}
 
-bool consoleDevice::init(const char *, uint32_t, uint32_t) { return true; }
+bool consoleDevice::init(const char *, u32, u32) { return true; }
 
 // No input source in the emulator: report EOF so a reader loop terminates.
-int64_t consoleDevice::read(void *, size_t) { return 0; }
+i64 consoleDevice::read(void *, size_t) { return 0; }
 
 // The point of a console is that its output is visible. Forward to the host
 // console; the guest wrote to /dev/console specifically to be seen.
-int64_t consoleDevice::write(const void *buf, size_t n) {
+i64 consoleDevice::write(const void *buf, size_t n) {
   if (!buf || !n)
     return 0;
   if (kQuietGuest)
-    return static_cast<int64_t>(n);  // consumed, just not shown
-  return static_cast<int64_t>(std::fwrite(buf, 1, n, stdout));
+    return static_cast<i64>(n);  // consumed, just not shown
+  return static_cast<i64>(std::fwrite(buf, 1, n, stdout));
 }
 
-int64_t consoleDevice::lseek(int64_t, int) { return 0; }
+i64 consoleDevice::lseek(i64, int) { return 0; }
 
 int consoleDevice::fstat(void *stat) {
   if (!stat)
@@ -49,7 +50,7 @@ int consoleDevice::fstat(void *stat) {
 // that would reconfigure a real line are accepted and ignored. Anything else
 // soft-fails like the base device, with its output buffer zeroed so the caller
 // never reads stack garbage.
-int32_t consoleDevice::ioctl(uint32_t cmd, void *data) {
+i32 consoleDevice::ioctl(u32 cmd, void *data) {
   switch (cmd) {
     case 0x402c7413:  // get termios
       if (data)
@@ -91,13 +92,13 @@ int32_t consoleDevice::ioctl(uint32_t cmd, void *data) {
       // Bounded like the other device logs: an unknown ioctl a title issues per
       // frame would otherwise print on every one, and an unbuffered printf on a
       // per-frame path is what once throttled the render loop to a few fps.
-      static uint32_t logged = 0;
+      static u32 logged = 0;
       if (logged < 32) {
         logged++;
         BASE_LOGI("console", "UNHANDLED ioctl({:#x}) -> 0", cmd);
       }
       if (data && (cmd & 0x40000000u)) {
-        const uint32_t len = (cmd >> 16) & 0x1fff;
+        const u32 len = (cmd >> 16) & 0x1fff;
         if (len)
           std::memset(data, 0, len);
       }

@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_capture.h"
+#include "base/arch.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,12 +31,12 @@ const char* DumpDir() {
   return (d && *d) ? d : "/tmp";
 }
 
-void WritePpm(const char* path, const uint8_t* bgra, uint32_t w, uint32_t h) {
+void WritePpm(const char* path, const u8* bgra, u32 w, u32 h) {
   FILE* f = std::fopen(path, "wb");
   if (!f)
     return;
   std::fprintf(f, "P6\n%u %u\n255\n", w, h);
-  for (uint32_t i = 0; i < w * h; i++) {
+  for (u32 i = 0; i < w * h; i++) {
     std::fputc(bgra[i * 4 + 2], f);
     std::fputc(bgra[i * 4 + 1], f);
     std::fputc(bgra[i * 4 + 0], f);
@@ -43,7 +44,7 @@ void WritePpm(const char* path, const uint8_t* bgra, uint32_t w, uint32_t h) {
   std::fclose(f);
 }
 
-void DumpPpm(const uint8_t* bgra, uint32_t w, uint32_t h) {
+void DumpPpm(const u8* bgra, u32 w, u32 h) {
   if (g_dumped_frames >= 4)
     return;
   char path[256];

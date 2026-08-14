@@ -9,6 +9,7 @@
  */
 
 #include "ipmi.h"
+#include "base/arch.h"
 
 namespace krnl::ipmi {
 
@@ -17,7 +18,7 @@ namespace krnl::ipmi {
 // GetAppStatus reply, and the SceShellCoreUtilAppFocus/CtrlFocus event-flag
 // patterns (libSceSystemService's GetStatus reports the app backgrounded or
 // overlaid unless the flag pattern equals its own appId).
-constexpr uint32_t kForegroundAppId = 0x60000001;
+constexpr u32 kForegroundAppId = 0x60000001;
 
 Service &playGoService();
 Service &npManagerService();

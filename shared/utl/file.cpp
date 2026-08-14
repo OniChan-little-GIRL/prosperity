@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include "file.h"
 #include <algorithm>
 #include <cstdio>
@@ -64,7 +65,7 @@ public:
     }
   }
 
-  uint64_t Read(void *buf, size_t size) override {
+  u64 Read(void *buf, size_t size) override {
     // Count bytes, not one object of `size` bytes: fread(buf, size, 1, f)
     // returns 0 for any partial object, so a guest read() that asks for more
     // than the file holds (Skyrim reads its 2 KiB INI in 16 KiB chunks) came
@@ -72,7 +73,7 @@ public:
     return std::fread(buf, 1, size, fptr);
   }
 
-  uint64_t Write(const void *buf, size_t size) override {
+  u64 Write(const void *buf, size_t size) override {
     sizeTracker += size;
     return std::fwrite(buf, size, 1, fptr);
   }
@@ -82,9 +83,9 @@ public:
       std::fflush(fptr);
   }
 
-  uint64_t Seek(int64_t ofs, seekMode mode) override {
+  u64 Seek(i64 ofs, seekMode mode) override {
     // translate mode
-    int32_t origin = 0;
+    i32 origin = 0;
     switch (mode) {
     case seekMode::seek_cur:
       origin = SEEK_CUR;
@@ -102,20 +103,20 @@ public:
     // 64-bit seek: the cast-to-uint32 truncation here corrupted reads past 4 GiB
     // (e.g. files deep in a multi-GiB pkg's inner PFS image -> wrong file offset).
 #ifdef _WIN32
-    int64_t x = _fseeki64(fptr, ofs, origin);
+    i64 x = _fseeki64(fptr, ofs, origin);
     if (x == 0)
-      return static_cast<uint64_t>(_ftelli64(fptr));
+      return static_cast<u64>(_ftelli64(fptr));
 #else
-    int64_t x = fseeko(fptr, static_cast<off_t>(ofs), origin);
+    i64 x = fseeko(fptr, static_cast<off_t>(ofs), origin);
     if (x == 0)
-      return static_cast<uint64_t>(ftello(fptr));
+      return static_cast<u64>(ftello(fptr));
 #endif
-    return static_cast<uint64_t>(x);
+    return static_cast<u64>(x);
   }
 
-  uint64_t Tell() override { return std::ftell(fptr); }
+  u64 Tell() override { return std::ftell(fptr); }
 
-  uint64_t GetSize() override {
+  u64 GetSize() override {
     /*if (sizeTracker == 0) {
             std::FILE* fptr = static_cast<std::FILE*>(handle);
 
@@ -136,18 +137,18 @@ public:
 
 // from memory
 class MemStream final : public fileBase {
-  uint64_t pos;
+  u64 pos;
   const char *const ptr;
-  const uint64_t size;
+  const u64 size;
 
 public:
-  MemStream(const void *ptr, uint64_t size)
+  MemStream(const void *ptr, u64 size)
       : ptr(static_cast<const char *>(ptr)), size(size) {}
 
-  uint64_t Read(void *buf, size_t count) override {
+  u64 Read(void *buf, size_t count) override {
     if (pos < size) {
       // get readable size
-      if (const uint64_t result = std::min<uint64_t>(count, size - pos)) {
+      if (const u64 result = std::min<u64>(count, size - pos)) {
         std::memcpy(buf, ptr + pos, result);
         pos += result;
         return result;
@@ -158,9 +159,9 @@ public:
   }
 
   // TODO
-  uint64_t Write(const void *, size_t) override { return 0; }
+  u64 Write(const void *, size_t) override { return 0; }
 
-  uint64_t Seek(int64_t ofs, seekMode mode) override {
+  u64 Seek(i64 ofs, seekMode mode) override {
     switch (mode) {
     case seekMode::seek_cur:
       pos += ofs;
@@ -178,9 +179,9 @@ public:
     return 0;
   }
 
-  uint64_t Tell() override { return pos; }
+  u64 Tell() override { return pos; }
 
-  uint64_t GetSize() override { return size; }
+  u64 GetSize() override { return size; }
 
   native_handle GetNativeHandle() override { return nullptr; }
 };

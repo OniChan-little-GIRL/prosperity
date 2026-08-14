@@ -7,30 +7,31 @@
  */
 
 #include "gpu/gcn/spirv/gcn_spirv.h"
+#include "base/arch.h"
 
 #ifndef DELTA_HAVE_SPIRV_BACKEND
 // Backend disabled at build time (SPIRV-Tools/Headers unavailable). There is
 // no other recompiler: every recompile declines and the affected
 // draws/dispatches are skipped.
 namespace gpu::gcn {
-bool RecompileSpirv(const uint32_t*,
-                     const uint32_t*,
-                     const uint32_t*,
-                     const uint32_t*,
-                     uint32_t,
-                     uint32_t,
-                     uint32_t,
+bool RecompileSpirv(const u32*,
+                     const u32*,
+                     const u32*,
+                     const u32*,
+                     u32,
+                     u32,
+                     u32,
                      bool,
                      Recompiled&) {
   return false;
 }
-bool RecompileComputeSpirv(const uint32_t*,
-                           uint32_t,
-                           uint32_t,
-                           uint32_t,
-                           uint32_t,
-                           uint32_t,
-                           uint32_t,
+bool RecompileComputeSpirv(const u32*,
+                           u32,
+                           u32,
+                           u32,
+                           u32,
+                           u32,
+                           u32,
                            RecompiledCs&) {
   return false;
 }
@@ -53,8 +54,8 @@ bool RecompileComputeSpirv(const uint32_t*,
 #include <utl/options.h>
 
 namespace {
-DELTA_OPTION(uint32_t, kCfgMaxIter, "DELTA_GPU_CFG_MAXITER", 16384);
-DELTA_OPTION(uint64_t, kShDisAddr, "DELTA_GPU_SHDIS_ADDR", 0);
+DELTA_OPTION(u32, kCfgMaxIter, "DELTA_GPU_CFG_MAXITER", 16384);
+DELTA_OPTION(u64, kShDisAddr, "DELTA_GPU_SHDIS_ADDR", 0);
 DELTA_OPTION(bool, kGpuNokill, "DELTA_GPU_NOKILL", false);
 DELTA_OPTION(bool, kGpuPswhite, "DELTA_GPU_PSWHITE", false);
 DELTA_OPTION(bool, kProbeAlpha, "DELTA_GPU_PSPROBE_A", false);
@@ -63,7 +64,7 @@ DELTA_OPTION(float, kGpuPstexScale, "DELTA_GPU_PSTEXSCALE", 1.f);
 DELTA_OPTION(bool, kGpuShdis, "DELTA_GPU_SHDIS", false);
 DELTA_OPTION(bool, kGpuShtrace, "DELTA_GPU_SHTRACE", false);
 DELTA_OPTION(bool, kGpuSpirv, "DELTA_GPU_SPIRV", false);
-DELTA_OPTION(uint64_t, kSpvDumpAddr, "DELTA_GPU_SPVDUMP_ADDR", 0);
+DELTA_OPTION(u64, kSpvDumpAddr, "DELTA_GPU_SPVDUMP_ADDR", 0);
 DELTA_OPTION(bool, kGpuSpirvCfg, "DELTA_GPU_SPIRV_CFG", false);
 DELTA_OPTION(bool, kGpuSpirvNoopt, "DELTA_GPU_SPIRV_NOOPT", false);
 DELTA_OPTION(bool, kGpuVsflipz, "DELTA_GPU_VSFLIPZ", false);
@@ -91,7 +92,7 @@ thread_local std::string g_unsupported_ops;
 // The VOPC opcode families whose operands are 64-bit register pairs: f64
 // (0x20-0x3f) and its signalling twin V_CMPS (0x60-0x7f), i64 (0xa0-0xbf),
 // u64 (0xe0-0xff).
-bool IsVopc64(uint32_t op) {
+bool IsVopc64(u32 op) {
   return (op >= 0x20 && op <= 0x3f) || (op >= 0x60 && op <= 0x7f) ||
          (op >= 0xa0 && op <= 0xbf) || op >= 0xe0;
 }
@@ -121,18 +122,18 @@ bool TraceEnabled() {
 // wants to know, but rejecting the shader over it throws away a whole draw to
 // avoid a NaN or a denorm: Tomb Raider's UI shaders use v_max_legacy_f32 and
 // were dropped entirely for it.
-void NoteApproximated(const char* enc, uint32_t op) {
+void NoteApproximated(const char* enc, u32 op) {
   AuditNote(enc, op);
-  static std::unordered_set<uint64_t> seen;
-  const uint64_t key =
-      static_cast<uint64_t>(std::hash<std::string_view>{}(enc)) ^
-      (static_cast<uint64_t>(op) << 40);
+  static std::unordered_set<u64> seen;
+  const u64 key =
+      static_cast<u64>(std::hash<std::string_view>{}(enc)) ^
+      (static_cast<u64>(op) << 40);
   if (seen.size() > 512 || !seen.insert(key).second)
     return;
   BASE_LOGI("gcnspv", "APPROXIMATED {} op={:#x}", enc, op);
 }
 
-void WarnUnsupported(const char* enc, uint32_t op, uint32_t w0, uint32_t w1) {
+void WarnUnsupported(const char* enc, u32 op, u32 w0, u32 w1) {
   g_had_unsupported = true;
   {
     char one[64];
@@ -146,10 +147,10 @@ void WarnUnsupported(const char* enc, uint32_t op, uint32_t w0, uint32_t w1) {
   // Every event feeds the audit (per-shader, per-pc attribution); the
   // warn-once dedup below only limits the stderr flood.
   AuditNote(enc, op);
-  static std::unordered_set<uint64_t> seen;
-  const uint64_t key =
-      static_cast<uint64_t>(std::hash<std::string_view>{}(enc)) ^
-      (static_cast<uint64_t>(op) << 40);
+  static std::unordered_set<u64> seen;
+  const u64 key =
+      static_cast<u64>(std::hash<std::string_view>{}(enc)) ^
+      (static_cast<u64>(op) << 40);
   if (seen.size() > 512 || !seen.insert(key).second)
     return;
   BASE_LOGI("gcnspv", "UNSUPPORTED {} op={:#x} (w0={:#x} w1={:#x}) -> rejected",
@@ -160,14 +161,14 @@ void WarnUnsupported(const char* enc, uint32_t op, uint32_t w0, uint32_t w1) {
 // PS input SLOT -> the VS parameter export it reads (SPI_PS_INPUT_CNTL.OFFSET,
 // bits [4:0]). The VS decorates param p as Location p, so this is the Location
 // the PS must declare for that slot. Identity when no mapping was supplied.
-uint32_t PsAttrLocation(const StageContext& sc, uint32_t attr) {
+u32 PsAttrLocation(const StageContext& sc, u32 attr) {
   // SPI_PS_INPUT_CNTL_<slot>.OFFSET names the VS parameter export this slot
   // reads. It is only DEFINED for slot < NUM_INTERP; above that the registers
   // are don't-care and read 0, and treating that as "reads param0" collapses
   // every such attribute onto Location 0.
   if (!sc.ps_in_cntl || attr >= sc.ps_num_interp)
     return attr;
-  const uint32_t off = sc.ps_in_cntl[attr & 31] & 0x1F;
+  const u32 off = sc.ps_in_cntl[attr & 31] & 0x1F;
   // OFFSET indexes the parameter CACHE (dense, in export order), not the param
   // number. Resolve it against the exports the VS actually makes; fall back to
   // treating it as a param number when that list is unavailable.
@@ -176,12 +177,12 @@ uint32_t PsAttrLocation(const StageContext& sc, uint32_t attr) {
   return off;
 }
 
-Id PsInputVar(Translator& t, StageContext& sc, uint32_t attr) {
+Id PsInputVar(Translator& t, StageContext& sc, u32 attr) {
   // Cached by resolved LOCATION, not by slot. Two slots may name the SAME
   // parameter export -- P.T.'s ps=0x80b54b4000 has cntl_0.OFFSET =
   // cntl_1.OFFSET = 1 -- and keying by slot then declares two Input variables
   // decorated with the same Location, which is invalid.
-  const uint32_t loc0 = PsAttrLocation(sc, attr);
+  const u32 loc0 = PsAttrLocation(sc, attr);
   auto it = sc.in_vars.find(loc0);
   if (it != sc.in_vars.end())
     return it->second;
@@ -189,7 +190,7 @@ Id PsInputVar(Translator& t, StageContext& sc, uint32_t attr) {
   // parameter export that slot reads, and it is NOT the identity -- P.T.'s
   // ps=0x80b54b4000 has cntl_0.OFFSET = 1, so its attr0 wants param1 (the
   // texture coordinate) rather than param0 (the clip position it was getting).
-  const uint32_t loc = loc0;
+  const u32 loc = loc0;
   const Id v = t.m.Variable(t.m.TypePointer(spv::StorageClass::Input, t.t_v4),
                             spv::StorageClass::Input);
   t.m.Decorate(v, spv::Decoration::Location, {loc});
@@ -204,17 +205,17 @@ Id PsInputVar(Translator& t, StageContext& sc, uint32_t attr) {
 // Attributes any reachable v_interp_mov_f32 reads as P10 (VSRC 0) or P20
 // (VSRC 1). Collected before emission because declaring the input decides its
 // storage shape, and that must be settled before the first read of it.
-std::unordered_set<uint32_t> PlanPerVertexAttrs(const Program& program,
-                                                const uint8_t* reachable) {
-  std::unordered_set<uint32_t> out;
+std::unordered_set<u32> PlanPerVertexAttrs(const Program& program,
+                                                const u8* reachable) {
+  std::unordered_set<u32> out;
   for (size_t i = 0; i < program.size(); i++) {
     const Inst& inst = program[i];
     if (inst.enc != Enc::kVintrp || (reachable && !reachable[i]))
       continue;
-    const uint32_t w = inst.raw[0];
+    const u32 w = inst.raw[0];
     if (((w >> 16) & 3) != 2)
       continue;  // not v_interp_mov_f32
-    const uint32_t vsrc = w & 0xFF;
+    const u32 vsrc = w & 0xFF;
     if (vsrc == 0 || vsrc == 1)
       out.insert((w >> 10) & 0x3F);
   }
@@ -244,12 +245,12 @@ std::unordered_set<uint32_t> PlanPerVertexAttrs(const Program& program,
 // program rather than assume it wrote nothing.
 struct VgprWrite {
   bool known = true;  // false: this instruction's destination is unknown
-  uint32_t dst = 0;
-  uint32_t count = 0;  // 0 = writes no VGPR
+  u32 dst = 0;
+  u32 count = 0;  // 0 = writes no VGPR
 };
 
 VgprWrite VgprDestOf(const Inst& inst) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
   switch (inst.enc) {
     case Enc::kSop1:
     case Enc::kSop2:
@@ -292,8 +293,8 @@ VgprWrite VgprDestOf(const Inst& inst) {
 // to look across a label -- or across an indirect branch, which has no
 // statically known target at all.
 bool CollectLabels(const Program& program,
-                   const uint8_t* reachable,
-                   std::unordered_set<uint32_t>& labels) {
+                   const u8* reachable,
+                   std::unordered_set<u32>& labels) {
   for (size_t i = 0; i < program.size(); i++) {
     const Inst& inst = program[i];
     if (reachable && !reachable[i])
@@ -306,8 +307,8 @@ bool CollectLabels(const Program& program,
         inst.opcode == 0x02 || (inst.opcode >= 0x04 && inst.opcode <= 0x0b);
     if (!branch)
       continue;
-    const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-    labels.insert(static_cast<uint32_t>(static_cast<int64_t>(inst.pc) +
+    const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+    labels.insert(static_cast<u32>(static_cast<i64>(inst.pc) +
                                         inst.size + simm));
   }
   return true;
@@ -317,10 +318,10 @@ bool CollectLabels(const Program& program,
 // the walk crossed something it cannot account for: an unknown destination, or
 // a label (some other path could reach `use` with a different value).
 int NearestVgprDef(const Program& program,
-                   const uint8_t* reachable,
-                   const std::unordered_set<uint32_t>& labels,
+                   const u8* reachable,
+                   const std::unordered_set<u32>& labels,
                    size_t use,
-                   uint32_t reg) {
+                   u32 reg) {
   for (size_t i = use; i-- > 0;) {
     const Inst& inst = program[i];
     if (reachable && !reachable[i])
@@ -339,21 +340,21 @@ int NearestVgprDef(const Program& program,
 // `def` is `op vdst, src0, src1` in either the VOP2 or the VOP3 spelling, with
 // src0 equal to `want_src0`. src1 is returned when it names a VGPR.
 bool IsLaneChainStep(const Inst& inst,
-                     uint32_t want_op,
-                     uint32_t want_src0,
+                     u32 want_op,
+                     u32 want_src0,
                      int want_src1,
-                     uint32_t* src1_reg) {
+                     u32* src1_reg) {
   const bool vop2 = inst.enc == Enc::kVop2 && inst.opcode == want_op;
   const bool vop3 = inst.enc == Enc::kVop3 && inst.opcode == 0x100 + want_op;
   if (!vop2 && !vop3)
     return false;
-  const uint32_t src0 = vop3 ? (inst.raw[1] & 0x1FF) : (inst.raw[0] & 0x1FF);
-  const uint32_t src1 =
+  const u32 src0 = vop3 ? (inst.raw[1] & 0x1FF) : (inst.raw[0] & 0x1FF);
+  const u32 src1 =
       vop3 ? ((inst.raw[1] >> 9) & 0x1FF) : (256 + ((inst.raw[0] >> 9) & 0xFF));
   if (src0 != want_src0)
     return false;
   if (want_src1 >= 0)
-    return src1 == static_cast<uint32_t>(want_src1);
+    return src1 == static_cast<u32>(want_src1);
   if (src1 < 256)
     return false;
   if (src1_reg)
@@ -364,24 +365,24 @@ bool IsLaneChainStep(const Inst& inst,
 // The pcs of the DS instructions whose address is provably the lane's own
 // slot, i.e. `v_mbcnt_{hi,lo}(-1) << 2`. Operand fields: 193 = the inline
 // constant -1, 130 = 2, 128 = 0.
-std::unordered_set<uint32_t> PlanDsOwnLane(const Program& program,
-                                           const uint8_t* reachable) {
-  std::unordered_set<uint32_t> out;
-  std::unordered_set<uint32_t> labels;
+std::unordered_set<u32> PlanDsOwnLane(const Program& program,
+                                           const u8* reachable) {
+  std::unordered_set<u32> out;
+  std::unordered_set<u32> labels;
   if (!CollectLabels(program, reachable, labels))
     return out;
   for (size_t i = 0; i < program.size(); i++) {
     const Inst& inst = program[i];
     if (inst.enc != Enc::kDs || (reachable && !reachable[i]))
       continue;
-    uint32_t reg = inst.raw[1] & 0xFF;
+    u32 reg = inst.raw[1] & 0xFF;
     // addr <- lshlrev(2, lane) <- mbcnt_lo(-1, hi) <- mbcnt_hi(-1, 0)
-    static constexpr uint32_t kOps[3] = {0x1a, 0x23, 0x24};
-    static constexpr uint32_t kSrc0[3] = {130, 193, 193};
+    static constexpr u32 kOps[3] = {0x1a, 0x23, 0x24};
+    static constexpr u32 kSrc0[3] = {130, 193, 193};
     static constexpr int kSrc1[3] = {-1, -1, 128};
     size_t at = i;
     bool ok = true;
-    for (uint32_t step = 0; step < 3 && ok; step++) {
+    for (u32 step = 0; step < 3 && ok; step++) {
       const int def = NearestVgprDef(program, reachable, labels, at, reg);
       if (def < 0 || !IsLaneChainStep(program[def], kOps[step], kSrc0[step],
                                       kSrc1[step], &reg)) {
@@ -399,9 +400,9 @@ std::unordered_set<uint32_t> PlanDsOwnLane(const Program& program,
 // The triangle's three vertex values for one Location, as an array[3] decorated
 // PerVertexKHR. Index 0 is the provoking vertex, so P0 = [0], P10 = [1] - [0],
 // P20 = [2] - [0].
-Id PsPerVertexVar(Translator& t, StageContext& sc, uint32_t attr) {
+Id PsPerVertexVar(Translator& t, StageContext& sc, u32 attr) {
   // Keyed by resolved Location for the same reason as PsInputVar.
-  const uint32_t loc0 = PsAttrLocation(sc, attr);
+  const u32 loc0 = PsAttrLocation(sc, attr);
   auto it = sc.pervertex_vars.find(loc0);
   if (it != sc.pervertex_vars.end())
     return it->second;
@@ -410,7 +411,7 @@ Id PsPerVertexVar(Translator& t, StageContext& sc, uint32_t attr) {
   const Id arr = t.m.TypeArray(t.t_v4, 3);
   const Id v = t.m.Variable(t.m.TypePointer(spv::StorageClass::Input, arr),
                             spv::StorageClass::Input);
-  const uint32_t loc = loc0;
+  const u32 loc = loc0;
   t.m.Decorate(v, spv::Decoration::Location, {loc});
   t.m.Decorate(v, spv::Decoration::PerVertexKHR);
   if (sc.flat_attrs && sc.flat_attrs->count(attr))
@@ -431,14 +432,14 @@ Id PsBaryCoord(Translator& t, StageContext& sc) {
   const Id v = t.m.Variable(t.m.TypePointer(spv::StorageClass::Input, t.t_v3),
                             spv::StorageClass::Input);
   t.m.Decorate(v, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::BaryCoordKHR)});
+               {static_cast<u32>(spv::BuiltIn::BaryCoordKHR)});
   t.m.Name(v, "bary");
   sc.iface->push_back(v);
   sc.bary_var = v;
   return v;
 }
 
-Id VsParamOut(Translator& t, StageContext& sc, uint32_t p) {
+Id VsParamOut(Translator& t, StageContext& sc, u32 p) {
   auto it = sc.param_outs.find(p);
   if (it != sc.param_outs.end())
     return it->second;
@@ -455,7 +456,7 @@ Id VsParamOut(Translator& t, StageContext& sc, uint32_t p) {
 
 // Lazily declare the PS color output for an MRT target (location == target)
 // and record it in ps_mrt_mask so the renderer masks unwritten attachments.
-Id PsColorOut(Translator& t, StageContext& sc, uint32_t target) {
+Id PsColorOut(Translator& t, StageContext& sc, u32 target) {
   if (sc.color_outs[target])
     return sc.color_outs[target];
   // An integer-format attachment needs an integer output: Vulkan requires the
@@ -477,7 +478,7 @@ Id PsColorOut(Translator& t, StageContext& sc, uint32_t target) {
   t.m.Name(v, "mrt" + std::to_string(target));
   sc.iface->push_back(v);
   sc.color_outs[target] = v;
-  sc.r->ps_mrt_mask |= static_cast<uint8_t>(1u << target);
+  sc.r->ps_mrt_mask |= static_cast<u8>(1u << target);
   return v;
 }
 
@@ -488,7 +489,7 @@ Id PsDepthOut(Translator& t, StageContext& sc) {
   const Id v = t.m.Variable(t.m.TypePointer(spv::StorageClass::Output, t.t_f),
                             spv::StorageClass::Output);
   t.m.Decorate(v, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::FragDepth)});
+               {static_cast<u32>(spv::BuiltIn::FragDepth)});
   sc.iface->push_back(v);
   sc.depth_out = v;
   if (sc.main_fn)
@@ -503,41 +504,41 @@ namespace {
 // buffer_load_format into the destination VGPRs, one per attribute in
 // semantic order.
 struct FetchAttr {
-  uint32_t semantic, num_comps, dest_vgpr, table_sgpr, dword_off;
+  u32 semantic, num_comps, dest_vgpr, table_sgpr, dword_off;
   bool direct_fetch = false;
-  uint32_t pc = ~0u;
-  uint32_t dfmt = 0, nfmt = 0;  // MTBUF only: format from the instruction
+  u32 pc = ~0u;
+  u32 dfmt = 0, nfmt = 0;  // MTBUF only: format from the instruction
 };
 
-std::vector<FetchAttr> ParseFetch(uint64_t fetch_addr) {
+std::vector<FetchAttr> ParseFetch(u64 fetch_addr) {
   std::vector<FetchAttr> out;
   if (!InGuest(fetch_addr))
     return out;
-  const auto* code = reinterpret_cast<const uint32_t*>(fetch_addr);
+  const auto* code = reinterpret_cast<const u32*>(fetch_addr);
   const Program program = Decode(code, 256);
   struct Load {
-    uint32_t table_sgpr, dword_off;
+    u32 table_sgpr, dword_off;
   };
-  std::unordered_map<uint32_t, Load> loads;
-  uint32_t semantic = 0;
+  std::unordered_map<u32, Load> loads;
+  u32 semantic = 0;
   for (const Inst& inst : program) {
-    const uint32_t w = inst.raw[0];
+    const u32 w = inst.raw[0];
     if (inst.enc == Enc::kSop1 && (inst.opcode == 0x20 || inst.opcode == 0x21))
       break;
     if (inst.enc == Enc::kSopp && inst.opcode == 1)
       break;
     if (inst.enc == Enc::kSmrd && inst.opcode == 0x02) {
-      const uint32_t sdst = (w >> 15) & 0x7F, sbase = (w >> 9) & 0x3F;
+      const u32 sdst = (w >> 15) & 0x7F, sbase = (w >> 9) & 0x3F;
       loads[sdst] = {sbase * 2u, w & 0xFF};
     } else if (inst.enc == Enc::kMubuf || inst.enc == Enc::kMtbuf) {
-      const uint32_t w1 = inst.raw[1];
-      const uint32_t vdata = (w1 >> 8) & 0xFF;
-      const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
-      const uint32_t nc = (inst.opcode & 3) + 1;
+      const u32 w1 = inst.raw[1];
+      const u32 vdata = (w1 >> 8) & 0xFF;
+      const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
+      const u32 nc = (inst.opcode & 3) + 1;
       const bool typed = inst.enc == Enc::kMtbuf;
       const auto it = loads.find(srsrc);
-      const uint32_t tbl = it != loads.end() ? it->second.table_sgpr : 0;
-      const uint32_t off = it != loads.end() ? it->second.dword_off : 0;
+      const u32 tbl = it != loads.end() ? it->second.table_sgpr : 0;
+      const u32 off = it != loads.end() ? it->second.dword_off : 0;
       out.push_back({semantic, nc, vdata, tbl, off, false, ~0u,
                      typed ? (w >> 19) & 0xF : 0, typed ? (w >> 23) & 0x7 : 0});
       semantic++;
@@ -559,7 +560,7 @@ std::vector<FetchAttr> ParseFetch(uint64_t fetch_addr) {
 // ---- per-instruction dispatch ----------------------------------------------
 // Emit one non-terminator instruction (branches are handled by the CFG driver).
 void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
-  const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+  const u32 w = inst.raw[0], w1 = inst.raw[1];
   if (inst.extension == InstExtension::kSdwa ||
       inst.extension == InstExtension::kDpp) {
     WarnUnsupported(inst.extension == InstExtension::kSdwa ? "sdwa" : "dpp",
@@ -617,7 +618,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         t.m.EmitVoid(spv::Op::OpControlBarrier,
                      {t.U32(2), t.U32(2), t.U32(0x108)});
       } else if (inst.opcode >= 0x16 && inst.opcode <= 0x19 &&
-                 static_cast<int16_t>(w & 0xffff) == 0) {
+                 static_cast<i16>(w & 0xffff) == 0) {
         // Debug-state branch to the next instruction: both outcomes fall
         // through.
       } else if (inst.opcode != 0x00 && inst.opcode != 0x01 &&
@@ -636,7 +637,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
     case Enc::kVop1: {
       if (inst.isa == IsaMode::kNeo && EmitNeoVop1(t, inst))
         break;
-      const uint32_t op = inst.opcode, vdst = (w >> 17) & 0xFF,
+      const u32 op = inst.opcode, vdst = (w >> 17) & 0xFF,
                      src0 = w & 0x1FF;
       EmitVop1(t, op, vdst, t.SrcF(src0, inst.literal));
       break;
@@ -644,9 +645,9 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
     case Enc::kVop2: {
       if (inst.isa == IsaMode::kNeo && EmitNeoVop2(t, inst))
         break;
-      const uint32_t op = inst.opcode, vdst = (w >> 17) & 0xFF;
-      const uint32_t vsrc1 = (w >> 9) & 0xFF, src0 = w & 0x1FF;
-      const uint32_t src1 = op == 0x01 || op == 0x02 ? vsrc1 : 256 + vsrc1;
+      const u32 op = inst.opcode, vdst = (w >> 17) & 0xFF;
+      const u32 vsrc1 = (w >> 9) & 0xFF, src0 = w & 0x1FF;
+      const u32 src1 = op == 0x01 || op == 0x02 ? vsrc1 : 256 + vsrc1;
       if (EmitLaneSpill(t, op, vdst, src0, src1, inst.literal))
         break;
       EmitVop2(t, op, vdst, t.SrcF(src0, inst.literal),
@@ -656,14 +657,14 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
     case Enc::kVop3: {
       if (inst.isa == IsaMode::kNeo && EmitNeoVop3(t, inst))
         break;
-      const uint32_t op = inst.opcode, vdst = w & 0xFF;
+      const u32 op = inst.opcode, vdst = w & 0xFF;
       const bool vop3b = IsVop3b(op);
-      const uint32_t sdst = vop3b ? ((w >> 8) & 0x7F) : 106;
-      const uint32_t abs = vop3b ? 0 : ((w >> 8) & 7);
+      const u32 sdst = vop3b ? ((w >> 8) & 0x7F) : 106;
+      const u32 abs = vop3b ? 0 : ((w >> 8) & 7);
       const bool clamp = !vop3b && ((w >> 11) & 1);
-      const uint32_t s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF;
-      const uint32_t s2 = (w1 >> 18) & 0x1FF, neg = (w1 >> 29) & 7;
-      const uint32_t omod = (w1 >> 27) & 3;
+      const u32 s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF;
+      const u32 s2 = (w1 >> 18) & 0x1FF, neg = (w1 >> 29) & 7;
+      const u32 omod = (w1 >> 27) & 3;
       // The VOP3 spellings of the lane pair, which name their operands in the
       // second dword; EmitVop3 sees Ids, not register fields.
       if ((op == 0x101 || op == 0x102) &&
@@ -700,8 +701,8 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         WarnUnsupported("vop3p", inst.opcode, w, w1);
       break;
     case Enc::kVopc: {
-      const uint32_t op = inst.opcode;
-      const uint32_t vsrc1 = (w >> 9) & 0xFF, src0 = w & 0x1FF;
+      const u32 op = inst.opcode;
+      const u32 vsrc1 = (w >> 9) & 0xFF, src0 = w & 0x1FF;
       if (inst.isa == IsaMode::kNeo &&
           EmitNeoVopc(t, op, 106, src0, 256 + vsrc1, inst.literal))
         break;
@@ -724,8 +725,8 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
     case Enc::kVintrp: {
       if (!sc.is_ps)
         break;
-      const uint32_t chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
-      const uint32_t op = (w >> 16) & 3, vdst = (w >> 18) & 0xFF;
+      const u32 chan = (w >> 8) & 3, attr = (w >> 10) & 0x3F;
+      const u32 op = (w >> 16) & 3, vdst = (w >> 18) & 0xFF;
       // Attributes read as P10/P20 come from the PerVertexKHR array, and every
       // read of such an attribute must, since the Location no longer carries an
       // interpolated value. VSRC selects the parameter: 0 = P10, 1 = P20,
@@ -733,7 +734,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
       if (sc.pervertex_attrs.count(attr)) {
         const Id var = PsPerVertexVar(t, sc, attr);
         const Id p_in_f = t.m.TypePointer(spv::StorageClass::Input, t.t_f);
-        const auto vert = [&](uint32_t i) {
+        const auto vert = [&](u32 i) {
           return t.m.Load(t.t_f,
                           t.m.AccessChain(p_in_f, var, {t.U32(i), t.U32(chan)}));
         };
@@ -743,7 +744,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
           // Rebuild what interpolation would have produced.
           const Id b = PsBaryCoord(t, sc);
           const Id p_bary_f = t.m.TypePointer(spv::StorageClass::Input, t.t_f);
-          const auto weight = [&](uint32_t i) {
+          const auto weight = [&](u32 i) {
             return t.m.Load(t.t_f, t.m.AccessChain(p_bary_f, b, {t.U32(i)}));
           };
           t.SetVgF(vdst, t.FAdd(t.FAdd(t.FMul(vert(0), weight(0)),
@@ -751,7 +752,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
                                 t.FMul(vert(2), weight(2))));
           break;
         }
-        const uint32_t vsrc = w & 0xFF;
+        const u32 vsrc = w & 0xFF;
         if (vsrc == 2)
           t.SetVgF(vdst, vert(0));  // P0
         else if (vsrc == 0)
@@ -827,9 +828,9 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
         sc.cs_unsupported = true;  // no exports in compute
         break;
       }
-      const uint32_t en = w & 0xF, target = (w >> 4) & 0x3F;
-      const uint32_t compr = (w >> 10) & 1;
-      const uint32_t v[4] = {w1 & 0xFF, (w1 >> 8) & 0xFF, (w1 >> 16) & 0xFF,
+      const u32 en = w & 0xF, target = (w >> 4) & 0x3F;
+      const u32 compr = (w >> 10) & 1;
+      const u32 v[4] = {w1 & 0xFF, (w1 >> 8) & 0xFF, (w1 >> 16) & 0xFF,
                              (w1 >> 24) & 0xFF};
       if (sc.is_ps) {
         if (target <= 7 && en) {  // MRT0..7; EN=0 is a null export
@@ -841,8 +842,8 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
             // or not: under COMPR the register already holds the packed pair
             // the target wants, so unpacking it to floats would be wrong.
             Id c[4];
-            const uint32_t lanes = compr ? 2u : 4u;
-            for (uint32_t i = 0; i < 4; i++) {
+            const u32 lanes = compr ? 2u : 4u;
+            for (u32 i = 0; i < 4; i++) {
               const bool live =
                   compr ? (i < lanes && (en & (0x3u << (2 * i))) != 0)
                         : (en & (1u << i)) != 0;
@@ -857,7 +858,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
             Id c[4];
             for (int i = 0; i < 4; i++)
               c[i] = t.F32(i == 3 ? 1.f : 0.f);
-            for (uint32_t p = 0; p < 2; p++) {
+            for (u32 p = 0; p < 2; p++) {
               if (!(en & (0x3u << (2 * p))))
                 continue;
               const Id pair =
@@ -885,7 +886,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
           const Id comp_ptr_ty =
               t.m.TypePointer(spv::StorageClass::Output, comp_ty);
           bool all_channels = true;
-          for (uint32_t i = 0; i < 4; i++) {
+          for (u32 i = 0; i < 4; i++) {
             const bool live = compr ? (en & (0x3u << (i & ~1u))) != 0
                                     : (en & (1u << i)) != 0;
             all_channels &= live;
@@ -907,7 +908,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
           if (all_channels) {
             t.m.Store(out_var, col_out);
           } else {
-            for (uint32_t i = 0; i < 4; i++) {
+            for (u32 i = 0; i < 4; i++) {
               const bool live = compr ? (en & (0x3u << (i & ~1u))) != 0
                                       : (en & (1u << i)) != 0;
               if (!live)
@@ -939,7 +940,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
           t.m.Store(sc.pos_out,
                     t.m.CompositeConstruct(t.t_v4, {c[0], c[1], c[2], c[3]}));
         } else if (target >= 32 && target <= 63) {  // PARAM0..31
-          const uint32_t p = target - 32;
+          const u32 p = target - 32;
           if (p + 1 > sc.max_param)
             sc.max_param = p + 1;
           const Id out_var = VsParamOut(t, sc, p);
@@ -969,7 +970,7 @@ void EmitInst(Translator& t, const Inst& inst, StageContext& sc) {
 // whose line number is the GCN pc (visible in spirv-dis / RenderDoc).
 void EmitInstAudited(Translator& t,
                      const Inst& inst,
-                     uint32_t index,
+                     u32 index,
                      StageContext& sc) {
   // Whether a cross-lane op here can synchronise the group (see UniformPoints).
   t.uniform_here = index < sc.uniform_points.size() && sc.uniform_points[index];
@@ -993,7 +994,7 @@ void EmitInstAudited(Translator& t,
   }
   const size_t before = t.m.BodyWords();
   EmitInst(t, inst, sc);
-  AuditInstEnd(index, static_cast<uint32_t>(t.m.BodyWords() - before));
+  AuditInstEnd(index, static_cast<u32>(t.m.BodyWords() - before));
 }
 
 // ---- control flow: while/switch lowering -----------------------------------
@@ -1073,30 +1074,30 @@ Id BranchRaw(Translator& t, int kind) {
 }
 
 // The *z forms branch when NOTHING is set, i.e. on the negation of the OR.
-uint32_t BranchInverts(int kind) {
+u32 BranchInverts(int kind) {
   return (kind == 2 || kind == 4 || kind == 6) ? 1u : 0u;
 }
 
 // Block leaders under the same rule EmitCfg uses: entry, every branch target,
 // the slot after a branch.
-std::vector<uint32_t> BlockStarts(const Program& program, uint32_t max_pc) {
-  std::vector<uint32_t> leaders{0};
+std::vector<u32> BlockStarts(const Program& program, u32 max_pc) {
+  std::vector<u32> leaders{0};
   for (const Inst& inst : program) {
     const int k = BranchKind(inst);
     if (k == 0)
       continue;
     leaders.push_back(inst.pc + inst.size);
     if (k >= 1 && k <= 7) {
-      const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-      leaders.push_back(static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                              static_cast<int32_t>(inst.size) +
+      const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+      leaders.push_back(static_cast<u32>(static_cast<i32>(inst.pc) +
+                                              static_cast<i32>(inst.size) +
                                               simm));
     }
   }
   std::sort(leaders.begin(), leaders.end());
   leaders.erase(std::unique(leaders.begin(), leaders.end()), leaders.end());
-  std::vector<uint32_t> starts;
-  for (uint32_t l : leaders)
+  std::vector<u32> starts;
+  for (u32 l : leaders)
     if (l < max_pc)
       starts.push_back(l);
   return starts;
@@ -1120,7 +1121,7 @@ std::vector<uint32_t> BlockStarts(const Program& program, uint32_t max_pc) {
 bool IsLdsRead(const Inst& inst) {
   if (inst.enc != Enc::kDs)
     return false;
-  const uint32_t op = inst.opcode;
+  const u32 op = inst.opcode;
   return op == 0x20 /* ds_add_rtn_u32 */ || (op >= 54 && op <= 56) ||
          op == 118 || op == 119;
 }
@@ -1128,7 +1129,7 @@ bool IsLdsRead(const Inst& inst) {
 bool IsLdsWrite(const Inst& inst) {
   if (inst.enc != Enc::kDs)
     return false;
-  const uint32_t op = inst.opcode;
+  const u32 op = inst.opcode;
   return op == 0x20 /* rtn atomics read AND write */ ||
          (op >= 13 && op <= 15) || op == 77;
 }
@@ -1145,13 +1146,13 @@ bool IsLdsWrite(const Inst& inst) {
 // anything not modelled falls to false.
 
 // VCC carries values too, and its state decides two idioms below.
-enum class VccState : uint8_t {
+enum class VccState : u8 {
   kVaries,      // nothing known
   kUniform,     // written from uniform operands
   kExecOrZero,  // `s_cselect_b64 vcc, exec, 0` / `s_mov_b64 vcc, exec`
 };
 
-bool SourceUniform(uint32_t field, const bool* vgpr_uniform) {
+bool SourceUniform(u32 field, const bool* vgpr_uniform) {
   // Below 256 is an SGPR or an inline constant: wave-wide either way.
   return field < 256 || vgpr_uniform[field - 256];
 }
@@ -1159,8 +1160,8 @@ bool SourceUniform(uint32_t field, const bool* vgpr_uniform) {
 // Which VGPRs a memory/interpolation instruction writes. Sizing this exactly
 // matters: over-clearing marks uniform values as varying and silently loses
 // every proof that depends on them.
-void VgprWrites(const Inst& in, uint32_t& first, uint32_t& count) {
-  const uint32_t w = in.raw[0], w1 = in.raw[1];
+void VgprWrites(const Inst& in, u32& first, u32& count) {
+  const u32 w = in.raw[0], w1 = in.raw[1];
   first = 0;
   count = 0;
   switch (in.enc) {
@@ -1169,7 +1170,7 @@ void VgprWrites(const Inst& in, uint32_t& first, uint32_t& count) {
       count = 1;
       break;
     case Enc::kDs: {
-      const uint32_t op = in.opcode;
+      const u32 op = in.opcode;
       first = (w1 >> 24) & 0xFF;
       if (op == 54 || op == 0x35 || op == 0x20)
         count = 1;  // ds_read_b32 / swizzle / add_rtn
@@ -1180,7 +1181,7 @@ void VgprWrites(const Inst& in, uint32_t& first, uint32_t& count) {
       break;        // writes store nothing
     }
     case Enc::kMubuf: {
-      const uint32_t op = (w >> 18) & 0x7F;
+      const u32 op = (w >> 18) & 0x7F;
       first = (w1 >> 8) & 0xFF;
       if (op <= 0x03)
         count = op + 1;  // buffer_load_format_x..xyzw
@@ -1198,24 +1199,24 @@ void VgprWrites(const Inst& in, uint32_t& first, uint32_t& count) {
       break;
     }
     case Enc::kMtbuf: {
-      const uint32_t op = (w >> 16) & 0x7;
+      const u32 op = (w >> 16) & 0x7;
       first = (w1 >> 8) & 0xFF;
       if (op <= 0x03)
         count = op + 1;  // tbuffer_load_format_x..xyzw
       break;
     }
     case Enc::kMimg: {
-      const uint32_t op = (w >> 18) & 0x7F;
+      const u32 op = (w >> 18) & 0x7F;
       first = (w1 >> 8) & 0xFF;
       if (op == 0x08 || op == 0x09)
         break;  // image_store writes nothing
-      const uint32_t dmask = (w >> 8) & 0xF;
-      for (uint32_t b = 0; b < 4; b++)
+      const u32 dmask = (w >> 8) & 0xF;
+      for (u32 b = 0; b < 4; b++)
         count += (dmask >> b) & 1;
       break;
     }
     case Enc::kFlat: {
-      const uint32_t op = (w >> 18) & 0x7F;
+      const u32 op = (w >> 18) & 0x7F;
       first = (w1 >> 24) & 0xFF;
       if (op >= 0x10 && op <= 0x17)
         count = op == 0x15 ? 2 : op == 0x16 ? 4 : op == 0x17 ? 3 : 1;
@@ -1226,19 +1227,19 @@ void VgprWrites(const Inst& in, uint32_t& first, uint32_t& count) {
   }
 }
 
-std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
-                                                const uint8_t* reachable) {
-  std::vector<uint8_t> proven(program.size(), 0);
+std::vector<u8> ProvenUniformReadFirstLane(const Program& program,
+                                                const u8* reachable) {
+  std::vector<u8> proven(program.size(), 0);
   bool uni[256];
-  for (uint32_t i = 0; i < 256; i++)
+  for (u32 i = 0; i < 256; i++)
     uni[i] = true;
   uni[0] = uni[1] = uni[2] = false;  // v0..v2 seed the thread id
 
   for (bool changed = true; changed;) {
     changed = false;
     VccState vcc = VccState::kVaries;
-    uint32_t block_pc = 0;
-    for (uint32_t i = 0; i < program.size(); i++) {
+    u32 block_pc = 0;
+    for (u32 i = 0; i < program.size(); i++) {
       const Inst& in = program[i];
       if (reachable && !reachable[i])
         continue;
@@ -1250,21 +1251,21 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
         continue;
       }
       (void)block_pc;
-      const uint32_t w = in.raw[0];
-      const auto clear = [&](uint32_t vdst) {
+      const u32 w = in.raw[0];
+      const auto clear = [&](u32 vdst) {
         if (vdst < 256 && uni[vdst]) {
           uni[vdst] = false;
           changed = true;
         }
       };
-      const auto set_from = [&](uint32_t vdst, bool u) {
+      const auto set_from = [&](u32 vdst, bool u) {
         if (!u)
           clear(vdst);
       };
 
       switch (in.enc) {
         case Enc::kSop1: {  // s_mov_b64 vcc, exec
-          const uint32_t sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
+          const u32 sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
           if (in.opcode == 0x04 && sdst == 106 && ssrc0 == 126)
             vcc = VccState::kExecOrZero;
           else if (sdst == 106 || sdst == 107)
@@ -1272,8 +1273,8 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
           break;
         }
         case Enc::kSop2: {  // s_cselect_b64 vcc, exec, 0
-          const uint32_t sdst = (w >> 16) & 0x7F;
-          const uint32_t a = w & 0xFF, b = (w >> 8) & 0xFF;
+          const u32 sdst = (w >> 16) & 0x7F;
+          const u32 a = w & 0xFF, b = (w >> 8) & 0xFF;
           if (in.opcode == 0x0b && sdst == 106 && a == 126 && b == 128)
             vcc = VccState::kExecOrZero;
           else if (sdst == 106 || sdst == 107)
@@ -1281,15 +1282,15 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
           break;
         }
         case Enc::kVop1: {
-          const uint32_t vdst = (w >> 17) & 0xFF, src0 = w & 0x1FF;
+          const u32 vdst = (w >> 17) & 0xFF, src0 = w & 0x1FF;
           if (in.opcode == 0x02)  // v_readfirstlane_b32: writes an SGPR
             break;
           set_from(vdst, SourceUniform(src0, uni));
           break;
         }
         case Enc::kVop2: {
-          const uint32_t op = in.opcode, vdst = (w >> 17) & 0xFF;
-          const uint32_t src0 = w & 0x1FF, vsrc1 = 256 + ((w >> 9) & 0xFF);
+          const u32 op = in.opcode, vdst = (w >> 17) & 0xFF;
+          const u32 src0 = w & 0x1FF, vsrc1 = 256 + ((w >> 9) & 0xFF);
           if (op == 0x01) {  // v_readlane_b32 -> SGPR
             break;
           }
@@ -1328,15 +1329,15 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
           break;
         }
         case Enc::kVopc: {  // writes VCC (or an SGPR pair in VOP3 form)
-          const uint32_t src0 = w & 0x1FF, vsrc1 = 256 + ((w >> 9) & 0xFF);
+          const u32 src0 = w & 0x1FF, vsrc1 = 256 + ((w >> 9) & 0xFF);
           vcc = SourceUniform(src0, uni) && SourceUniform(vsrc1, uni)
                     ? VccState::kUniform
                     : VccState::kVaries;
           break;
         }
         case Enc::kVop3: {
-          const uint32_t vdst = w & 0xFF, w1 = in.raw[1];
-          const uint32_t s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF,
+          const u32 vdst = w & 0xFF, w1 = in.raw[1];
+          const u32 s0 = w1 & 0x1FF, s1 = (w1 >> 9) & 0x1FF,
                          s2 = (w1 >> 18) & 0x1FF;
           const bool src_u = SourceUniform(s0, uni) &&
                              SourceUniform(s1, uni) && SourceUniform(s2, uni);
@@ -1356,9 +1357,9 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
           // actually writes may be cleared: a STORE writes none, and clearing
           // its data registers (or a load's neighbours) poisons values that
           // are uniform and breaks proofs downstream.
-          uint32_t first = 0, count = 0;
+          u32 first = 0, count = 0;
           VgprWrites(in, first, count);
-          for (uint32_t d = 0; d < count; d++)
+          for (u32 d = 0; d < count; d++)
             clear(first + d);
           break;
         }
@@ -1370,7 +1371,7 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
 
   // Second walk: record which v_readfirstlane sources came out uniform.
   VccState vcc = VccState::kVaries;
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     const Inst& in = program[i];
     if (reachable && !reachable[i])
       continue;
@@ -1379,7 +1380,7 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
       continue;
     }
     if (in.enc == Enc::kVop1 && in.opcode == 0x02) {
-      const uint32_t src0 = in.raw[0] & 0x1FF;
+      const u32 src0 = in.raw[0] & 0x1FF;
       proven[i] = SourceUniform(src0, uni) ? 1 : 0;
     }
   }
@@ -1388,31 +1389,31 @@ std::vector<uint8_t> ProvenUniformReadFirstLane(const Program& program,
 
 }  // namespace
 
-std::vector<uint8_t> UniformPoints(const Program& program) {
+std::vector<u8> UniformPoints(const Program& program) {
   // Straight-line: one block, run once by everyone.
   if (!HasControlFlow(program))
-    return std::vector<uint8_t>(program.size(), 1);
+    return std::vector<u8>(program.size(), 1);
   // Under the dispatch loop only the entry block has a fixed iteration (the
   // first) for every invocation. Everything after it may be reached on
   // different iterations by different invocations.
-  const uint32_t max_pc =
+  const u32 max_pc =
       program.empty() ? 0 : program.back().pc + program.back().size;
-  const std::vector<uint32_t> starts = BlockStarts(program, max_pc);
-  const uint32_t first_end = starts.size() > 1 ? starts[1] : max_pc;
-  std::vector<uint8_t> at(program.size(), 0);
-  for (uint32_t i = 0; i < program.size(); i++)
+  const std::vector<u32> starts = BlockStarts(program, max_pc);
+  const u32 first_end = starts.size() > 1 ? starts[1] : max_pc;
+  std::vector<u8> at(program.size(), 0);
+  for (u32 i = 0; i < program.size(); i++)
     at[i] = program[i].pc < first_end;
   return at;
 }
 
 LdsBarrierPlan PlanLdsBarriers(const Program& program,
-                               const uint8_t* reachable,
-                               uint32_t threads_per_group) {
+                               const u8* reachable,
+                               u32 threads_per_group) {
   LdsBarrierPlan plan;
   if (!WaveSplitsAcrossSubgroups() || threads_per_group != kGcnWave)
     return plan;  // >1 wave: the guest compiler had to emit its own barriers
   bool any_read = false, any_write = false, has_barrier = false;
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     if (reachable && !reachable[i])
       continue;
     any_read |= IsLdsRead(program[i]);
@@ -1427,7 +1428,7 @@ LdsBarrierPlan PlanLdsBarriers(const Program& program,
   // Alternation walk: a read after writes, or a write after reads, needs the
   // group synchronised in between.
   int action = 0;  // 1 = a following write needs one, 2 = a following read does
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     if (reachable && !reachable[i])
       continue;
     const bool r = IsLdsRead(program[i]), w = IsLdsWrite(program[i]);
@@ -1455,17 +1456,17 @@ namespace {
 void EmitCfg(Translator& t,
              const Program& program,
              StageContext& sc,
-             const uint8_t* reachable = nullptr) {
-  const uint32_t max_pc =
+             const u8* reachable = nullptr) {
+  const u32 max_pc =
       program.empty() ? 0 : program.back().pc + program.back().size;
-  const std::vector<uint32_t> starts = BlockStarts(program, max_pc);
-  const uint32_t num_blocks = static_cast<uint32_t>(starts.size());
-  const uint32_t kExit = num_blocks;
-  const auto block_of = [&](uint32_t pc) -> uint32_t {
+  const std::vector<u32> starts = BlockStarts(program, max_pc);
+  const u32 num_blocks = static_cast<u32>(starts.size());
+  const u32 kExit = num_blocks;
+  const auto block_of = [&](u32 pc) -> u32 {
     if (pc >= max_pc)
       return kExit;
-    uint32_t b = 0;
-    for (uint32_t i = 0; i < num_blocks; i++)
+    u32 b = 0;
+    for (u32 i = 0; i < num_blocks; i++)
       if (starts[i] <= pc)
         b = i;
       else
@@ -1512,8 +1513,8 @@ void EmitCfg(Translator& t,
   const Id br_fall = lockstep ? priv() : 0;
   // How a block hands its successor(s) on. Without lock-step this is the old
   // per-lane select, which is what a graphics stage still wants.
-  const auto set_next = [&](uint32_t taken_state, uint32_t fall_state, Id raw,
-                            uint32_t invert) {
+  const auto set_next = [&](u32 taken_state, u32 fall_state, Id raw,
+                            u32 invert) {
     if (!lockstep) {
       if (taken_state == fall_state) {
         t.SetState(taken_state);
@@ -1584,19 +1585,19 @@ void EmitCfg(Translator& t,
     state = t.SelectB(over, t.U32(kExit), state);
   }
   t.m.SelectionMerge(merge_sel);
-  std::vector<std::pair<uint32_t, Id> > cases;
-  for (uint32_t i = 0; i < num_blocks; i++)
+  std::vector<std::pair<u32, Id> > cases;
+  for (u32 i = 0; i < num_blocks; i++)
     cases.push_back({i, case_labels[i]});
   t.m.Switch(state, exit_blk, cases);  // default (incl. EXIT state) -> exit
 
-  for (uint32_t bi = 0; bi < num_blocks; bi++) {
+  for (u32 bi = 0; bi < num_blocks; bi++) {
     t.m.OpenBlock(case_labels[bi]);
-    const uint32_t blk_start = starts[bi];
-    const uint32_t blk_end = (bi + 1 < num_blocks) ? starts[bi + 1] : max_pc;
+    const u32 blk_start = starts[bi];
+    const u32 blk_end = (bi + 1 < num_blocks) ? starts[bi + 1] : max_pc;
     bool terminated = false;
-    uint32_t idx = 0;
+    u32 idx = 0;
     for (const Inst& inst : program) {
-      const uint32_t inst_idx = idx++;
+      const u32 inst_idx = idx++;
       if (inst.pc < blk_start || inst.pc >= blk_end)
         continue;
       if (reachable && !reachable[inst_idx])
@@ -1607,20 +1608,20 @@ void EmitCfg(Translator& t,
         continue;
       }
       // terminator
-      const uint32_t fall = (bi + 1 < num_blocks) ? bi + 1 : kExit;
+      const u32 fall = (bi + 1 < num_blocks) ? bi + 1 : kExit;
       if (k == 8) {  // endpgm
         set_next(kExit, kExit, 0, 0);
       } else if (k == 1) {  // unconditional
-        const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-        const uint32_t target = block_of(
-            static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                  static_cast<int32_t>(inst.size) + simm));
+        const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+        const u32 target = block_of(
+            static_cast<u32>(static_cast<i32>(inst.pc) +
+                                  static_cast<i32>(inst.size) + simm));
         set_next(target, target, 0, 0);
       } else {  // conditional
-        const int32_t simm = static_cast<int16_t>(inst.raw[0] & 0xFFFF);
-        const uint32_t target = block_of(
-            static_cast<uint32_t>(static_cast<int32_t>(inst.pc) +
-                                  static_cast<int32_t>(inst.size) + simm));
+        const i32 simm = static_cast<i16>(inst.raw[0] & 0xFFFF);
+        const u32 target = block_of(
+            static_cast<u32>(static_cast<i32>(inst.pc) +
+                                  static_cast<i32>(inst.size) + simm));
         set_next(target, fall, BranchRaw(t, k), BranchInverts(k));
       }
       terminated = true;
@@ -1651,16 +1652,16 @@ bool ForceCfg() {
 void EmitBody(Translator& t,
               const Program& program,
               StageContext& sc,
-              const uint8_t* reachable) {
+              const u8* reachable) {
   t.SeedExec();
   t.predicate_vector = !(kGpuVsNoPred && !sc.is_ps && !sc.is_cs);
   if (ForceCfg() || HasControlFlow(program)) {
     EmitCfg(t, program, sc, reachable);
     return;
   }
-  uint32_t index = 0;
+  u32 index = 0;
   for (const Inst& inst : program) {
-    const uint32_t inst_idx = index++;
+    const u32 inst_idx = index++;
     if (reachable && !reachable[inst_idx])
       continue;
     if (inst.enc == Enc::kSopp && inst.opcode == 1)
@@ -1669,8 +1670,8 @@ void EmitBody(Translator& t,
   }
 }
 
-bool UsesDsSwizzle(const Program& program, const uint8_t* reachable) {
-  for (uint32_t i = 0; i < program.size(); i++)
+bool UsesDsSwizzle(const Program& program, const u8* reachable) {
+  for (u32 i = 0; i < program.size(); i++)
     if ((!reachable || reachable[i]) && program[i].enc == Enc::kDs &&
         program[i].opcode == 0x35)
       return true;
@@ -1685,7 +1686,7 @@ void EnableDsSwizzle(Translator& t, StageContext& sc, std::vector<Id>& iface) {
                    spv::StorageClass::Input);
   t.m.Decorate(
       sc.subgroup_local_id, spv::Decoration::BuiltIn,
-      {static_cast<uint32_t>(spv::BuiltIn::SubgroupLocalInvocationId)});
+      {static_cast<u32>(spv::BuiltIn::SubgroupLocalInvocationId)});
   t.m.Decorate(sc.subgroup_local_id, spv::Decoration::Flat);
   iface.push_back(sc.subgroup_local_id);
 }
@@ -1694,14 +1695,14 @@ void EnableDsSwizzle(Translator& t, StageContext& sc, std::vector<Id>& iface) {
 // pushing both at offset 0 let the second stage's user data overwrite the
 // first's, and a shader that reads an SGPR directly (a buffer stride, say) then
 // saw the other stage's registers.
-constexpr uint32_t kPsUserDataOffset = 64;
+constexpr u32 kPsUserDataOffset = 64;
 // Past both stages' user data: each stage's own guest code address (VS lo/hi
 // at 128/132, PS at 136/140), pushed per draw for s_getpc_b64. Only declared
 // when the device budget covers the 144 bytes (PushCodeBase()); at the
 // 128-byte Vulkan floor the address stays baked in the module.
-constexpr uint32_t kPcBaseOffset = 128;
+constexpr u32 kPcBaseOffset = 128;
 
-Id DeclareUserData(Translator& t, uint32_t byte_offset) {
+Id DeclareUserData(Translator& t, u32 byte_offset) {
   const Id words = t.m.TypeArray(t.t_u, 16);
   t.m.Decorate(words, spv::Decoration::ArrayStride, {4});
   Id block;
@@ -1710,7 +1711,7 @@ Id DeclareUserData(Translator& t, uint32_t byte_offset) {
     // module stays address-free and can be cached by code content while the
     // title streams the same shader to fresh addresses.
     block = t.m.TypeStruct({words, t.t_u, t.t_u});
-    const uint32_t base = kPcBaseOffset + (byte_offset ? 8u : 0u);
+    const u32 base = kPcBaseOffset + (byte_offset ? 8u : 0u);
     t.m.MemberDecorate(block, 1, spv::Decoration::Offset, {base});
     t.m.MemberDecorate(block, 2, spv::Decoration::Offset, {base + 4});
   } else {
@@ -1731,25 +1732,25 @@ Id DeclareUserData(Translator& t, uint32_t byte_offset) {
 
 void SeedUserData(Translator& t, Id user_data) {
   const Id p_u = t.m.TypePointer(spv::StorageClass::PushConstant, t.t_u);
-  for (uint32_t i = 0; i < 16; i++)
+  for (u32 i = 0; i < 16; i++)
     t.SetSg(i, t.m.Load(t.t_u,
                         t.m.AccessChain(p_u, user_data, {t.U32(0), t.U32(i)})));
 }
 
 // ---- VS ---------------------------------------------------------------------
 bool TranslateVs(const Program& program,
-                 const uint32_t* vs_user_data,
-                 const std::unordered_set<uint32_t>& flat_attrs,
-                 uint32_t tex_binding_base,
+                 const u32* vs_user_data,
+                 const std::unordered_set<u32>& flat_attrs,
+                 u32 tex_binding_base,
                  bool gl_clip_space,
                  Recompiled& r,
                  Translator& t) {
-  const uint64_t fetch =
-      (static_cast<uint64_t>(vs_user_data[1] & 0xFFFF) << 32) | vs_user_data[0];
-  const std::vector<uint8_t> reachable = ComputeReachability(program);
+  const u64 fetch =
+      (static_cast<u64>(vs_user_data[1] & 0xFFFF) << 32) | vs_user_data[0];
+  const std::vector<u8> reachable = ComputeReachability(program);
   t.spill_vgprs = PlanLaneSpills(program, reachable.data());
   std::vector<FetchAttr> direct_attrs;
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     const Inst& inst = program[i];
     // MTBUF addresses the buffer exactly as MUBUF does and its load opcodes
     // count components the same way, so a typed fetch of a vertex attribute
@@ -1759,14 +1760,14 @@ bool TranslateVs(const Program& program,
         (inst.enc != Enc::kMubuf && inst.enc != Enc::kMtbuf) ||
         inst.opcode > 0x03)
       continue;
-    const uint32_t w = inst.raw[0], w1 = inst.raw[1];
+    const u32 w = inst.raw[0], w1 = inst.raw[1];
     const bool offen = (w >> 12) & 1, idxen = (w >> 13) & 1;
-    const uint32_t srsrc = ((w1 >> 16) & 0x1F) * 4;
-    const uint32_t soffset = (w1 >> 24) & 0xFF;
+    const u32 srsrc = ((w1 >> 16) & 0x1F) * 4;
+    const u32 soffset = (w1 >> 24) & 0xFF;
     if (!idxen || offen || soffset != 128)
       continue;
     const bool typed = inst.enc == Enc::kMtbuf;
-    direct_attrs.push_back({static_cast<uint32_t>(direct_attrs.size()),
+    direct_attrs.push_back({static_cast<u32>(direct_attrs.size()),
                             inst.opcode + 1, (w1 >> 8) & 0xFF, srsrc, 0, true,
                             inst.pc, typed ? (w >> 19) & 0xF : 0,
                             typed ? (w >> 23) & 0x7 : 0});
@@ -1792,7 +1793,7 @@ bool TranslateVs(const Program& program,
       t.m.Variable(t.m.TypePointer(spv::StorageClass::Output, t.t_v4),
                    spv::StorageClass::Output);
   t.m.Decorate(pos_out, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::Position)});
+               {static_cast<u32>(spv::BuiltIn::Position)});
   iface.push_back(pos_out);
 
   StageContext sc;
@@ -1807,12 +1808,12 @@ bool TranslateVs(const Program& program,
     if (vs_mimg_plan.binding_srsrc.size() + tex_binding_base >
         StageContext::kMaxPsSamplers) {
       WarnUnsupported("mimg.vs-binding-count",
-                      static_cast<uint32_t>(vs_mimg_plan.binding_srsrc.size()));
+                      static_cast<u32>(vs_mimg_plan.binding_srsrc.size()));
       return false;
     }
     sc.mimg_plan = &vs_mimg_plan;
     sc.tex_binding_base = tex_binding_base;
-    for (uint32_t i = 0; i < vs_mimg_plan.binding_srsrc.size(); i++)
+    for (u32 i = 0; i < vs_mimg_plan.binding_srsrc.size(); i++)
       r.vs_texs.push_back({i + tex_binding_base, vs_mimg_plan.binding_srsrc[i],
                            vs_mimg_plan.binding_storage[i], false, false});
   }
@@ -1832,7 +1833,7 @@ bool TranslateVs(const Program& program,
     const Id p_in_u = t.m.TypePointer(spv::StorageClass::Input, t.t_u);
     debug_vertex_index = t.m.Variable(p_in_u, spv::StorageClass::Input);
     t.m.Decorate(debug_vertex_index, spv::Decoration::BuiltIn,
-                 {static_cast<uint32_t>(spv::BuiltIn::VertexIndex)});
+                 {static_cast<u32>(spv::BuiltIn::VertexIndex)});
     iface.push_back(debug_vertex_index);
   }
 
@@ -1848,12 +1849,12 @@ bool TranslateVs(const Program& program,
     if (!vertex_index) {
       vertex_index = t.m.Variable(p_in_u, spv::StorageClass::Input);
       t.m.Decorate(vertex_index, spv::Decoration::BuiltIn,
-                   {static_cast<uint32_t>(spv::BuiltIn::VertexIndex)});
+                   {static_cast<u32>(spv::BuiltIn::VertexIndex)});
       iface.push_back(vertex_index);
     }
     const Id instance_index = t.m.Variable(p_in_u, spv::StorageClass::Input);
     t.m.Decorate(instance_index, spv::Decoration::BuiltIn,
-                 {static_cast<uint32_t>(spv::BuiltIn::InstanceIndex)});
+                 {static_cast<u32>(spv::BuiltIn::InstanceIndex)});
     iface.push_back(instance_index);
     t.SetVg(0, t.m.Load(t.t_u, vertex_index));
     const Id instance = t.m.Load(t.t_u, instance_index);
@@ -1876,7 +1877,7 @@ bool TranslateVs(const Program& program,
     const Id val = t.m.Load(comp_ty, in_var);
     // DELTA_GPU_VSFLIPZ: negate the z of the position attribute (semantic 0,
     // >= 3 comps) -- a projection-convention diagnostic. Default off.
-    for (uint32_t c = 0; c < a.num_comps; c++) {
+    for (u32 c = 0; c < a.num_comps; c++) {
       Id comp = a.num_comps == 1 ? val : t.m.CompositeExtract(t.t_f, val, c);
       if (kGpuVsflipz && a.semantic == 0 && c == 2 && a.num_comps >= 3)
         comp = t.FNeg(comp);
@@ -1945,21 +1946,21 @@ bool TranslateVs(const Program& program,
 
 // ---- PS ---------------------------------------------------------------------
 bool TranslatePs(const Program& program,
-                  const std::unordered_set<uint32_t>& flat_attrs,
-                  uint32_t ps_input_ena,
-                  const uint32_t* ps_in_cntl,
-                  uint32_t ps_num_interp,
-                  const std::vector<uint32_t>* vs_exported_params,
-                  uint32_t tex_3d_mask,
-                  uint32_t tex_1d_mask,
-                  uint32_t tex_uint_mask,
-                  uint32_t mrt_uint_mask,
+                  const std::unordered_set<u32>& flat_attrs,
+                  u32 ps_input_ena,
+                  const u32* ps_in_cntl,
+                  u32 ps_num_interp,
+                  const std::vector<u32>* vs_exported_params,
+                  u32 tex_3d_mask,
+                  u32 tex_1d_mask,
+                  u32 tex_uint_mask,
+                  u32 mrt_uint_mask,
                   Recompiled& r,
                   Translator& t) {
   // Color outputs (PsColorOut) are declared lazily per MRT target (location ==
   // target); PS inputs (PsInputVar) likewise as they are read.
   std::vector<Id> iface;
-  const std::vector<uint8_t> reachable = ComputeReachability(program);
+  const std::vector<u8> reachable = ComputeReachability(program);
   t.spill_vgprs = PlanLaneSpills(program, reachable.data());
   StageContext sc;
   sc.is_ps = true;
@@ -1980,7 +1981,7 @@ bool TranslatePs(const Program& program,
   // undefined, so pinning it keeps runs reproducible and stops uninitialised
   // lanes poisoning the NaN audit.
   sc.ds_own_lane = PlanDsOwnLane(program, reachable.data());
-  if (const uint32_t lds_dwords = GraphicsLdsDwords(program, reachable.data())) {
+  if (const u32 lds_dwords = GraphicsLdsDwords(program, reachable.data())) {
     const Id lds_arr = t.m.TypeArray(t.t_u, lds_dwords);
     sc.lds_storage = spv::StorageClass::Private;
     sc.lds_dwords = lds_dwords;
@@ -1995,7 +1996,7 @@ bool TranslatePs(const Program& program,
   const MimgBindingPlan mimg_plan = PlanMimgBindings(program, reachable.data());
   if (mimg_plan.binding_srsrc.size() > StageContext::kMaxPsSamplers) {
     WarnUnsupported("mimg.binding-count",
-                    static_cast<uint32_t>(mimg_plan.binding_srsrc.size()));
+                    static_cast<u32>(mimg_plan.binding_srsrc.size()));
     return false;
   }
   sc.mimg_plan = &mimg_plan;
@@ -2003,7 +2004,7 @@ bool TranslatePs(const Program& program,
   sc.tex_1d_mask = tex_1d_mask;
   sc.tex_uint_mask = tex_uint_mask;
   sc.mrt_uint_mask = mrt_uint_mask;
-  for (uint32_t i = 0; i < mimg_plan.binding_srsrc.size(); i++)
+  for (u32 i = 0; i < mimg_plan.binding_srsrc.size(); i++)
     r.ps_texs.push_back({i, mimg_plan.binding_srsrc[i],
                          mimg_plan.binding_storage[i],
                          ((tex_3d_mask >> i) & 1u) != 0,
@@ -2023,7 +2024,7 @@ bool TranslatePs(const Program& program,
   // semantics: only exports write; e.g. depth-only or buffer-store passes).
   // ps_mrt_mask stays 0 and the renderer masks every color attachment.
   bool has_color_export = false;
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     const Inst& inst = program[i];
     if (reachable[i] && inst.enc == Enc::kExp &&
         ((inst.raw[0] >> 4) & 0x3F) <= 7 && (inst.raw[0] & 0xF)) {
@@ -2120,12 +2121,12 @@ bool TranslateDepthOnlyPs(Translator& t) {
 
 // ---- CS ---------------------------------------------------------------------
 bool TranslateCs(const Program& program,
-                 uint32_t num_thread_x,
-                 uint32_t num_thread_y,
-                 uint32_t num_thread_z,
-                 uint32_t user_sgpr,
-                 uint32_t tgid_enable,
-                 uint32_t lds_dwords,
+                 u32 num_thread_x,
+                 u32 num_thread_y,
+                 u32 num_thread_z,
+                 u32 user_sgpr,
+                 u32 tgid_enable,
+                 u32 lds_dwords,
                  RecompiledCs& r,
                  Translator& t) {
   if (program.empty())
@@ -2137,13 +2138,13 @@ bool TranslateCs(const Program& program,
   // Footer-bounded decode keeps blocks reached only after an early-out
   // s_endpgm, but also picks up dead padding between the real code and the
   // OrbShdr footer -- only reachable instructions may influence translation.
-  const std::vector<uint8_t> reachable = ComputeReachability(program);
+  const std::vector<u8> reachable = ComputeReachability(program);
   t.spill_vgprs = PlanLaneSpills(program, reachable.data());
   if (!PlanCsResources(program, reachable.data(), sc.lds_dwords, r,
                        sc.cs_bind) ||
       r.resources.empty())
     return false;
-  const uint32_t threads_per_group =
+  const u32 threads_per_group =
       (num_thread_x ? num_thread_x : 1) * (num_thread_y ? num_thread_y : 1) *
       (num_thread_z ? num_thread_z : 1);
   const LdsBarrierPlan lds_bar =
@@ -2152,7 +2153,7 @@ bool TranslateCs(const Program& program,
   sc.lockstep_loop = lds_bar.lockstep;
 
   bool uses_ds_swizzle = false, uses_cross_lane = false;
-  for (uint32_t i = 0; i < program.size(); i++) {
+  for (u32 i = 0; i < program.size(); i++) {
     if (!reachable[i])
       continue;
     const Inst& in = program[i];
@@ -2212,15 +2213,15 @@ bool TranslateCs(const Program& program,
   const Id p_in_v3 = t.m.TypePointer(spv::StorageClass::Input, t_uv3);
   const Id local_id = t.m.Variable(p_in_v3, spv::StorageClass::Input);
   t.m.Decorate(local_id, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::LocalInvocationId)});
+               {static_cast<u32>(spv::BuiltIn::LocalInvocationId)});
   const Id group_id = t.m.Variable(p_in_v3, spv::StorageClass::Input);
   t.m.Decorate(group_id, spv::Decoration::BuiltIn,
-               {static_cast<uint32_t>(spv::BuiltIn::WorkgroupId)});
+               {static_cast<u32>(spv::BuiltIn::WorkgroupId)});
   std::vector<Id> iface{local_id, group_id};
   // Cross-lane channel: LocalInvocationIndex is the order GCN packs threads
   // into waves, so lane = index % 64 and the wave's lanes are contiguous. Two
   // words per invocation, so one barrier pair can carry two published values.
-  const uint32_t threads = threads_per_group;
+  const u32 threads = threads_per_group;
   // Naming a lane only means anything if that lane is in the same block, so a
   // branchy shader that does it needs the same wave-uniform control flow the
   // LDS barriers need.
@@ -2232,7 +2233,7 @@ bool TranslateCs(const Program& program,
         t.m.TypePointer(spv::StorageClass::Input, t.t_u),
         spv::StorageClass::Input);
     t.m.Decorate(lii, spv::Decoration::BuiltIn,
-                 {static_cast<uint32_t>(spv::BuiltIn::LocalInvocationIndex)});
+                 {static_cast<u32>(spv::BuiltIn::LocalInvocationIndex)});
     iface.push_back(lii);
     // Two words per invocation, plus one for the lock-step loop's
     // "is anyone still running" reduction.
@@ -2252,28 +2253,28 @@ bool TranslateCs(const Program& program,
                      spv::StorageClass::Input);
     t.m.Decorate(
         sc.subgroup_local_id, spv::Decoration::BuiltIn,
-        {static_cast<uint32_t>(spv::BuiltIn::SubgroupLocalInvocationId)});
+        {static_cast<u32>(spv::BuiltIn::SubgroupLocalInvocationId)});
     iface.push_back(sc.subgroup_local_id);
   }
 
   const Id main_fn = t.m.BeginFunction(t.t_void, t.t_fn);
   sc.main_fn = main_fn;
   const Id p_pc_u = t.m.TypePointer(spv::StorageClass::PushConstant, t.t_u);
-  for (uint32_t i = 0; i < 16; i++)  // user data -> s0..s15
+  for (u32 i = 0; i < 16; i++)  // user data -> s0..s15
     t.SetSg(i, t.m.Load(t.t_u,
                         t.m.AccessChain(p_pc_u, pc_var, {t.U32(0), t.U32(i)})));
   const Id p_in_u = t.m.TypePointer(spv::StorageClass::Input, t.t_u);
-  const auto group_comp = [&](uint32_t c) {
+  const auto group_comp = [&](u32 c) {
     return t.m.Load(t.t_u, t.m.AccessChain(p_in_u, group_id, {t.U32(c)}));
   };
-  uint32_t sg = user_sgpr;
+  u32 sg = user_sgpr;
   if ((tgid_enable & 1) && sg < 106)
     t.SetSg(sg++, group_comp(0));
   if ((tgid_enable & 2) && sg < 106)
     t.SetSg(sg++, group_comp(1));
   if ((tgid_enable & 4) && sg < 106)
     t.SetSg(sg++, group_comp(2));
-  for (uint32_t c = 0; c < 3; c++)  // local invocation id (tidig) -> v0..v2
+  for (u32 c = 0; c < 3; c++)  // local invocation id (tidig) -> v0..v2
     t.SetVg(c, t.m.Load(t.t_u, t.m.AccessChain(p_in_u, local_id, {t.U32(c)})));
   if (t.xchg_var) {  // wave lane / wave base, from LocalInvocationIndex
     const Id index = t.m.Load(t.t_u, t.xchg_index);
@@ -2282,7 +2283,7 @@ bool TranslateCs(const Program& program,
     t.wave_base = t.And(index, t.U32(~63u));
   }
   sc.uniform_points = sc.lockstep_loop
-                          ? std::vector<uint8_t>(program.size(), 1)
+                          ? std::vector<u8>(program.size(), 1)
                           : UniformPoints(program);
   sc.uniform_readfirstlane =
       ProvenUniformReadFirstLane(program, reachable.data());
@@ -2328,7 +2329,7 @@ void MaybeDumpBranchy(const char* tag, const Program& program) {
 void MaybeDumpByAddr(const char* tag,
                      const void* code,
                      const Program& program) {
-  if (!kShDisAddr || reinterpret_cast<uint64_t>(code) != kShDisAddr)
+  if (!kShDisAddr || reinterpret_cast<u64>(code) != kShDisAddr)
     return;
   static bool dumped = false;
   if (dumped)
@@ -2396,9 +2397,9 @@ std::string PlanSummaryCs(const RecompiledCs& r) {
 // a second triangle. Vulkan has no matching input topology, so insert a
 // geometry stage that performs the fixed-function expansion without assuming
 // anything about the guest VS.
-std::vector<uint32_t> EmitRectListGeometry(
-    uint32_t num_params,
-    const std::unordered_set<uint32_t>& flat_attrs) {
+std::vector<u32> EmitRectListGeometry(
+    u32 num_params,
+    const std::unordered_set<u32>& flat_attrs) {
   spirv::Module m;
   m.Capability(spv::Capability::Geometry);
   const Id t_void = m.TypeVoid(), t_f = m.TypeFloat(32),
@@ -2413,14 +2414,14 @@ std::vector<uint32_t> EmitRectListGeometry(
                                spv::StorageClass::Input);
   const Id out_pos = m.Variable(p_out_v4, spv::StorageClass::Output);
   m.Decorate(in_pos, spv::Decoration::BuiltIn,
-             {static_cast<uint32_t>(spv::BuiltIn::Position)});
+             {static_cast<u32>(spv::BuiltIn::Position)});
   m.Decorate(out_pos, spv::Decoration::BuiltIn,
-             {static_cast<uint32_t>(spv::BuiltIn::Position)});
+             {static_cast<u32>(spv::BuiltIn::Position)});
   iface.push_back(in_pos);
   iface.push_back(out_pos);
 
   std::vector<Id> inputs(num_params), outputs(num_params);
-  for (uint32_t p = 0; p < num_params; p++) {
+  for (u32 p = 0; p < num_params; p++) {
     inputs[p] = m.Variable(m.TypePointer(spv::StorageClass::Input, t_in_v4),
                            spv::StorageClass::Input);
     outputs[p] = m.Variable(p_out_v4, spv::StorageClass::Output);
@@ -2435,7 +2436,7 @@ std::vector<uint32_t> EmitRectListGeometry(
   }
 
   const Id main_fn = m.BeginFunction(t_void, t_fn);
-  const auto load_input = [&](Id input, uint32_t vertex) {
+  const auto load_input = [&](Id input, u32 vertex) {
     return m.Load(t_v4, m.AccessChain(p_in_v4, input, {m.ConstU32(vertex)}));
   };
   const auto fourth_corner = [&](Id input) {
@@ -2446,13 +2447,13 @@ std::vector<uint32_t> EmitRectListGeometry(
   };
   const Id pos3 = fourth_corner(in_pos);
   std::vector<Id> param3(num_params);
-  for (uint32_t p = 0; p < num_params; p++)
+  for (u32 p = 0; p < num_params; p++)
     if (!flat_attrs.count(p))
       param3[p] = fourth_corner(inputs[p]);
 
-  for (uint32_t vertex = 0; vertex < 4; vertex++) {
+  for (u32 vertex = 0; vertex < 4; vertex++) {
     m.Store(out_pos, vertex < 3 ? load_input(in_pos, vertex) : pos3);
-    for (uint32_t p = 0; p < num_params; p++) {
+    for (u32 p = 0; p < num_params; p++) {
       const Id value = flat_attrs.count(p) ? load_input(inputs[p], 0)
                        : vertex < 3        ? load_input(inputs[p], vertex)
                                            : param3[p];
@@ -2477,17 +2478,17 @@ std::vector<uint32_t> EmitRectListGeometry(
 }
 
 // ---- entry points -----------------------------------------------------------
-bool RecompileSpirv(const uint32_t* vs_code,
-                     const uint32_t* ps_code,
-                     const uint32_t* vs_user_data,
-                     const uint32_t* ps_user_data,
-                     uint32_t ps_input_ena,
-                     const uint32_t* ps_in_cntl,
-                     uint32_t ps_num_interp,
-                     uint32_t tex_3d_mask,
-                     uint32_t tex_1d_mask,
-                     uint32_t tex_uint_mask,
-                     uint32_t mrt_uint_mask,
+bool RecompileSpirv(const u32* vs_code,
+                     const u32* ps_code,
+                     const u32* vs_user_data,
+                     const u32* ps_user_data,
+                     u32 ps_input_ena,
+                     const u32* ps_in_cntl,
+                     u32 ps_num_interp,
+                     u32 tex_3d_mask,
+                     u32 tex_1d_mask,
+                     u32 tex_uint_mask,
+                     u32 mrt_uint_mask,
                      bool gl_clip_space,
                      Recompiled& r) {
   if (!vs_code || !vs_user_data || !ps_user_data)
@@ -2506,7 +2507,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
   // V_INTERP_MOV P0 reads a per-primitive parameter rather than a smoothly
   // interpolated value: represent those locations as flat varyings in both
   // stages.
-  std::unordered_set<uint32_t> flat_attrs;
+  std::unordered_set<u32> flat_attrs;
   for (const Inst& inst : ps_program)
     if (inst.enc == Enc::kVintrp && inst.opcode == 2 &&
         (inst.raw[0] & 0xFF) == 2)
@@ -2515,11 +2516,11 @@ bool RecompileSpirv(const uint32_t* vs_code,
   // The VS's parameter exports, ascending and deduplicated: the parameter cache
   // packs them densely in export order, which is what SPI_PS_INPUT_CNTL.OFFSET
   // indexes.
-  std::vector<uint32_t> vs_exported_params;
+  std::vector<u32> vs_exported_params;
   {
     for (const Inst& inst : vs_program)
       if (inst.enc == Enc::kExp) {
-        const uint32_t tgt = (inst.raw[0] >> 4) & 0x3F;
+        const u32 tgt = (inst.raw[0] >> 4) & 0x3F;
         if (tgt >= 32 && tgt <= 63)
           vs_exported_params.push_back(tgt - 32);
       }
@@ -2536,25 +2537,25 @@ bool RecompileSpirv(const uint32_t* vs_code,
   // leaves a Flat decoration on one side of the interface and not the other,
   // which is undefined -- it is what made the first attempt at honouring these
   // registers far worse than ignoring them.
-  std::unordered_set<uint32_t> flat_params;
-  for (uint32_t slot : flat_attrs)
+  std::unordered_set<u32> flat_params;
+  for (u32 slot : flat_attrs)
     flat_params.insert((ps_in_cntl && slot < ps_num_interp)
                            ? (ps_in_cntl[slot & 31] & 0x1F)
                            : slot);
 
   // Set 0 is shared, so the VS's samplers are numbered after the PS's. Planning
   // is a pure function of the code, so doing it here costs only the walk.
-  uint32_t vs_tex_base = 0;
+  u32 vs_tex_base = 0;
   if (!ps_program.empty()) {
-    const std::vector<uint8_t> ps_reachable = ComputeReachability(ps_program);
-    vs_tex_base = static_cast<uint32_t>(
+    const std::vector<u8> ps_reachable = ComputeReachability(ps_program);
+    vs_tex_base = static_cast<u32>(
         PlanMimgBindings(ps_program, ps_reachable.data()).binding_srsrc.size());
   }
 
   // VS and PS are separate SPIR-V modules.
   const bool dbg = ShaderDebugEnabled();
   Translator tv;
-  tv.program_base = reinterpret_cast<uint64_t>(vs_code);
+  tv.program_base = reinterpret_cast<u64>(vs_code);
   ResetUnsupported();
   if (dbg)
     AuditBegin("vs", vs_code, vs_program);
@@ -2562,7 +2563,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
       TranslateVs(vs_program, vs_user_data, flat_params, vs_tex_base,
                   gl_clip_space, r, tv) &&
       !HadUnsupported();
-  std::vector<uint32_t> vs;
+  std::vector<u32> vs;
   if (vs_ok)
     vs = tv.m.Assemble();
   if (dbg) {
@@ -2580,7 +2581,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
   }
 
   Translator tp;
-  tp.program_base = reinterpret_cast<uint64_t>(ps_code);
+  tp.program_base = reinterpret_cast<u64>(ps_code);
   tp.InitTypes();
   ResetUnsupported();
   if (dbg && ps_code)
@@ -2592,7 +2593,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
                                              mrt_uint_mask, r, tp)
                                : TranslateDepthOnlyPs(tp)) &&
                      !HadUnsupported();
-  std::vector<uint32_t> ps;
+  std::vector<u32> ps;
   if (ps_ok)
     ps = tp.m.Assemble();
   if (dbg && ps_code) {
@@ -2609,7 +2610,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
     return false;
   }
 
-  const std::vector<uint32_t> gs =
+  const std::vector<u32> gs =
       EmitRectListGeometry(r.num_params, flat_params);
   // A module the translator emitted but the validator rejects is a translator
   // bug (wrong codegen, not a guest gap): always loud.
@@ -2660,7 +2661,7 @@ bool RecompileSpirv(const uint32_t* vs_code,
   // what we built from it, which is the difference that matters once every
   // constant feeding a shader has been shown correct at the UBO.
   if (kSpvDumpAddr && ps_code &&
-      reinterpret_cast<uint64_t>(ps_code) == kSpvDumpAddr.get() &&
+      reinterpret_cast<u64>(ps_code) == kSpvDumpAddr.get() &&
       !r.fs_spirv.empty()) {
     static bool once = false;
     if (!once) {
@@ -2693,13 +2694,13 @@ bool RecompileSpirv(const uint32_t* vs_code,
   return r.ok;
 }
 
-bool RecompileComputeSpirv(const uint32_t* cs_code,
-                           uint32_t num_thread_x,
-                           uint32_t num_thread_y,
-                           uint32_t num_thread_z,
-                           uint32_t user_sgpr,
-                           uint32_t tgid_enable,
-                           uint32_t lds_dwords,
+bool RecompileComputeSpirv(const u32* cs_code,
+                           u32 num_thread_x,
+                           u32 num_thread_y,
+                           u32 num_thread_z,
+                           u32 user_sgpr,
+                           u32 tgid_enable,
+                           u32 lds_dwords,
                            RecompiledCs& r) {
   if (!cs_code)
     return false;
@@ -2707,7 +2708,7 @@ bool RecompileComputeSpirv(const uint32_t* cs_code,
   MaybeDumpByAddr("CS", cs_code, program);
   const bool dbg = ShaderDebugEnabled();
   Translator t;
-  t.program_base = reinterpret_cast<uint64_t>(cs_code);
+  t.program_base = reinterpret_cast<u64>(cs_code);
   RecompiledCs tmp;  // build into a temp so a mid-emit failure leaves r intact
   ResetUnsupported();
   if (dbg)
@@ -2716,7 +2717,7 @@ bool RecompileComputeSpirv(const uint32_t* cs_code,
       TranslateCs(program, num_thread_x, num_thread_y, num_thread_z, user_sgpr,
                   tgid_enable, lds_dwords, tmp, t) &&
       !HadUnsupported();
-  std::vector<uint32_t> spv_bin;
+  std::vector<u32> spv_bin;
   if (cs_ok)
     spv_bin = t.m.Assemble();
   if (dbg) {

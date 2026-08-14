@@ -66,6 +66,7 @@
  */
 
 #include "audio_daemon.h"
+#include "base/arch.h"
 
 #include <base.h>
 #include <base/logging.h>
@@ -117,16 +118,16 @@ enum : size_t {
 constexpr const char *kMixFlagStem = "sceAudioOutMix";
 
 struct Region {
-  uint8_t *base = nullptr;
+  u8 *base = nullptr;
   size_t size = 0;
 };
 
 struct Port {
   int sink = -1;  // gfx_audio handle
-  uint32_t bpf = 0, type = 0, rate = 0, grain = 0, channels = 0;
+  u32 bpf = 0, type = 0, rate = 0, grain = 0, channels = 0;
   float gain = 1.f;
-  uint64_t nextDueUs = 0;
-  uint64_t blocks = 0, dropped = 0;
+  u64 nextDueUs = 0;
+  u64 blocks = 0, dropped = 0;
   float peak = 0.f, peakMax = 0.f;
   bool configured = false;  // sink decision taken for the current shape
   bool badFormat = false;     // logged once
@@ -149,8 +150,8 @@ bool enabled() {
   return kAudioDaemon;
 }
 
-uint64_t nowUs() {
-  return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+u64 nowUs() {
+  return (u64)std::chrono::duration_cast<std::chrono::microseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
@@ -159,7 +160,7 @@ uint64_t nowUs() {
 // have written. This is what keeps the daemon from acting on some other
 // subsystem's shm that happens to end in "_C": a mis-identified region reads as
 // nonsense here and is left completely alone (no token clear, no event set).
-bool plausibleSlot(uint32_t bpf, uint32_t type, uint32_t rate, uint32_t grain) {
+bool plausibleSlot(u32 bpf, u32 type, u32 rate, u32 grain) {
   if (rate != 48000)  // sceAudioOutOpen rejects every other frequency
     return false;
   if (grain < 256 || grain > 2048 || (grain & 0xFF) != 0)
@@ -173,13 +174,13 @@ bool plausibleSlot(uint32_t bpf, uint32_t type, uint32_t rate, uint32_t grain) {
   // which used to pass the old value list and open a nonsense sink channel
   // count. The kernel's own PCM path (kernel_ps4.elf.c) exposes no wider
   // combination either.
-  const uint32_t bps = type == 0 ? 2u : 4u;
+  const u32 bps = type == 0 ? 2u : 4u;
   if (bpf < bps || bpf % bps != 0 || bpf / bps > 8)
     return false;
   return true;
 }
 
-float blockPeak(const uint8_t *p, size_t bytes, uint32_t type) {
+float blockPeak(const u8 *p, size_t bytes, u32 type) {
   float peak = 0.f;
   if (type == 1) {
     const float *s = reinterpret_cast<const float *>(p);
@@ -188,7 +189,7 @@ float blockPeak(const uint8_t *p, size_t bytes, uint32_t type) {
       if (a > peak) peak = a;
     }
   } else {
-    const int16_t *s = reinterpret_cast<const int16_t *>(p);
+    const i16 *s = reinterpret_cast<const i16 *>(p);
     for (size_t i = 0; i < bytes / 2; i++) {
       const float a = (s[i] < 0 ? -(float)s[i] : (float)s[i]) / 32768.f;
       if (a > peak) peak = a;
@@ -199,8 +200,8 @@ float blockPeak(const uint8_t *p, size_t bytes, uint32_t type) {
 
 void daemonMain() {
   Port ports[kSlots];
-  std::vector<uint8_t> block;
-  uint64_t lastTrace = nowUs();
+  std::vector<u8> block;
+  u64 lastTrace = nowUs();
 
   for (;;) {
     Region ctl;
@@ -211,15 +212,15 @@ void daemonMain() {
       areas = g_area;
     }
 
-    const uint64_t now = nowUs();
-    uint64_t sleepUs = 2000;
+    const u64 now = nowUs();
+    u64 sleepUs = 2000;
 
     if (ctl.base && ctl.size >= kCtlExtent) {
       for (size_t k = 0; k < kSlots; k++) {
         Port &p = ports[k];
-        const uint8_t *slot = ctl.base + kCtlHdr + k * kSlotStride;
+        const u8 *slot = ctl.base + kCtlHdr + k * kSlotStride;
         auto u32 = [&](size_t o) {
-          return *reinterpret_cast<const volatile uint32_t *>(slot + o);
+          return *reinterpret_cast<const volatile u32 *>(slot + o);
         };
 
         // Only the low half of the token is tested by the module's submit(), and
@@ -229,8 +230,8 @@ void daemonMain() {
           continue;
         std::atomic_thread_fence(std::memory_order_acquire);
 
-        const uint32_t bpf = u32(kOffBpf), type = u32(kOffType);
-        const uint32_t rate = u32(kOffRate), grain = u32(kOffGrain);
+        const u32 bpf = u32(kOffBpf), type = u32(kOffType);
+        const u32 rate = u32(kOffRate), grain = u32(kOffGrain);
         if (!plausibleSlot(bpf, type, rate, grain)) {
           if (!p.badFormat) {
             p.badFormat = true;
@@ -280,14 +281,14 @@ void daemonMain() {
         // Pace to real time. The guest is parked on our event-flag grant, so
         // simply not granting yet IS the back-pressure hardware applies.
         if (p.nextDueUs && now < p.nextDueUs) {
-          const uint64_t wait = p.nextDueUs - now;
+          const u64 wait = p.nextDueUs - now;
           if (wait < sleepUs)
             sleepUs = wait;
           continue;
         }
 
         // (Re)open the sink when a port first appears or changes shape.
-        const uint32_t channels = bpf / (type == 0 ? 2u : 4u);
+        const u32 channels = bpf / (type == 0 ? 2u : 4u);
         if (!p.configured || p.bpf != bpf || p.type != type || p.rate != rate ||
             p.channels != channels) {
           if (p.sink >= 0) {
@@ -322,12 +323,12 @@ void daemonMain() {
 
         // Release the guest: zero the token, then grant the mix bit. Order
         // matters -- the module re-tests the token as soon as it wakes.
-        *reinterpret_cast<volatile uint64_t *>(
-            const_cast<uint8_t *>(slot) + kOffToken) = 0;
+        *reinterpret_cast<volatile u64 *>(
+            const_cast<u8 *>(slot) + kOffToken) = 0;
         std::atomic_thread_fence(std::memory_order_release);
         evfSetByNameSubstr(kMixFlagStem, 1ull << k);
 
-        const uint64_t period = (uint64_t)grain * 1000000ull / rate;
+        const u64 period = (u64)grain * 1000000ull / rate;
         p.nextDueUs = (p.nextDueUs ? p.nextDueUs : now) + period;
         if (p.nextDueUs < now)  // fell behind (host stall): resync, don't burst
           p.nextDueUs = now;
@@ -339,7 +340,7 @@ void daemonMain() {
           // guest memcpy's its buffer verbatim.
           const float *g = reinterpret_cast<const float *>(slot + kOffGain);
           float want = 0.f;
-          for (uint32_t c = 0; c < channels && c < 8; c++)
+          for (u32 c = 0; c < channels && c < 8; c++)
             if (g[c] > want) want = g[c];
           if (!(want >= 0.f) || want > 1.f)  // NaN or out of range: leave as is
             want = p.gain;
@@ -400,7 +401,7 @@ int parsePortIndex(const std::string &n) {
 
 }  // namespace
 
-void audioDaemonNoticeShm(const char *name, uint8_t *base, size_t size) {
+void audioDaemonNoticeShm(const char *name, u8 *base, size_t size) {
   if (!name || !enabled())
     return;
   const std::string n(name);

@@ -1,4 +1,5 @@
 #include "libSceUsbd.h"
+#include "base/arch.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -15,11 +16,11 @@ int g_dev = 0xD54DE0;            // device token
 int g_handle = 0xD54AB1E;        // open-handle token
 void *g_devList[2] = {&g_dev, nullptr};  // NULL-terminated device list
 
-constexpr uint16_t kVid = 0x054C;  // Sony
-constexpr uint16_t kPid = 0x05C4;  // DualShock4 (CUH-ZCT1)
+constexpr u16 kVid = 0x054C;  // Sony
+constexpr u16 kPid = 0x05C4;  // DualShock4 (CUH-ZCT1)
 
 // USB device descriptor (matches libusb_device_descriptor layout).
-const uint8_t kDeviceDesc[18] = {
+const u8 kDeviceDesc[18] = {
     0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40,
     0x4C, 0x05, 0xC4, 0x05, 0x00, 0x01, 0x01, 0x02, 0x00, 0x01};
 
@@ -34,10 +35,10 @@ void traceOnce(const char *fn) {
 // Build a 64-byte DS4 USB HID input report from the keyboard adapter (or
 // neutral). Layout: [0]=reportId, [1..4]=sticks, [5]=dpad+face, [6]=shoulder/
 // system, [7]=counter+ps/touch, [8..9]=triggers.
-void buildReport(uint8_t *r, int len) {
+void buildReport(u8 *r, int len) {
   if (!r || len < 10) { if (r && len > 0) std::memset(r, 0, len); return; }
   std::memset(r, 0, len);
-  uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
+  u8 lx = 128, ly = 128, rx = 128, ry = 128;
   gfx::PadKeys k;
   bool sq = false, cr = false, ci = false, tr = false, l1 = false, r1 = false,
        l2 = false, r2 = false, opt = false, tpad = false;
@@ -53,12 +54,12 @@ void buildReport(uint8_t *r, int len) {
   }
   r[0] = 0x01;
   r[1] = lx; r[2] = ly; r[3] = rx; r[4] = ry;
-  r[5] = (uint8_t)((dpad & 0x0F) | (sq ? 0x10 : 0) | (cr ? 0x20 : 0) |
+  r[5] = (u8)((dpad & 0x0F) | (sq ? 0x10 : 0) | (cr ? 0x20 : 0) |
                    (ci ? 0x40 : 0) | (tr ? 0x80 : 0));
-  r[6] = (uint8_t)((l1 ? 0x01 : 0) | (r1 ? 0x02 : 0) | (l2 ? 0x04 : 0) |
+  r[6] = (u8)((l1 ? 0x01 : 0) | (r1 ? 0x02 : 0) | (l2 ? 0x04 : 0) |
                    (r2 ? 0x08 : 0) | (opt ? 0x20 : 0));
-  static uint8_t counter = 0;
-  r[7] = (uint8_t)((tpad ? 0x02 : 0) | ((counter++ & 0x3F) << 2));
+  static u8 counter = 0;
+  r[7] = (u8)((tpad ? 0x02 : 0) | ((counter++ & 0x3F) << 2));
   r[8] = l2 ? 255 : 0;
   r[9] = r2 ? 255 : 0;
 }
@@ -66,8 +67,8 @@ void buildReport(uint8_t *r, int len) {
 // Async transfer record (libusb-style). We track IN-endpoint transfers so
 // HandleEvents can complete them with a fresh report (+ fire the callback).
 struct Transfer {
-  uint8_t endpoint = 0;
-  uint8_t *buf = nullptr;
+  u8 endpoint = 0;
+  u8 *buf = nullptr;
   int length = 0;
   void (*cb)(void *) = nullptr;
   void *self = nullptr;
@@ -102,7 +103,7 @@ int PS4ABI sceUsbdGetActiveConfigDescriptor(void *dev, void **config) {
   traceOnce("GetActiveConfigDescriptor");
   return -99;  // observe whether the game needs the parsed config
 }
-int PS4ABI sceUsbdGetConfigDescriptor(void *dev, uint8_t idx, void **config) {
+int PS4ABI sceUsbdGetConfigDescriptor(void *dev, u8 idx, void **config) {
   traceOnce("GetConfigDescriptor");
   return -99;
 }
@@ -113,7 +114,7 @@ int PS4ABI sceUsbdOpen(void *dev, void **handle) {
   return 0;
 }
 void PS4ABI sceUsbdClose(void *handle) {}
-void *PS4ABI sceUsbdOpenDeviceWithVidPid(void *ctx, uint16_t vid, uint16_t pid) {
+void *PS4ABI sceUsbdOpenDeviceWithVidPid(void *ctx, u16 vid, u16 pid) {
   traceOnce("OpenDeviceWithVidPid");
   return (vid == kVid && pid == kPid) ? &g_handle : nullptr;
 }
@@ -129,9 +130,9 @@ int PS4ABI sceUsbdClaimInterface(void *handle, int iface) {
 }
 int PS4ABI sceUsbdReleaseInterface(void *handle, int iface) { return 0; }
 
-int PS4ABI sceUsbdControlTransfer(void *handle, uint8_t reqType, uint8_t req,
-                                  uint16_t value, uint16_t index, void *data,
-                                  uint16_t length, uint32_t timeout) {
+int PS4ABI sceUsbdControlTransfer(void *handle, u8 reqType, u8 req,
+                                  u16 value, u16 index, void *data,
+                                  u16 length, u32 timeout) {
   traceOnce("ControlTransfer");
   if ((reqType & 0x80) && data && length) {  // IN: descriptor request
     std::memset(data, 0, length);
@@ -143,16 +144,16 @@ int PS4ABI sceUsbdControlTransfer(void *handle, uint8_t reqType, uint8_t req,
   return 0;
 }
 
-int PS4ABI sceUsbdInterruptTransfer(void *handle, uint8_t endpoint, void *data,
-                                    int length, int *transferred, uint32_t timeout) {
+int PS4ABI sceUsbdInterruptTransfer(void *handle, u8 endpoint, void *data,
+                                    int length, int *transferred, u32 timeout) {
   traceOnce("InterruptTransfer");
   if ((endpoint & 0x80) && data)
-    buildReport(static_cast<uint8_t *>(data), length);
+    buildReport(static_cast<u8 *>(data), length);
   if (transferred) *transferred = length;
   return 0;
 }
-int PS4ABI sceUsbdBulkTransfer(void *handle, uint8_t endpoint, void *data,
-                               int length, int *transferred, uint32_t timeout) {
+int PS4ABI sceUsbdBulkTransfer(void *handle, u8 endpoint, void *data,
+                               int length, int *transferred, u32 timeout) {
   if (transferred) *transferred = 0;
   return 0;
 }
@@ -172,21 +173,21 @@ void PS4ABI sceUsbdFreeTransfer(void *transfer) {
     if (transfer && transfer == x.self) { x = Transfer{}; return; }
 }
 void PS4ABI sceUsbdFillInterruptTransfer(void *transfer, void *handle,
-                                         uint8_t endpoint, void *buf, int length,
-                                         void *cb, void *user, uint32_t timeout) {
+                                         u8 endpoint, void *buf, int length,
+                                         void *cb, void *user, u32 timeout) {
   traceOnce("FillInterruptTransfer");
   for (auto &x : g_xfers)
     if (transfer == x.self) {
-      x.endpoint = endpoint; x.buf = static_cast<uint8_t *>(buf);
+      x.endpoint = endpoint; x.buf = static_cast<u8 *>(buf);
       x.length = length; x.cb = reinterpret_cast<void (*)(void *)>(cb);
       return;
     }
 }
 void PS4ABI sceUsbdFillControlTransfer(void *transfer, void *handle, void *buf,
-                                       void *cb, void *user, uint32_t timeout) {}
-void PS4ABI sceUsbdFillBulkTransfer(void *transfer, void *handle, uint8_t endpoint,
+                                       void *cb, void *user, u32 timeout) {}
+void PS4ABI sceUsbdFillBulkTransfer(void *transfer, void *handle, u8 endpoint,
                                     void *buf, int length, void *cb, void *user,
-                                    uint32_t timeout) {}
+                                    u32 timeout) {}
 int PS4ABI sceUsbdSubmitTransfer(void *transfer) {
   traceOnce("SubmitTransfer");
   for (auto &x : g_xfers)
@@ -210,7 +211,7 @@ int PS4ABI sceUsbdHandleEvents() {
 }
 int PS4ABI sceUsbdHandleEventsTimeout(void *tv) { return sceUsbdHandleEvents(); }
 
-int PS4ABI sceUsbdGetStringDescriptorAscii(void *handle, uint8_t idx, void *data,
+int PS4ABI sceUsbdGetStringDescriptorAscii(void *handle, u8 idx, void *data,
                                            int length) {
   if (data && length) std::strncpy(static_cast<char *>(data), "Wireless Controller", length - 1);
   return data ? (int)std::strlen(static_cast<char *>(data)) : 0;

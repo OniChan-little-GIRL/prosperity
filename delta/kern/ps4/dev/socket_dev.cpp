@@ -8,6 +8,7 @@
  */
 
 #include <cerrno>
+#include "base/arch.h"
 #include <cstring>
 
 #include <netinet/in.h>
@@ -21,30 +22,30 @@ namespace krnl {
 namespace {
 
 // FreeBSD address families, as the guest sees them.
-constexpr uint8_t kBsdAfInet = 2;
-constexpr uint8_t kBsdAfInet6 = 28;
+constexpr u8 kBsdAfInet = 2;
+constexpr u8 kBsdAfInet6 = 28;
 
 struct BsdSockaddrIn {
-  uint8_t len, family;
-  uint16_t port;
-  uint32_t addr;
-  uint8_t zero[8];
+  u8 len, family;
+  u16 port;
+  u32 addr;
+  u8 zero[8];
 };
 
 struct BsdSockaddrIn6 {
-  uint8_t len, family;
-  uint16_t port;
-  uint32_t flowinfo;
-  uint8_t addr[16];
-  uint32_t scopeId;
+  u8 len, family;
+  u16 port;
+  u32 flowinfo;
+  u8 addr[16];
+  u32 scopeId;
 };
 
 // Guest -> host. Returns the host length, or 0 if the family isn't one we serve.
-socklen_t toHost(const void *guest, uint32_t guestLen, sockaddr_storage &out) {
+socklen_t toHost(const void *guest, u32 guestLen, sockaddr_storage &out) {
   std::memset(&out, 0, sizeof(out));
   if (!guest || guestLen < 2)
     return 0;
-  const uint8_t family = static_cast<const uint8_t *>(guest)[1];
+  const u8 family = static_cast<const u8 *>(guest)[1];
   if (family == kBsdAfInet && guestLen >= sizeof(BsdSockaddrIn)) {
     const auto *g = static_cast<const BsdSockaddrIn *>(guest);
     auto *h = reinterpret_cast<sockaddr_in *>(&out);
@@ -67,7 +68,7 @@ socklen_t toHost(const void *guest, uint32_t guestLen, sockaddr_storage &out) {
 }
 
 // Host -> guest. Returns the number of bytes written.
-uint32_t toGuest(const sockaddr_storage &in, void *guest, uint32_t cap) {
+u32 toGuest(const sockaddr_storage &in, void *guest, u32 cap) {
   if (!guest)
     return 0;
   if (in.ss_family == AF_INET && cap >= sizeof(BsdSockaddrIn)) {
@@ -107,7 +108,7 @@ socketDevice::~socketDevice() {
     ::close(fd_);
 }
 
-int socketDevice::bind(const void *guestAddr, uint32_t len) {
+int socketDevice::bind(const void *guestAddr, u32 len) {
   sockaddr_storage sa;
   socklen_t n = toHost(guestAddr, len, sa);
   if (!n)
@@ -115,19 +116,19 @@ int socketDevice::bind(const void *guestAddr, uint32_t len) {
   return ::bind(fd_, reinterpret_cast<sockaddr *>(&sa), n) == 0 ? 0 : fromErrno();
 }
 
-int socketDevice::getsockname(void *guestAddr, uint32_t *len) {
+int socketDevice::getsockname(void *guestAddr, u32 *len) {
   sockaddr_storage sa;
   socklen_t n = sizeof(sa);
   if (::getsockname(fd_, reinterpret_cast<sockaddr *>(&sa), &n) != 0)
     return fromErrno();
-  uint32_t wrote = toGuest(sa, guestAddr, len ? *len : 0);
+  u32 wrote = toGuest(sa, guestAddr, len ? *len : 0);
   if (len)
     *len = wrote;
   return 0;
 }
 
-int64_t socketDevice::sendto(const void *buf, size_t len, int flags,
-                             const void *guestAddr, uint32_t addrLen) {
+i64 socketDevice::sendto(const void *buf, size_t len, int flags,
+                             const void *guestAddr, u32 addrLen) {
   sockaddr_storage sa;
   socklen_t n = toHost(guestAddr, addrLen, sa);
   ssize_t r = n ? ::sendto(fd_, buf, len, flags,
@@ -136,8 +137,8 @@ int64_t socketDevice::sendto(const void *buf, size_t len, int flags,
   return r >= 0 ? r : fromErrno();
 }
 
-int64_t socketDevice::recvfrom(void *buf, size_t len, int flags,
-                               void *guestAddr, uint32_t *addrLen) {
+i64 socketDevice::recvfrom(void *buf, size_t len, int flags,
+                               void *guestAddr, u32 *addrLen) {
   sockaddr_storage sa;
   socklen_t n = sizeof(sa);
   ssize_t r = ::recvfrom(fd_, buf, len, flags,
@@ -149,7 +150,7 @@ int64_t socketDevice::recvfrom(void *buf, size_t len, int flags,
   return r;
 }
 
-socketDevice *fdToSocket(uint32_t fd) {
+socketDevice *fdToSocket(u32 fd) {
   auto *p = proc::getActive();
   if (!p)
     return nullptr;

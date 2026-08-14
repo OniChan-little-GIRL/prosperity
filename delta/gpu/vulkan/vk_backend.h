@@ -13,6 +13,7 @@
 // alias; the aliases exist so the existing code can migrate incrementally.
 
 #include "gpu/vulkan/vk_device.h"
+#include "base/arch.h"
 #include "gpu/vulkan/vk_frame.h"
 #include "gpu/vulkan/vk_memory.h"
 #include "gpu/vulkan/vk_pipeline_cache.h"
@@ -38,9 +39,9 @@ struct BackendState {
 
   // Render targets keyed by guest address + the guest-page -> target index.
   vk::RenderRegion region;
-  std::unordered_map<uint64_t, vk::RTarget> rts;
-  std::unordered_map<uint64_t, vk::DepthTarget> depths;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> rt_pages;
+  std::unordered_map<u64, vk::RTarget> rts;
+  std::unordered_map<u64, vk::DepthTarget> depths;
+  std::unordered_map<u64, std::vector<u64>> rt_pages;
 
   // Dynamic rendering entry points (core in 1.3, KHR on older drivers).
   PFN_vkCmdBeginRenderingKHR cmd_begin_rendering = nullptr;

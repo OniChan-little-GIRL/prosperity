@@ -11,6 +11,7 @@
 #ifdef DELTA_HAVE_SPIRV_BACKEND
 
 #include "gpu/gcn/spirv/translator.h"
+#include "base/arch.h"
 
 namespace gpu::gcn {
 namespace {
@@ -52,7 +53,7 @@ Id SignedAddOverflow(Translator& t, Id a, Id b, Id r) {
       t.And(t.And(t.Xor(a, r), t.Xor(b, r)), t.U32(0x80000000u)));
 }
 
-Id ApplyOutputModifier(Translator& t, Id value, uint32_t omod) {
+Id ApplyOutputModifier(Translator& t, Id value, u32 omod) {
   switch (omod) {
     case 1:
       return t.FMul(value, t.F32(2.0f));
@@ -67,14 +68,14 @@ Id ApplyOutputModifier(Translator& t, Id value, uint32_t omod) {
 
 }  // namespace
 
-bool IsVop3b(uint32_t op) {
+bool IsVop3b(u32 op) {
   return (op >= 0x125 && op <= 0x12a) || op == 0x16d || op == 0x16e;
 }
 
 // ---- SOP1 -------------------------------------------------------------------
 void EmitSop1(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t op = inst.opcode, sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
+  const u32 w = inst.raw[0];
+  const u32 op = inst.opcode, sdst = (w >> 16) & 0x7F, ssrc0 = w & 0xFF;
   const Id a = t.SrcRaw(ssrc0, inst.literal);
   const Id a_hi = t.SrcRawHi(ssrc0, inst.literal, false);
   switch (op) {
@@ -217,14 +218,14 @@ void EmitSop1(Translator& t, const Inst& inst) {
       // reach a descriptor the toolchain stored next to the code. Guest memory
       // is identity-mapped, so the program's guest address is its code pointer,
       // and s_getpc is one dword wide.
-      const uint32_t next_off = (inst.pc + 1) * 4u;
+      const u32 next_off = (inst.pc + 1) * 4u;
       if (t.pc_base_var) {
         // Graphics: the module is cached by code CONTENT and reused wherever
         // the title streams this shader, so the address arrives per draw in
         // the push range. 64-bit add from u32 halves (no Int64 capability);
         // the carry is (lo + off) having wrapped below off.
         const Id p_u = t.m.TypePointer(spv::StorageClass::PushConstant, t.t_u);
-        const auto half = [&](uint32_t i) {
+        const auto half = [&](u32 i) {
           return t.m.Load(t.t_u,
                           t.m.AccessChain(p_u, t.pc_base_var,
                                           {t.U32(t.pc_base_member + i)}));
@@ -235,9 +236,9 @@ void EmitSop1(Translator& t, const Inst& inst) {
         t.SetSdst(sdst, 0, lo);
         t.SetSdst(sdst, 1, t.Add(half(1), carry));
       } else {  // compute (address-keyed cache), or the 128-byte push floor
-        const uint64_t next = t.program_base + next_off;
-        t.SetSdst(sdst, 0, t.U32(static_cast<uint32_t>(next)));
-        t.SetSdst(sdst, 1, t.U32(static_cast<uint32_t>(next >> 32)));
+        const u64 next = t.program_base + next_off;
+        t.SetSdst(sdst, 0, t.U32(static_cast<u32>(next)));
+        t.SetSdst(sdst, 1, t.U32(static_cast<u32>(next >> 32)));
       }
       break;
     }
@@ -249,9 +250,9 @@ void EmitSop1(Translator& t, const Inst& inst) {
 
 // ---- SOP2 -------------------------------------------------------------------
 void EmitSop2(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t op = inst.opcode, sdst = (w >> 16) & 0x7F;
-  const uint32_t s0f = w & 0xFF, s1f = (w >> 8) & 0xFF;
+  const u32 w = inst.raw[0];
+  const u32 op = inst.opcode, sdst = (w >> 16) & 0x7F;
+  const u32 s0f = w & 0xFF, s1f = (w >> 8) & 0xFF;
   const Id a = t.SrcRaw(s0f, inst.literal), b = t.SrcRaw(s1f, inst.literal);
   const Id a_hi = t.SrcRawHi(s0f, inst.literal, op == 0x23);
   const Id b_hi = t.SrcRawHi(s1f, inst.literal, false);
@@ -259,7 +260,7 @@ void EmitSop2(Translator& t, const Inst& inst) {
   bool scc = false, wide_scc = false;
 
   // 64-bit shifts: kind 0 = logical left, 1 = logical right, 2 = arithmetic.
-  const auto shift64 = [&](uint32_t kind) {
+  const auto shift64 = [&](u32 kind) {
     const Id n = t.And(b, t.U32(63)), n_lo = t.And(n, t.U32(31));
     const Id ge32 = t.Uge(n, t.U32(32));
     const Id zero = t.IsZero(n);
@@ -544,8 +545,8 @@ void EmitSop2(Translator& t, const Inst& inst) {
 
 // ---- SOPC (s_cmp_* -> SCC) --------------------------------------------------
 void EmitSopc(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t op = inst.opcode, s0f = w & 0xFF, s1f = (w >> 8) & 0xFF;
+  const u32 w = inst.raw[0];
+  const u32 op = inst.opcode, s0f = w & 0xFF, s1f = (w >> 8) & 0xFF;
   const Id a = t.SrcRaw(s0f, inst.literal), b = t.SrcRaw(s1f, inst.literal);
   const Id ai = t.m.Bitcast(t.t_i, a), bi = t.m.Bitcast(t.t_i, b);
   Id c = 0;
@@ -604,11 +605,11 @@ void EmitSopc(Translator& t, const Inst& inst) {
 
 // ---- SOPK -------------------------------------------------------------------
 void EmitSopk(Translator& t, const Inst& inst) {
-  const uint32_t w = inst.raw[0];
-  const uint32_t op = inst.opcode, sdst = (w >> 16) & 0x7F;
-  const uint32_t simm_bits = w & 0xFFFF;
-  const uint32_t sext = static_cast<uint32_t>(
-      static_cast<int32_t>(static_cast<int16_t>(simm_bits)));
+  const u32 w = inst.raw[0];
+  const u32 op = inst.opcode, sdst = (w >> 16) & 0x7F;
+  const u32 simm_bits = w & 0xFFFF;
+  const u32 sext = static_cast<u32>(
+      static_cast<i32>(static_cast<i16>(simm_bits)));
   const Id imm_i = t.U32(sext);       // sign-extended immediate
   const Id imm_u = t.U32(simm_bits);  // zero-extended immediate
 
@@ -699,12 +700,12 @@ void EmitSopk(Translator& t, const Inst& inst) {
 }
 
 // ---- SGPR spills parked in a VGPR's lanes -----------------------------------
-std::unordered_set<uint32_t> PlanLaneSpills(const Program& program,
-                                            const uint8_t* reachable) {
-  std::unordered_set<uint32_t> spills;
-  uint32_t index = 0;
+std::unordered_set<u32> PlanLaneSpills(const Program& program,
+                                            const u8* reachable) {
+  std::unordered_set<u32> spills;
+  u32 index = 0;
   for (const Inst& inst : program) {
-    const uint32_t i = index++;
+    const u32 i = index++;
     if (reachable && !reachable[i])
       continue;
     if (inst.enc == Enc::kVop2 && inst.opcode == 0x02)
@@ -716,11 +717,11 @@ std::unordered_set<uint32_t> PlanLaneSpills(const Program& program,
 }
 
 bool EmitLaneSpill(Translator& t,
-                   uint32_t op,
-                   uint32_t dst,
-                   uint32_t src0,
-                   uint32_t src1,
-                   uint32_t literal) {
+                   u32 op,
+                   u32 dst,
+                   u32 src0,
+                   u32 src1,
+                   u32 literal) {
   if (op == 0x01) {  // v_readlane_b32 sdst, vsrc, lane
     if (src0 < 256 || !t.IsSpillVgpr(src0 - 256))
       return false;
@@ -801,11 +802,11 @@ Id ReadFirstLane(Translator& t, Id value) {
 
 // ---- VOP1 -------------------------------------------------------------------
 void EmitVop1(Translator& t,
-              uint32_t op,
-              uint32_t vdst,
+              u32 op,
+              u32 vdst,
               Id s0,
               bool clamp,
-              uint32_t omod) {
+              u32 omod) {
   const auto set_f = [&](Id f) {
     f = ApplyOutputModifier(t, f, omod);
     t.SetVgF(vdst, clamp ? t.FClamp01(f) : f);
@@ -963,13 +964,13 @@ void EmitVop1(Translator& t,
 
 // ---- VOP2 -------------------------------------------------------------------
 void EmitVop2(Translator& t,
-              uint32_t op,
-              uint32_t vdst,
+              u32 op,
+              u32 vdst,
               Id s0,
               Id s1,
-              uint32_t literal,
+              u32 literal,
               bool clamp,
-              uint32_t omod) {
+              u32 omod) {
   const auto set_f = [&](Id f) {
     f = ApplyOutputModifier(t, f, omod);
     t.SetVgF(vdst, clamp ? t.FClamp01(f) : f);
@@ -1189,7 +1190,7 @@ namespace {
 
 // Float predicate for the low opcode nibble (F/LT/EQ/LE/GT/LG/GE/O/U/NGE/NLG/
 // NGT/NLE/NEQ/NLT/TRU). Returns 0 for none (F handled by caller).
-Id FloatPredicate(Translator& t, uint32_t lo, Id a, Id b) {
+Id FloatPredicate(Translator& t, u32 lo, Id a, Id b) {
   const auto F = [&](spv::Op o) { return t.m.Emit(o, t.t_bool, {a, b}); };
   const auto is_nan = [&](Id x) {
     return t.m.Emit(spv::Op::OpIsNan, t.t_bool, {x});
@@ -1233,7 +1234,7 @@ Id FloatPredicate(Translator& t, uint32_t lo, Id a, Id b) {
 }
 
 // Integer predicate for the low 3 bits (F/LT/EQ/LE/GT/NE/GE/T).
-Id IntPredicate(Translator& t, uint32_t lo, bool is_signed, Id a, Id b) {
+Id IntPredicate(Translator& t, u32 lo, bool is_signed, Id a, Id b) {
   const Id ai = t.m.Bitcast(t.t_i, a), bi = t.m.Bitcast(t.t_i, b);
   const auto S = [&](spv::Op o) { return t.m.Emit(o, t.t_bool, {ai, bi}); };
   const auto U = [&](spv::Op o) { return t.m.Emit(o, t.t_bool, {a, b}); };
@@ -1295,7 +1296,7 @@ Id I64Lt(Translator& t, Dword2 a, Dword2 b) {
 }
 
 Id Int64Predicate(Translator& t,
-                  uint32_t lo,
+                  u32 lo,
                   bool is_signed,
                   Dword2 a,
                   Dword2 b) {
@@ -1344,7 +1345,7 @@ Id F64Lt(Translator& t, Dword2 a, Dword2 b) {
              LNot(t, t.LAnd(F64IsZero(t, a), F64IsZero(t, b)))));
 }
 
-Id Float64Predicate(Translator& t, uint32_t lo, Dword2 a, Dword2 b) {
+Id Float64Predicate(Translator& t, u32 lo, Dword2 a, Dword2 b) {
   const Id nan = LOr(t, F64IsNan(t, a), F64IsNan(t, b));
   switch (lo) {
     case 0: return t.m.ConstBool(false);                        // F
@@ -1389,7 +1390,7 @@ Id FloatClassPredicate(Translator& t, Id bits, Id mask) {
   const Id normal = logical_not(logical_or(exp_zero, exp_all_ones));
 
   Id classes = t.U32(0);
-  const auto add_class = [&](uint32_t bit, Id condition) {
+  const auto add_class = [&](u32 bit, Id condition) {
     classes = t.Or(classes, t.SelectB(condition, t.U32(1u << bit), t.U32(0)));
   };
   add_class(0, t.LAnd(nan, logical_not(quiet)));  // signaling NaN
@@ -1408,12 +1409,12 @@ Id FloatClassPredicate(Translator& t, Id bits, Id mask) {
 }  // namespace
 
 void EmitVopc(Translator& t,
-              uint32_t op,
+              u32 op,
               Id s0f,
               Id s1f,
               Id s0u,
               Id s1u,
-              uint32_t dst,
+              u32 dst,
               Id s0_hi,
               Id s1_hi) {
   // Opcode space: f32 0x00-0x1F, f64 0x20-0x3F, i32 0x80-0x9F, i64 0xA0-0xBF,
@@ -1453,16 +1454,16 @@ void EmitVopc(Translator& t,
 
 // ---- VOP3 -------------------------------------------------------------------
 void EmitVop3(Translator& t,
-              uint32_t op,
-              uint32_t vdst,
+              u32 op,
+              u32 vdst,
               Id s0,
               Id s0_hi,
               Id s1,
               Id s2,
               Id s2_hi,
-              uint32_t sdst,
+              u32 sdst,
               bool clamp,
-              uint32_t omod,
+              u32 omod,
               Id s1_hi) {
   // VOP3 reflects the VOPC (0x000-0x0FF), VOP2 (0x100-0x13F) and VOP1
   // (0x180-0x1FF) encodings; only 0x140-0x17F are VOP3-exclusive.
@@ -1607,7 +1608,7 @@ void EmitVop3(Translator& t,
     case 0x14d: {  // v_lerp_u8: per-byte (a + b + (c & 1)) >> 1
       Id r = t.U32(0);
       for (int b = 0; b < 4; b++) {
-        const Id sh = t.U32(static_cast<uint32_t>(b) * 8), mask = t.U32(0xFF);
+        const Id sh = t.U32(static_cast<u32>(b) * 8), mask = t.U32(0xFF);
         const Id a = t.And(t.Shr(u0, sh), mask),
                  bb = t.And(t.Shr(u1, sh), mask);
         const Id cc = t.And(t.Shr(u2, sh), t.U32(1));

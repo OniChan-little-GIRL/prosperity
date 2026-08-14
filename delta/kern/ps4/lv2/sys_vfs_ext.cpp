@@ -8,6 +8,7 @@
  */
 
 #include <base.h>
+#include "base/arch.h"
 #include <base/logging.h>
 #include <cstdio>
 #include <cstring>
@@ -39,7 +40,7 @@ namespace krnl {
 enum { kSeekSet = 0, kSeekCur = 1 };
 
 // The helper in sys_vfs.cpp is file-local static, so keep our own copy.
-static device *fdToDevice(uint32_t fd) {
+static device *fdToDevice(u32 fd) {
   auto *obj = proc::getActive()->getObjTable().get(fd);
   if (!obj || obj->type() != kObject::oType::device)
     return nullptr;
@@ -56,7 +57,7 @@ int PS4ABI sys_access(const char *path, int mode) {
     return -SysError::eINVAL;
   // We model read-only assets, so existence is the only check we can honour;
   // W_OK/X_OK are accepted for anything that exists.
-  int64_t size = 0;
+  i64 size = 0;
   bool isDir = false;
   if (!vfs::stat(path, size, isDir))
     return -SysError::eNOENT;
@@ -86,7 +87,7 @@ int PS4ABI sys_lstat(const char *path, void *stat) {
     return -SysError::eINVAL;
   if (stat)
     std::memset(stat, 0, sizeof(SceKernelStat));
-  int64_t size = 0;
+  i64 size = 0;
   bool isDir = false;
   if (!vfs::stat(path, size, isDir))
     return -SysError::eNOENT;
@@ -104,7 +105,7 @@ int PS4ABI sys_fstatat(int fd, const char *path, void *stat, int flag) {
 // F_SETLKW(13)}. cmds 7/8/9 (OGETLK/OSETLK/OSETLKW) are translated to 11/12/13.
 // We don't model fd flags or advisory locks, so GETFD/GETFL report 0 and the
 // lock commands accept silently.
-int PS4ABI sys_fcntl(uint32_t fd, int cmd, int64_t arg) {
+int PS4ABI sys_fcntl(u32 fd, int cmd, i64 arg) {
   enum {
     F_DUPFD = 0, F_GETFD = 1, F_SETFD = 2, F_GETFL = 3, F_SETFL = 4,
     F_GETOWN = 5, F_SETOWN = 6,
@@ -130,7 +131,7 @@ int PS4ABI sys_fcntl(uint32_t fd, int cmd, int64_t arg) {
   case F_GETLK:
     // No locks held: return F_UNLCK (type 2) in the caller's flock struct.
     if (arg) {
-      auto *fl = reinterpret_cast<int32_t *>(arg);
+      auto *fl = reinterpret_cast<i32 *>(arg);
       fl[0] = 2;  // l_type = F_UNLCK
     }
     return 0;
@@ -148,18 +149,18 @@ int PS4ABI sys_fcntl(uint32_t fd, int cmd, int64_t arg) {
   }
 }
 
-int PS4ABI sys_dup(uint32_t fd) {
+int PS4ABI sys_dup(u32 fd) {
   LOG_WARNING("sys_dup({}) unsupported", fd);
   return -SysError::eOPNOTSUPP;
 }
 
-int PS4ABI sys_dup2(uint32_t oldfd, uint32_t newfd) {
+int PS4ABI sys_dup2(u32 oldfd, u32 newfd) {
   LOG_WARNING("sys_dup2({}, {}) unsupported", oldfd, newfd);
   return -SysError::eOPNOTSUPP;
 }
 
-int PS4ABI sys_fsync(uint32_t fd) { return 0; }
-int PS4ABI sys_fdatasync(uint32_t fd) { return 0; }
+int PS4ABI sys_fsync(u32 fd) { return 0; }
+int PS4ABI sys_fdatasync(u32 fd) { return 0; }
 
 int PS4ABI sys_getcwd(char *buf, size_t size) {
   if (!buf || size == 0)
@@ -178,14 +179,14 @@ int PS4ABI sys_getcwd(char *buf, size_t size) {
 // restore it. Without the restore a following read() would resume from the
 // wrong place.
 static bool g_qarFd[8192] = {false};
-void markQarFd(uint32_t fd, bool v) {
+void markQarFd(u32 fd, bool v) {
   if (fd < 8192)
     g_qarFd[fd] = v;
 }
 
-void throttleIo(int64_t bytes);
+void throttleIo(i64 bytes);
 
-int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) {
+i64 PS4ABI sys_pread(u32 fd, void *buf, size_t nbytes, i64 offset) {
   auto *d = fdToDevice(fd);
   if (!d) {
     if (kRdall)
@@ -195,9 +196,9 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
   struct timespec t0;
   if (kQarBuf)
     clock_gettime(CLOCK_MONOTONIC, &t0);
-  int64_t saved = d->lseek(0, kSeekCur);
+  i64 saved = d->lseek(0, kSeekCur);
   d->lseek(offset, kSeekSet);
-  int64_t r = d->read(buf, nbytes);
+  i64 r = d->read(buf, nbytes);
   if (saved >= 0)
     d->lseek(saved, kSeekSet);
   long readUs = 0;
@@ -208,8 +209,8 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
   }
   throttleIo(r);
   if (kRdall) {
-    uint32_t f4 = 0;
-    if (buf && r >= 4) f4 = *reinterpret_cast<const uint32_t *>(buf);
+    u32 f4 = 0;
+    if (buf && r >= 4) f4 = *reinterpret_cast<const u32 *>(buf);
     BASE_LOGI("pread", "t={} fd={} off={} nbytes={:#x} -> {} buf={:p} first4={:08x}",
               (long)gettid(), fd, (long long)offset, (size_t)nbytes,
               (long long)r, buf, f4);
@@ -233,14 +234,14 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
     // offset+r > previous max) or RE-READING already-covered blocks (nReread) --
     // the latter signals a downstream consume/decompress stage that never drains,
     // so the streamer re-issues the same reads. lastOff catches exact-repeat reads.
-    struct FdIo { int64_t maxOff, lastMax, lastOff; long lastMs; long nNew, nReread, nSame; };
+    struct FdIo { i64 maxOff, lastMax, lastOff; long lastMs; long nNew, nReread, nSame; };
     static std::mutex m;
-    static std::unordered_map<uint32_t, FdIo> tbl;
+    static std::unordered_map<u32, FdIo> tbl;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     long nowMs = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
     std::lock_guard<std::mutex> lk(m);
     auto &e = tbl[fd];
-    int64_t end = offset + (r > 0 ? r : 0);
+    i64 end = offset + (r > 0 ? r : 0);
     if (end > e.maxOff) e.nNew++; else e.nReread++;
     if (offset == e.lastOff) e.nSame++;
     e.lastOff = offset;
@@ -262,31 +263,31 @@ int64_t PS4ABI sys_pread(uint32_t fd, void *buf, size_t nbytes, int64_t offset) 
   return r;
 }
 
-int64_t PS4ABI sys_pwrite(uint32_t fd, const void *buf, size_t nbytes,
-                          int64_t offset) {
+i64 PS4ABI sys_pwrite(u32 fd, const void *buf, size_t nbytes,
+                          i64 offset) {
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
-  int64_t saved = d->lseek(0, kSeekCur);
+  i64 saved = d->lseek(0, kSeekCur);
   d->lseek(offset, kSeekSet);
-  int64_t r = d->write(buf, nbytes);
+  i64 r = d->write(buf, nbytes);
   if (saved >= 0)
     d->lseek(saved, kSeekSet);
   return r;
 }
 
-int64_t PS4ABI sys_writev(uint32_t fd, const void *iov, int iovcnt) {
+i64 PS4ABI sys_writev(u32 fd, const void *iov, int iovcnt) {
   auto *segs = static_cast<const sce_iovec *>(iov);
   if (!segs || iovcnt < 0)
     return -SysError::eINVAL;
 
   if (fd == 1 || fd == 2) { // stdout / stderr, like sys_write
-    int64_t total = 0;
+    i64 total = 0;
     for (int i = 0; i < iovcnt; ++i) {
       auto *b = static_cast<const char *>(segs[i].iov_base);
       for (size_t j = 0; j < segs[i].iov_len; ++j)
         std::printf("%c", b[j]);
-      total += static_cast<int64_t>(segs[i].iov_len);
+      total += static_cast<i64>(segs[i].iov_len);
     }
     return total;
   }
@@ -294,9 +295,9 @@ int64_t PS4ABI sys_writev(uint32_t fd, const void *iov, int iovcnt) {
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
-  int64_t total = 0;
+  i64 total = 0;
   for (int i = 0; i < iovcnt; ++i) {
-    int64_t r = d->write(segs[i].iov_base, segs[i].iov_len);
+    i64 r = d->write(segs[i].iov_base, segs[i].iov_len);
     if (r < 0)
       return r;
     total += r;
@@ -304,7 +305,7 @@ int64_t PS4ABI sys_writev(uint32_t fd, const void *iov, int iovcnt) {
   return total;
 }
 
-int64_t PS4ABI sys_readv(uint32_t fd, const void *iov, int iovcnt) {
+i64 PS4ABI sys_readv(u32 fd, const void *iov, int iovcnt) {
   auto *segs = static_cast<const sce_iovec *>(iov);
   if (!segs || iovcnt < 0)
     return -SysError::eINVAL;
@@ -312,9 +313,9 @@ int64_t PS4ABI sys_readv(uint32_t fd, const void *iov, int iovcnt) {
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
-  int64_t total = 0;
+  i64 total = 0;
   for (int i = 0; i < iovcnt; ++i) {
-    int64_t r = d->read(segs[i].iov_base, segs[i].iov_len);
+    i64 r = d->read(segs[i].iov_base, segs[i].iov_len);
     if (r < 0)
       return r;
     total += r;
@@ -326,19 +327,19 @@ int64_t PS4ABI sys_readv(uint32_t fd, const void *iov, int iovcnt) {
 // clean end-of-file to the caller: a title that loads through preadv gets empty
 // buffers and no error to notice it by. Offsets advance across the segments and
 // the file position is left alone, like pread/pwrite.
-int64_t PS4ABI sys_preadv(uint32_t fd, const void *iov, int iovcnt,
-                          int64_t offset) {
+i64 PS4ABI sys_preadv(u32 fd, const void *iov, int iovcnt,
+                          i64 offset) {
   auto *segs = static_cast<const sce_iovec *>(iov);
   if (!segs || iovcnt < 0 || offset < 0)
     return -SysError::eINVAL;
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
-  const int64_t saved = d->lseek(0, kSeekCur);
-  int64_t total = 0;
+  const i64 saved = d->lseek(0, kSeekCur);
+  i64 total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     d->lseek(offset + total, kSeekSet);
-    int64_t r = d->read(segs[i].iov_base, segs[i].iov_len);
+    i64 r = d->read(segs[i].iov_base, segs[i].iov_len);
     if (r < 0) {
       if (saved >= 0)
         d->lseek(saved, kSeekSet);
@@ -353,19 +354,19 @@ int64_t PS4ABI sys_preadv(uint32_t fd, const void *iov, int iovcnt,
   return total;
 }
 
-int64_t PS4ABI sys_pwritev(uint32_t fd, const void *iov, int iovcnt,
-                           int64_t offset) {
+i64 PS4ABI sys_pwritev(u32 fd, const void *iov, int iovcnt,
+                           i64 offset) {
   auto *segs = static_cast<const sce_iovec *>(iov);
   if (!segs || iovcnt < 0 || offset < 0)
     return -SysError::eINVAL;
   auto *d = fdToDevice(fd);
   if (!d)
     return -SysError::eBADF;
-  const int64_t saved = d->lseek(0, kSeekCur);
-  int64_t total = 0;
+  const i64 saved = d->lseek(0, kSeekCur);
+  i64 total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     d->lseek(offset + total, kSeekSet);
-    int64_t r = d->write(segs[i].iov_base, segs[i].iov_len);
+    i64 r = d->write(segs[i].iov_base, segs[i].iov_len);
     if (r < 0) {
       if (saved >= 0)
         d->lseek(saved, kSeekSet);
@@ -384,7 +385,7 @@ int64_t PS4ABI sys_pwritev(uint32_t fd, const void *iov, int iovcnt,
 // timed poll into a busy-spin, so honour the caller's timeout by sleeping it
 // first (capped). timeout is in milliseconds; negative means "wait forever",
 // which we treat as the cap rather than hanging.
-int PS4ABI sys_poll(void *fds, uint32_t nfds, int timeout) {
+int PS4ABI sys_poll(void *fds, u32 nfds, int timeout) {
   int ms = timeout;
   if (ms < 0 || ms > 50)
     ms = 50;
@@ -398,12 +399,12 @@ int PS4ABI sys_select(int nfds, void *readfds, void *writefds, void *exceptfds,
   return 0; // zero ready descriptors
 }
 
-int PS4ABI sys_openat(int fd, const char *path, uint32_t flags, uint32_t mode) {
+int PS4ABI sys_openat(int fd, const char *path, u32 flags, u32 mode) {
   return sys_open(path, flags, mode);
 }
 
 int PS4ABI sys_chdir(const char *path) { return 0; }
-int PS4ABI sys_fchdir(uint32_t fd) { return 0; }
+int PS4ABI sys_fchdir(u32 fd) { return 0; }
 
 // The host tree stays read-only. We report success so installers and savedata
 // setup proceed, but log every call: if a title relies on a file it "created"
@@ -423,7 +424,7 @@ int PS4ABI sys_rmdir(const char *path) {
             path ? path : "(null)");
   return 0;
 }
-int PS4ABI sys_mkdir(const char *path, uint32_t mode) {
+int PS4ABI sys_mkdir(const char *path, u32 mode) {
   (void)mode;
   // Real directory creation under a writable mount (savedata); otherwise a
   // no-op success as before (the read-only host content the game expects to
@@ -453,7 +454,7 @@ int PS4ABI sys_unlinkat(int fd, const char *path, int flag) {
 }
 
 // sys_mkdirat (496): identical to mkdir (the dirfd is always AT_FDCWD here).
-int PS4ABI sys_mkdirat(int fd, const char *path, uint32_t mode) {
+int PS4ABI sys_mkdirat(int fd, const char *path, u32 mode) {
   return sys_mkdir(path, mode);
 }
 
@@ -463,8 +464,8 @@ int PS4ABI sys_renameat(int fd_old, const char *old, int fd_new,
   return sys_rename(old, new_);
 }
 
-int64_t PS4ABI sys_getdirentries(uint32_t fd, void *buf, size_t nbytes,
-                                 int64_t *basep) {
+i64 PS4ABI sys_getdirentries(u32 fd, void *buf, size_t nbytes,
+                                 i64 *basep) {
   auto *d = fdToDevice(fd);
   if (!d) {
     if (kVfsTrace)
@@ -474,7 +475,7 @@ int64_t PS4ABI sys_getdirentries(uint32_t fd, void *buf, size_t nbytes,
   // The kernel validates buflen and returns EINVAL on a negative value.
   if (nbytes == 0)
     return -SysError::eINVAL;
-  int64_t r = d->getdents(buf, nbytes);
+  i64 r = d->getdents(buf, nbytes);
   // On success the kernel writes the next directory seek offset to *basep so
   // the caller can resume a partial enumeration. Use the byte count consumed
   // as the cookie: a subsequent getdirentries at this offset reads the next
@@ -488,6 +489,6 @@ int64_t PS4ABI sys_getdirentries(uint32_t fd, void *buf, size_t nbytes,
   return r;
 }
 
-int PS4ABI sys_closefrom(uint32_t lowfd) { return 0; }
+int PS4ABI sys_closefrom(u32 lowfd) { return 0; }
 
 } // namespace krnl

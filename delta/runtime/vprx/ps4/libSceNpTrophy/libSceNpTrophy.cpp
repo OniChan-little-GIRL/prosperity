@@ -8,6 +8,7 @@
  */
 
 #include "libSceNpTrophy.h"
+#include "base/arch.h"
 
 #include <array>
 #include <cstdint>
@@ -34,10 +35,10 @@ constexpr int ERR_INVALID_CONTEXT = 0x80551609;
 constexpr int ERR_EXCEEDS_MAX = 0x8055160B;  // context/handle pool full
 constexpr int ERR_NOT_REGISTERED = 0x8055160F;
 
-constexpr int32_t kInvalid = -1;
+constexpr i32 kInvalid = -1;
 constexpr int kMaxContexts = 8;  // real-lib ceilings
 constexpr int kMaxHandles = 4;
-constexpr int32_t kInvalidTrophyId = -1;
+constexpr i32 kInvalidTrophyId = -1;
 
 std::mutex g_mtx;
 std::array<bool, kMaxContexts> g_ctxUsed{};
@@ -45,10 +46,10 @@ std::array<bool, kMaxContexts> g_ctxReg{};
 std::array<bool, kMaxHandles> g_hndUsed{};
 
 
-bool ctxValid(int32_t c) {
+bool ctxValid(i32 c) {
   return c >= 1 && c <= kMaxContexts && g_ctxUsed[c - 1];
 }
-bool hndValid(int32_t h) {
+bool hndValid(i32 h) {
   return h >= 1 && h <= kMaxHandles && g_hndUsed[h - 1];
 }
 
@@ -58,19 +59,19 @@ bool hndValid(int32_t h) {
 void zeroSized(void *out) {
   if (!out)
     return;
-  uint64_t size = *static_cast<uint64_t *>(out);
-  if (size < sizeof(uint64_t) || size > 0x10000)
+  u64 size = *static_cast<u64 *>(out);
+  if (size < sizeof(u64) || size > 0x10000)
     return;
   std::memset(out, 0, size);
-  *static_cast<uint64_t *>(out) = size;
+  *static_cast<u64 *>(out) = size;
 }
 
 }  // namespace
 
 extern "C" {
 
-int PS4ABI sceNpTrophyCreateContext(int32_t *context, int32_t userId,
-                                    uint32_t serviceLabel, uint64_t options) {
+int PS4ABI sceNpTrophyCreateContext(i32 *context, i32 userId,
+                                    u32 serviceLabel, u64 options) {
   if (!context || options != 0ull)
     return ERR_INVALID_ARGUMENT;
   std::lock_guard<std::mutex> lk(g_mtx);
@@ -88,7 +89,7 @@ int PS4ABI sceNpTrophyCreateContext(int32_t *context, int32_t userId,
   return ERR_EXCEEDS_MAX;
 }
 
-int PS4ABI sceNpTrophyCreateHandle(int32_t *handle) {
+int PS4ABI sceNpTrophyCreateHandle(i32 *handle) {
   if (!handle)
     return ERR_INVALID_ARGUMENT;
   std::lock_guard<std::mutex> lk(g_mtx);
@@ -104,7 +105,7 @@ int PS4ABI sceNpTrophyCreateHandle(int32_t *handle) {
   return ERR_EXCEEDS_MAX;
 }
 
-int PS4ABI sceNpTrophyDestroyContext(int32_t context) {
+int PS4ABI sceNpTrophyDestroyContext(i32 context) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
@@ -113,7 +114,7 @@ int PS4ABI sceNpTrophyDestroyContext(int32_t context) {
   return OK;
 }
 
-int PS4ABI sceNpTrophyDestroyHandle(int32_t handle) {
+int PS4ABI sceNpTrophyDestroyHandle(i32 handle) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!hndValid(handle))
     return ERR_INVALID_HANDLE;
@@ -121,15 +122,15 @@ int PS4ABI sceNpTrophyDestroyHandle(int32_t handle) {
   return OK;
 }
 
-int PS4ABI sceNpTrophyAbortHandle(int32_t handle) {
+int PS4ABI sceNpTrophyAbortHandle(i32 handle) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!hndValid(handle))
     return ERR_INVALID_HANDLE;
   return OK;
 }
 
-int PS4ABI sceNpTrophyRegisterContext(int32_t context, int32_t handle,
-                                      uint64_t options) {
+int PS4ABI sceNpTrophyRegisterContext(i32 context, i32 handle,
+                                      u64 options) {
   if (options != 0ull)
     return ERR_INVALID_ARGUMENT;
   std::lock_guard<std::mutex> lk(g_mtx);
@@ -144,8 +145,8 @@ int PS4ABI sceNpTrophyRegisterContext(int32_t context, int32_t handle,
   return OK;
 }
 
-int PS4ABI sceNpTrophyUnlockTrophy(int32_t context, int32_t handle,
-                                   int32_t trophyId, int32_t *platinumId) {
+int PS4ABI sceNpTrophyUnlockTrophy(i32 context, i32 handle,
+                                   i32 trophyId, i32 *platinumId) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
@@ -159,8 +160,8 @@ int PS4ABI sceNpTrophyUnlockTrophy(int32_t context, int32_t handle,
   return OK;
 }
 
-int PS4ABI sceNpTrophyGetTrophyUnlockState(int32_t context, int32_t handle,
-                                           void *flags, uint32_t *count) {
+int PS4ABI sceNpTrophyGetTrophyUnlockState(i32 context, i32 handle,
+                                           void *flags, u32 *count) {
   if (!flags || !count)
     return ERR_INVALID_ARGUMENT;
   std::lock_guard<std::mutex> lk(g_mtx);
@@ -177,7 +178,7 @@ int PS4ABI sceNpTrophyGetTrophyUnlockState(int32_t context, int32_t handle,
   return OK;
 }
 
-int PS4ABI sceNpTrophyGetGameInfo(int32_t context, int32_t handle, void *details,
+int PS4ABI sceNpTrophyGetGameInfo(i32 context, i32 handle, void *details,
                                   void *data) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!ctxValid(context))
@@ -195,8 +196,8 @@ int PS4ABI sceNpTrophyGetGameInfo(int32_t context, int32_t handle, void *details
   return OK;
 }
 
-int PS4ABI sceNpTrophyGetTrophyInfo(int32_t context, int32_t handle,
-                                    int32_t trophyId, void *details,
+int PS4ABI sceNpTrophyGetTrophyInfo(i32 context, i32 handle,
+                                    i32 trophyId, void *details,
                                     void *data) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!ctxValid(context))
@@ -212,8 +213,8 @@ int PS4ABI sceNpTrophyGetTrophyInfo(int32_t context, int32_t handle,
   return OK;
 }
 
-int PS4ABI sceNpTrophyGetGroupInfo(int32_t context, int32_t handle,
-                                   int32_t groupId, void *details, void *data) {
+int PS4ABI sceNpTrophyGetGroupInfo(i32 context, i32 handle,
+                                   i32 groupId, void *details, void *data) {
   std::lock_guard<std::mutex> lk(g_mtx);
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
@@ -233,7 +234,7 @@ int PS4ABI sceNpTrophyGetGroupInfo(int32_t context, int32_t handle,
 // Icon getters: we ship no trophy icons. The two-call protocol is size-query
 // (buffer == null -> write the byte size) then fetch (buffer != null -> fill).
 // Report a 0-byte icon so callers display nothing instead of erroring/looping.
-static int trophyIcon(void *buffer, uint64_t *size) {
+static int trophyIcon(void *buffer, u64 *size) {
   if (!size)
     return ERR_INVALID_ARGUMENT;
   if (!buffer)
@@ -241,34 +242,34 @@ static int trophyIcon(void *buffer, uint64_t *size) {
   return OK;
 }
 
-int PS4ABI sceNpTrophyGetGameIcon(int32_t context, int32_t handle, void *buffer,
-                                  uint64_t *size) {
+int PS4ABI sceNpTrophyGetGameIcon(i32 context, i32 handle, void *buffer,
+                                  u64 *size) {
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
   return trophyIcon(buffer, size);
 }
 
-int PS4ABI sceNpTrophyGetGroupIcon(int32_t context, int32_t handle,
-                                   int32_t groupId, void *buffer,
-                                   uint64_t *size) {
+int PS4ABI sceNpTrophyGetGroupIcon(i32 context, i32 handle,
+                                   i32 groupId, void *buffer,
+                                   u64 *size) {
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
   return trophyIcon(buffer, size);
 }
 
-int PS4ABI sceNpTrophyGetTrophyIcon(int32_t context, int32_t handle,
-                                    int32_t trophyId, void *buffer,
-                                    uint64_t *size) {
+int PS4ABI sceNpTrophyGetTrophyIcon(i32 context, i32 handle,
+                                    i32 trophyId, void *buffer,
+                                    u64 *size) {
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
   return trophyIcon(buffer, size);
 }
 
-int PS4ABI sceNpTrophyCaptureScreenshot(int32_t a, void *b, void *c) {
+int PS4ABI sceNpTrophyCaptureScreenshot(i32 a, void *b, void *c) {
   return OK;  // no screenshot pipeline; accept and drop
 }
 
-int PS4ABI sceNpTrophyShowTrophyList(int32_t context, int32_t handle) {
+int PS4ABI sceNpTrophyShowTrophyList(i32 context, i32 handle) {
   if (!ctxValid(context))
     return ERR_INVALID_CONTEXT;
   if (!hndValid(handle))

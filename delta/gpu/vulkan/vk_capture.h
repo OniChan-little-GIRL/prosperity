@@ -7,6 +7,7 @@
 // SNAP / RTDUMP knobs, and the directory they land in.
 
 #include <cstdint>
+#include "base/arch.h"
 #include <utl/options.h>
 
 
@@ -17,9 +18,9 @@ namespace gpu::vk {
 // /data/local/tmp). Returned without a trailing slash.
 const char* DumpDir();
 
-void WritePpm(const char* path, const uint8_t* bgra, uint32_t w, uint32_t h);
+void WritePpm(const char* path, const u8* bgra, u32 w, u32 h);
 // Rolling numbered dump, capped at a handful of frames per run.
-void DumpPpm(const uint8_t* bgra, uint32_t w, uint32_t h);
+void DumpPpm(const u8* bgra, u32 w, u32 h);
 
 // Read by the frame path too, so these live here instead of being declared
 // once per translation unit.

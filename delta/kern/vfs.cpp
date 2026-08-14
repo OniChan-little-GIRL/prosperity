@@ -7,6 +7,7 @@
  */
 
 #include <cctype>
+#include "base/arch.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -144,13 +145,13 @@ namespace {
 // the rest of the file machinery like a real file. Read-only.
 struct PfsFileStream final : utl::fileBase {
   std::unique_ptr<VirtualFile> vf;
-  uint64_t pos = 0;
+  u64 pos = 0;
 
   explicit PfsFileStream(std::unique_ptr<VirtualFile> v) : vf(std::move(v)) {}
 
-  uint64_t Read(void *buf, size_t size) override {
-    int64_t n = vf->read(buf, static_cast<int64_t>(pos),
-                         static_cast<int64_t>(size));
+  u64 Read(void *buf, size_t size) override {
+    i64 n = vf->read(buf, static_cast<i64>(pos),
+                         static_cast<i64>(size));
     if (n <= 0)
       return 0;
     // DELTA_PREAD_ZEROPAD: return the FULL requested length even when the read
@@ -165,28 +166,28 @@ struct PfsFileStream final : utl::fileBase {
     // DELTA_SHORTREAD: log every clamped-short provider read (raw n < requested),
     // which is exactly the FIOS2-op-failure trigger, regardless of zeroPad. Cheap:
     // only fires on the anomaly, not on full reads.
-    if (static_cast<uint64_t>(n) < size && kShortRead)
+    if (static_cast<u64>(n) < size && kShortRead)
       BASE_LOGI("shortread", "pos={} req={} got={}{}",
                 (unsigned long long)pos, size, (long long)n,
                 kPreadZeropad ? " (zeropadded->full)" : "");
-    uint64_t reported = kPreadZeropad ? size : static_cast<uint64_t>(n);
+    u64 reported = kPreadZeropad ? size : static_cast<u64>(n);
     pos += reported;
     return reported;
   }
-  uint64_t Write(const void *, size_t) override { return 0; }
-  uint64_t Seek(int64_t off, utl::seekMode whence) override {
-    int64_t np = whence == utl::seekMode::seek_set
+  u64 Write(const void *, size_t) override { return 0; }
+  u64 Seek(i64 off, utl::seekMode whence) override {
+    i64 np = whence == utl::seekMode::seek_set
                      ? off
                      : whence == utl::seekMode::seek_cur
-                           ? static_cast<int64_t>(pos) + off
-                           : static_cast<int64_t>(vf->size()) + off;
+                           ? static_cast<i64>(pos) + off
+                           : static_cast<i64>(vf->size()) + off;
     if (np < 0)
-      return static_cast<uint64_t>(-1);
-    pos = static_cast<uint64_t>(np);
+      return static_cast<u64>(-1);
+    pos = static_cast<u64>(np);
     return pos;
   }
-  uint64_t Tell() override { return pos; }
-  uint64_t GetSize() override { return static_cast<uint64_t>(vf->size()); }
+  u64 Tell() override { return pos; }
+  u64 GetSize() override { return static_cast<u64>(vf->size()); }
   utl::native_handle GetNativeHandle() override { return nullptr; }
   bool IsOpen() override { return true; }
 };
@@ -376,7 +377,7 @@ bool removeFile(const char *path) {
   return std::remove(host.c_str()) == 0;
 }
 
-bool stat(const char *path, int64_t &size, bool &isDir) {
+bool stat(const char *path, i64 &size, bool &isDir) {
   isDir = false;
   if (!path)
     return false;
@@ -393,7 +394,7 @@ bool stat(const char *path, int64_t &size, bool &isDir) {
   if (base::String ov = overlayPath(path); !ov.empty()) {
     utl::File f(ov);
     if (f.IsOpen()) {
-      size = static_cast<int64_t>(f.GetSize());
+      size = static_cast<i64>(f.GetSize());
       return true;
     }
   }
@@ -417,7 +418,7 @@ bool stat(const char *path, int64_t &size, bool &isDir) {
   if (::stat(host.c_str(), &st) != 0)
     return false;
   isDir = S_ISDIR(st.st_mode);
-  size = static_cast<int64_t>(st.st_size);
+  size = static_cast<i64>(st.st_size);
   return true;
 }
 
@@ -425,11 +426,11 @@ static std::string g_titleId;
 void setTitleId(const std::string &id) { g_titleId = id; }
 const std::string &titleId() { return g_titleId; }
 
-static std::map<std::string, std::vector<uint8_t>> g_fileCache;
-void cacheFile(const std::string &key, std::vector<uint8_t> data) {
+static std::map<std::string, std::vector<u8>> g_fileCache;
+void cacheFile(const std::string &key, std::vector<u8> data) {
   g_fileCache[key] = std::move(data);
 }
-const std::vector<uint8_t> *getCachedFile(const char *key) {
+const std::vector<u8> *getCachedFile(const char *key) {
   auto it = g_fileCache.find(key);
   return it == g_fileCache.end() ? nullptr : &it->second;
 }

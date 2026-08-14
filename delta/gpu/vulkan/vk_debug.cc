@@ -3,6 +3,7 @@
  */
 
 #include "gpu/vulkan/vk_debug.h"
+#include "base/arch.h"
 
 #include "gpu/vulkan/vk_device.h"
 #include "gpu/vulkan/vk_trace.h"
@@ -69,7 +70,7 @@ bool DebugUtilsActive() {
   return g_set_name != nullptr;
 }
 
-void NameObject(VkObjectType type, uint64_t handle, const char* fmt, ...) {
+void NameObject(VkObjectType type, u64 handle, const char* fmt, ...) {
   // The name is worth formatting when a capture tool will show it OR when the
   // frame debugger will record it: a barrier that only says "image 0x55..." is
   // unreadable, and the guest name is only known here.

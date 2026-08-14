@@ -10,6 +10,7 @@
 // Elf spec with Sony additions
 
 #include <cstdint>
+#include "base/arch.h"
 
 enum ELFDynTag {
   DT_NULL,   //< end of dyn section
@@ -106,7 +107,7 @@ enum ElfRelType { R_X86_64_JUMP_SLOT = 7 };
 
 enum ElfFlags { PF_X = 1, PF_W = 2, PF_R = 4, PF_MASKPROC = 0xF0000000 };
 
-enum ELFTypeSCE : uint16_t {
+enum ELFTypeSCE : u16 {
   ET_SCE_EXEC = 0xfe00,    // PS4 Executable
   ET_SCE_DYNEXEC = 0xfe10, // PS4 Main module
   ET_SCE_RELEXEC = 0xfe04, // PS4 Relocatable PRX
@@ -114,65 +115,65 @@ enum ELFTypeSCE : uint16_t {
   ET_SCE_DYNAMIC = 0xfe18, // PS4 Dynamic PRX
 };
 
-static constexpr uint32_t ELF_MAGIC = 0x464C457F;
-static constexpr uint16_t ELF_MACHINE_X86_64 = 0x3E;
+static constexpr u32 ELF_MAGIC = 0x464C457F;
+static constexpr u16 ELF_MACHINE_X86_64 = 0x3E;
 
 struct ELFHeader {
-  uint32_t magic;
-  uint8_t ident[12]; // < actually 16
+  u32 magic;
+  u8 ident[12]; // < actually 16
   ELFTypeSCE type;   //< sony custom
-  uint16_t machine;
-  uint32_t version;
-  uint64_t entry;
-  uint64_t phoff; //< program header offset
-  uint64_t shoff; //< does sometimes not exist
-  uint32_t flags;
-  uint16_t ehsize;
-  uint16_t phentsize; //< size in bytes of entries in pg table
-  uint16_t phnum;
-  uint16_t shentsize;
-  uint16_t shnum;
-  uint16_t shstrndx;
+  u16 machine;
+  u32 version;
+  u64 entry;
+  u64 phoff; //< program header offset
+  u64 shoff; //< does sometimes not exist
+  u32 flags;
+  u16 ehsize;
+  u16 phentsize; //< size in bytes of entries in pg table
+  u16 phnum;
+  u16 shentsize;
+  u16 shnum;
+  u16 shstrndx;
 };
 
 struct ELFPgHeader {
-  uint32_t type;  //< data info
-  uint32_t flags; //< memory protection flags
-  uint64_t offset;
-  uint64_t vaddr;
-  uint64_t paddr;
-  uint64_t filesz;
-  uint64_t memsz;
-  uint64_t align;
+  u32 type;  //< data info
+  u32 flags; //< memory protection flags
+  u64 offset;
+  u64 vaddr;
+  u64 paddr;
+  u64 filesz;
+  u64 memsz;
+  u64 align;
 };
 
 struct ELFDyn {
-  int64_t tag;
+  i64 tag;
   union {
-    uint64_t value;
-    uint64_t ptr;
+    u64 value;
+    u64 ptr;
   } un;
 };
 
 struct ElfRel {
-  uint64_t offset;
-  uint64_t info;
-  int64_t addend;
+  u64 offset;
+  u64 info;
+  i64 addend;
 };
 
 struct ElfSym {
-  uint32_t st_name;
-  uint8_t st_info;
-  uint8_t st_other;
-  uint16_t st_shndx;
-  uint64_t st_value;
-  uint64_t st_size;
+  u32 st_name;
+  u8 st_info;
+  u8 st_other;
+  u16 st_shndx;
+  u64 st_value;
+  u64 st_size;
 };
 
 static_assert(sizeof(ELFPgHeader) == 56, "Elf program header size mismatch");
 static_assert(sizeof(ELFHeader) == 64, "Elf header size mismatch");
 
-inline const char *ElfTypeToString(uint32_t type) {
+inline const char *ElfTypeToString(u32 type) {
   switch (type) {
   case ET_SCE_EXEC:
     return "Executable";
@@ -189,7 +190,7 @@ inline const char *ElfTypeToString(uint32_t type) {
   }
 }
 
-inline const char *SegTypeToString(uint32_t type) {
+inline const char *SegTypeToString(u32 type) {
 #define AS_STR(idx)                                                            \
   if (type == idx)                                                             \
     return #idx;

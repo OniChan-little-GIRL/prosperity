@@ -1,4 +1,5 @@
 #include "libSceNetCtl.h"
+#include "base/arch.h"
 
 #include <cstdint>
 #include <cstring>
@@ -6,10 +7,10 @@
 // A single wired ethernet interface with a static LAN config. Values are only
 // read back by titles for display/logging; nothing routes through them.
 namespace {
-constexpr int32_t kStateIpObtained = 3;  // SCE_NET_CTL_STATE_IPOBTAINED
+constexpr i32 kStateIpObtained = 3;  // SCE_NET_CTL_STATE_IPOBTAINED
 
 // SceNetCtlInfo selector codes (the union member each one fills)
-enum : int32_t {
+enum : i32 {
   kInfoDevice = 1,           // u32: 0 = wired
   kInfoEtherAddr = 2,        // u8[6]
   kInfoMtu = 3,              // u32
@@ -38,24 +39,24 @@ constexpr int kErrorInvalidCode = 0x80412102; // SCE_NET_CTL_ERROR_INVALID_CODE
 int PS4ABI sceNetCtlInit() { return 0; }
 int PS4ABI sceNetCtlTerm() { return 0; }
 
-int PS4ABI sceNetCtlGetState(int32_t *state) {
+int PS4ABI sceNetCtlGetState(i32 *state) {
   if (!state)
     return -1;
   *state = kStateIpObtained;
   return 0;
 }
 
-int PS4ABI sceNetCtlGetInfo(int32_t code, void *info) {
+int PS4ABI sceNetCtlGetInfo(i32 code, void *info) {
   if (!info)
     return -1;
   // the union's largest members are 256 bytes
   std::memset(info, 0, 256);
   auto str = [&](const char *s) { std::strcpy(static_cast<char *>(info), s); };
-  auto u32 = [&](uint32_t v) { std::memcpy(info, &v, 4); };
+  auto u32 = [&](u32 v) { std::memcpy(info, &v, 4); };
   switch (code) {
   case kInfoDevice:        u32(0); break;
   case kInfoEtherAddr: {
-    static const uint8_t mac[6] = {0x02, 0x50, 0x54, 0x00, 0x00, 0x01};
+    static const u8 mac[6] = {0x02, 0x50, 0x54, 0x00, 0x00, 0x01};
     std::memcpy(info, mac, 6);
     break;
   }
@@ -84,7 +85,7 @@ int PS4ABI sceNetCtlGetInfo(int32_t code, void *info) {
   return 0;
 }
 
-int PS4ABI sceNetCtlRegisterCallback(void *func, void *arg, int32_t *cid) {
+int PS4ABI sceNetCtlRegisterCallback(void *func, void *arg, i32 *cid) {
   // The state never changes, so the callback never needs to fire; hand out a
   // fixed id for the matching Unregister.
   if (cid)
@@ -92,18 +93,18 @@ int PS4ABI sceNetCtlRegisterCallback(void *func, void *arg, int32_t *cid) {
   return 0;
 }
 
-int PS4ABI sceNetCtlUnregisterCallback(int32_t cid) { return 0; }
+int PS4ABI sceNetCtlUnregisterCallback(i32 cid) { return 0; }
 int PS4ABI sceNetCtlCheckCallback() { return 0; }
 
 // The ForNpToolkit entry points differ only in taking the callback id back
 // through the return value rather than an out pointer; the link never changes
 // state either way, so nothing is ever queued for them to deliver.
 int PS4ABI sceNetCtlRegisterCallbackForNpToolkit(void *func, void *arg,
-                                                 int32_t *cid) {
+                                                 i32 *cid) {
   if (cid)
     *cid = 0;
   return 0;
 }
 
-int PS4ABI sceNetCtlUnregisterCallbackForNpToolkit(int32_t cid) { return 0; }
+int PS4ABI sceNetCtlUnregisterCallbackForNpToolkit(i32 cid) { return 0; }
 int PS4ABI sceNetCtlCheckCallbackForNpToolkit() { return 0; }

@@ -1,5 +1,6 @@
 
 #include <cstdlib>
+#include "base/arch.h"
 /*
  * PS4Delta : PS4 emulation and research project
  *
@@ -54,21 +55,21 @@ int PS4ABI sys_munmap(void *addr, size_t len) {
     // region, frees it and re-reserves an exact sub-range, and a stale pointer
     // into the freed padding then reads memory that is still there instead of
     // faulting where the mistake is.
-    auto *region = proc->getVma().get(static_cast<uint8_t *>(addr));
+    auto *region = proc->getVma().get(static_cast<u8 *>(addr));
     if (region && region->ptr == addr && region->size == len &&
         region->sceProt == 0)
       ::munmap(addr, len);
-    proc->getVma().remove(static_cast<uint8_t *>(addr), len);
-    noteGuestReleased(static_cast<uint8_t *>(addr), len);
-    forgetDmemVa(static_cast<uint8_t *>(addr), len);
+    proc->getVma().remove(static_cast<u8 *>(addr), len);
+    noteGuestReleased(static_cast<u8 *>(addr), len);
+    forgetDmemVa(static_cast<u8 *>(addr), len);
   }
   return 0;
 }
 
 // The guest libc allocates through mmap, so the brk is unused. A benign 0 keeps
 // any stray caller satisfied without handing it a usable region.
-int64_t PS4ABI sys_obreak(void *) { return 0; }
-int64_t PS4ABI sys_sbrk(intptr_t) { return 0; }
+i64 PS4ABI sys_obreak(void *) { return 0; }
+i64 PS4ABI sys_sbrk(intptr_t) { return 0; }
 
 // Anonymous host memory has no file backing, so there is nothing to flush.
 int PS4ABI sys_msync(void *, size_t, int) { return 0; }
@@ -107,21 +108,21 @@ int PS4ABI sys_query_memory_protection(void *addr, void *info) {
   auto *proc = proc::getActive();
   if (!proc || !info)
     return -SysError::eINVAL;
-  auto *region = proc->getVma().get(static_cast<uint8_t *>(addr));
+  auto *region = proc->getVma().get(static_cast<u8 *>(addr));
   if (!region)
     return -SysError::eACCES;
 
-  auto *qp = static_cast<uint8_t *>(info);
+  auto *qp = static_cast<u8 *>(info);
   std::memset(qp, 0, 0x18);
   void *start = region->ptr;
   void *end = region->ptr + region->size;
   // Full SCE prot (with GPU bits) if we kept it, else the host r/w/x bits.
-  uint32_t prot = region->sceProt
+  u32 prot = region->sceProt
                       ? region->sceProt
-                      : static_cast<uint32_t>(region->prot);
+                      : static_cast<u32>(region->prot);
   std::memcpy(qp + 0x00, &start, sizeof(void *));
   std::memcpy(qp + 0x08, &end, sizeof(void *));
-  std::memcpy(qp + 0x10, &prot, sizeof(uint32_t));
+  std::memcpy(qp + 0x10, &prot, sizeof(u32));
   return 0;
 }
 
@@ -141,7 +142,7 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
 
   std::memset(info, 0, infoSize);
   auto *region =
-      proc->getVma().get(const_cast<uint8_t *>(static_cast<const uint8_t *>(addr)));
+      proc->getVma().get(const_cast<u8 *>(static_cast<const u8 *>(addr)));
   if (!region) {
     // Worth seeing: a caller that walks its own heap this way reads the zeroed
     // struct as "not committed" and silently skips the range.
@@ -150,7 +151,7 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
     return -SysError::eACCES;
   }
 
-  auto *vq = static_cast<uint8_t *>(info);
+  auto *vq = static_cast<u8 *>(info);
   void *start = region->ptr;
   void *end = region->ptr + region->size;
   std::memcpy(vq + 0x00, &start, sizeof(void *));
@@ -164,9 +165,9 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
   // scanout buffer unless the offset shares the virtual address's low 16 bits
   // (a tiling-alignment check), so report the VA there; left zero, every
   // scanout register failed.
-  uint64_t offset = region->hasPhys ? region->physOffset
-                                    : reinterpret_cast<uint64_t>(start);
-  std::memcpy(vq + 0x10, &offset, sizeof(uint64_t));
+  u64 offset = region->hasPhys ? region->physOffset
+                                    : reinterpret_cast<u64>(start);
+  std::memcpy(vq + 0x10, &offset, sizeof(u64));
   // GPU-accessible memory (the guest asked for GPU read/write, bits 0x10/0x20)
   // is direct/physical memory in SCE terms: report it as WC_GARLIC (memType 3)
   // with the direct bit set, which is what libSceVideoOut checks before it will
@@ -223,16 +224,16 @@ int PS4ABI sys_virtual_query(const void *addr, int /*flags*/, void *info,
 // 4 = TYPE_PROTECT. The maps must actually commit memory at `start`: SotC
 // batch-maps its GPU pools this way, and with the old ignore-stub the PM4
 // stream referenced VAs that were never backed and the submit faulted.
-int PS4ABI sys_batch_map(uint32_t /*handle*/, uint32_t /*flags*/,
+int PS4ABI sys_batch_map(u32 /*handle*/, u32 /*flags*/,
                          void *entries, int count, int *processed) {
   struct BatchMapEntry {
-    uint64_t start;
-    uint64_t offset;
-    uint64_t length;
-    uint8_t prot;
-    uint8_t type;
-    uint16_t pad;
-    uint32_t operation;
+    u64 start;
+    u64 offset;
+    u64 length;
+    u8 prot;
+    u8 type;
+    u16 pad;
+    u32 operation;
   };
   static_assert(sizeof(BatchMapEntry) == 0x20, "batch-map entry is 32 bytes");
 
@@ -274,14 +275,14 @@ int PS4ABI sys_batch_map(uint32_t /*handle*/, uint32_t /*flags*/,
                          PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd,
                          static_cast<off_t>(op.offset));
         if (p != MAP_FAILED) {
-          pr->getVma().add(reinterpret_cast<uint8_t *>(p), op.length,
+          pr->getVma().add(reinterpret_cast<u8 *>(p), op.length,
                            utl::pageProtection::w);
           break;
         }
       }
-      uint8_t *p = sys_mmap(reinterpret_cast<void *>(op.start), op.length,
+      u8 *p = sys_mmap(reinterpret_cast<void *>(op.start), op.length,
                             op.prot, mFlags::fixed | mFlags::anon,
-                            static_cast<uint32_t>(-1), 0);
+                            static_cast<u32>(-1), 0);
       if (isErrnoPtr(p)) {
         if (processed)
           *processed = done;
@@ -291,7 +292,7 @@ int PS4ABI sys_batch_map(uint32_t /*handle*/, uint32_t /*flags*/,
     }
     case 1: // UNMAP: host pages retained, bookkeeping released (see sys_munmap)
       if (auto *pr = proc::getActive(); pr && op.start && op.length)
-        pr->getVma().remove(reinterpret_cast<uint8_t *>(op.start), op.length);
+        pr->getVma().remove(reinterpret_cast<u8 *>(op.start), op.length);
       break;
     case 2: // PROTECT / TYPE_PROTECT: our flat arena stays permissive; the
     case 4: // title only narrows protections it already owns
@@ -310,8 +311,8 @@ int PS4ABI sys_batch_map(uint32_t /*handle*/, uint32_t /*flags*/,
 // sys_set_vm_container (559): arg == -1 returns the current vm container id;
 // arg 0 or 1 selects it (requires privilege). The kernel validates: unsigned
 // (arg+1) > 2 is EINVAL, and arg > 1 is EINVAL. We track the id (default 0).
-int PS4ABI sys_set_vm_container(uint32_t op) {
-  static std::atomic<uint32_t> current{0};
+int PS4ABI sys_set_vm_container(u32 op) {
+  static std::atomic<u32> current{0};
   if (op == 0xFFFFFFFFu)
     return static_cast<int>(current.load());
   if (op > 1)
@@ -331,8 +332,8 @@ int PS4ABI sys_set_vm_container(uint32_t op) {
 // aliases the same bytes. Without this the two views were independent anonymous
 // pages and the command processor read all-zero DCBs. Falls back to anonymous
 // memory when the backing is unavailable. Returns the mapped VA (rax).
-int64_t PS4ABI sys_mmap_dmem(void *addr, size_t len, int prot, int flags,
-                             int64_t /*packed*/, int64_t physOffset) {
+i64 PS4ABI sys_mmap_dmem(void *addr, size_t len, int prot, int flags,
+                             i64 /*packed*/, i64 physOffset) {
   const bool fixedReq = (flags & 0x10) != 0;
   auto *active = proc::getActive();
   const bool ps5 = active && active->getPlatform() == proc::platform::ps5;
@@ -344,38 +345,38 @@ int64_t PS4ABI sys_mmap_dmem(void *addr, size_t len, int prot, int flags,
               addr, len, prot, flags, (unsigned long long)physOffset,
               fixedReq ? 1 : 0);
   if (fd >= 0 && physOffset >= 0 &&
-      static_cast<uint64_t>(physOffset) + len <= dmemBackingSize()) {
+      static_cast<u64>(physOffset) + len <= dmemBackingSize()) {
     const int mflags = MAP_SHARED | (fixedReq ? MAP_FIXED : 0);
     void *p = ::mmap(addr, len, PROT_READ | PROT_WRITE, mflags, fd,
                      static_cast<off_t>(physOffset));
     if (p != MAP_FAILED) {
-      proc::getActive()->getVma().addDirect(reinterpret_cast<uint8_t *>(p), len,
+      proc::getActive()->getVma().addDirect(reinterpret_cast<u8 *>(p), len,
                                             utl::pageProtection::w,
-                                            static_cast<uint32_t>(prot),
-                                            static_cast<uint64_t>(physOffset));
-      return reinterpret_cast<int64_t>(p);
+                                            static_cast<u32>(prot),
+                                            static_cast<u64>(physOffset));
+      return reinterpret_cast<i64>(p);
     }
   }
   // Fallback: plain anonymous mapping (loses aliasing but keeps the region live).
-  uint8_t *p = sys_mmap(addr, len, PROT_READ | PROT_WRITE,
+  u8 *p = sys_mmap(addr, len, PROT_READ | PROT_WRITE,
                         mFlags::anon | (fixedReq ? mFlags::fixed : 0),
-                        static_cast<uint32_t>(-1), 0);
+                        static_cast<u32>(-1), 0);
   if (isErrnoPtr(p))
     return -SysError::eNOMEM;
   // Still direct memory as far as the guest is concerned: it keys its own heap
   // map off the physical offset the query reports back.
   if (physOffset >= 0)
     proc::getActive()->getVma().addDirect(p, len, utl::pageProtection::w,
-                                          static_cast<uint32_t>(prot),
-                                          static_cast<uint64_t>(physOffset));
-  return reinterpret_cast<int64_t>(p);
+                                          static_cast<u32>(prot),
+                                          static_cast<u64>(physOffset));
+  return reinterpret_cast<i64>(p);
 }
 
-int PS4ABI sys_cpuset(void *, int, int, int64_t, size_t, void *) { return 0; }
+int PS4ABI sys_cpuset(void *, int, int, i64, size_t, void *) { return 0; }
 
 int PS4ABI sys_extend_page_table_pool() { return 0; }
 
-int64_t PS4ABI sys_get_vm_map_timestamp() { return 0; }
+i64 PS4ABI sys_get_vm_map_timestamp() { return 0; }
 
 int PS4ABI sys_get_map_statistics(void *info) {
   if (info)

@@ -4,9 +4,10 @@
 // https://github.com/idc/uplift/blob/master/uplift/src/syscall_error_table.hpp
 
 #include <cstdint>
+#include "base/arch.h"
 
 namespace krnl {
-enum SysError : uint64_t {
+enum SysError : u64 {
   SUCCESS = 0,          // Success!
   ePERM = 1,            // Operation not permitted
   eNOENT = 2,           // No such file or directory
