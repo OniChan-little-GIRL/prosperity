@@ -24,6 +24,7 @@
 
 #include "dcore.h"
 #include "cpu/cpu_backend.h"
+#include "gfx/overlay_log.h"
 #include "gpu/rhi/renderer.h"
 #include "kern/guest_vaspace.h"
 
@@ -129,6 +130,9 @@ static void win32PostInit() {
 EXPORT int dcoreMain(int argc, char **argv) {
   utl::createLogger(true);
   utl::routeBaseLogging();
+  // Before anything logs: the on-screen panel shows the tail of the log, and
+  // the boot lines are the ones worth seeing before a title even presents.
+  gfx::overlayLogAttach();
   // Before anything else: every subsystem below reads its knobs from here, and
   // most latch the value the first time they run.
   utl::initOptions(argc, argv);

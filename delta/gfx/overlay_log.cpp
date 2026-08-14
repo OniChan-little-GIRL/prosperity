@@ -1,0 +1,130 @@
+/*
+ * PS4Delta : PS4 emulation and research project
+ *
+ * The live log panel. See overlay_log.h.
+ */
+#ifndef __ANDROID__
+
+#include <algorithm>
+#include <cstring>
+#include <mutex>
+
+#include <base/memory/unique_pointer.h>
+#include <logger/logger.h>
+
+#include "imgui.h"
+#include "overlay_log.h"
+
+namespace gfx {
+namespace {
+
+// The ring holds exactly what the panel shows. Lines are truncated at capture,
+// so neither the copy in nor the text drawn out depends on the line a title
+// decided to log.
+constexpr uint32_t kLines = 14;
+constexpr uint32_t kLineChars = 200;
+
+struct Line {
+  char text[kLineChars];
+  uint8_t level;
+};
+
+// Held by the logger's backend thread for one memcpy per line, and by the
+// render thread for one snapshot per frame.
+std::mutex g_mutex;
+Line g_lines[kLines];
+uint32_t g_next = 0;  // slot the next line goes in
+uint32_t g_count = 0; // filled slots, saturating at kLines
+bool g_visible = true;
+bool g_attached = false;
+
+class LogPanelSink final : public utl::logBase {
+public:
+  const char *getName() override { return "overlayLog"; }
+
+  void write(const utl::logEntry &entry) override {
+    const char *text = entry.message.c_str();
+    const size_t length =
+        std::min<size_t>(entry.message.length(), kLineChars - 1);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    Line &line = g_lines[g_next];
+    std::memcpy(line.text, text, length);
+    line.text[length] = '\0';
+    line.level = static_cast<uint8_t>(entry.log_level);
+    g_next = (g_next + 1) % kLines;
+    if (g_count < kLines)
+      g_count++;
+  }
+};
+
+ImU32 LevelColour(uint8_t level) {
+  switch (static_cast<utl::logLevel>(level)) {
+  case utl::logLevel::Trace:
+    return IM_COL32(140, 140, 140, 255);
+  case utl::logLevel::Debug:
+    return IM_COL32(120, 200, 255, 255);
+  case utl::logLevel::Warning:
+    return IM_COL32(255, 210, 100, 255);
+  case utl::logLevel::Error:
+    return IM_COL32(255, 110, 110, 255);
+  case utl::logLevel::Critical:
+    return IM_COL32(255, 130, 255, 255);
+  default:
+    return IM_COL32(225, 225, 225, 255);
+  }
+}
+
+}  // namespace
+
+void overlayLogAttach() {
+  if (g_attached)
+    return;
+  g_attached = true;
+  utl::addLogSink(base::MakeUnique<LogPanelSink>());
+}
+
+void overlayLogBuild(uint32_t w, uint32_t h) {
+  if (!g_visible)
+    return;
+
+  Line lines[kLines];
+  uint32_t count = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    count = g_count;
+    // Oldest first: the newest line ends up at the bottom, nearest the corner.
+    const uint32_t oldest = g_count == kLines ? g_next : 0;
+    for (uint32_t i = 0; i < count; i++)
+      lines[i] = g_lines[(oldest + i) % kLines];
+  }
+  if (!count)
+    return;
+
+  ImDrawList *dl = ImGui::GetForegroundDrawList();
+  const float fs = ImGui::GetFontSize();
+  const float pad = 6.0f, lh = fs + 2.0f, margin = 10.0f;
+  const float areaW = std::min(float(w) * 0.42f, 760.0f);
+  const float areaH = pad * 2.0f + lh * count;
+  const ImVec2 tl(float(w) - areaW - margin, float(h) - areaH - margin);
+  const ImVec2 br(tl.x + areaW, tl.y + areaH);
+
+  // Enough dim to read text over a bright frame, with no frame of its own.
+  dl->AddRectFilled(tl, br, IM_COL32(0, 0, 0, 110));
+
+  // Clipping rather than measuring: a long line costs the same as a short one,
+  // and no line can spill out of the dimmed area.
+  dl->PushClipRect(ImVec2(tl.x + pad, tl.y), ImVec2(br.x - pad, br.y), true);
+  float y = tl.y + pad;
+  for (uint32_t i = 0; i < count; i++) {
+    dl->AddText(ImVec2(tl.x + pad, y), LevelColour(lines[i].level),
+                lines[i].text);
+    y += lh;
+  }
+  dl->PopClipRect();
+}
+
+void overlayLogToggle() { g_visible = !g_visible; }
+
+}  // namespace gfx
+
+#endif  // !__ANDROID__

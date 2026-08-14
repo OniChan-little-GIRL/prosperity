@@ -19,6 +19,7 @@
 
 #include "imgui.h"
 #include "overlay.h"
+#include "overlay_log.h"
 
 namespace gfx {
 namespace {
@@ -107,9 +108,9 @@ void overlayBuildFrame(uint32_t w, uint32_t h, uint64_t vramUsed,
   io.DisplaySize = ImVec2((float)w, (float)h);
   io.DeltaTime = 1.0f / 60.0f;
   ImGui::NewFrame();
-  if (g_visible) {
+  if (g_visible)
     buildLegend();
-  }
+  overlayLogBuild(w, h);
   ImGui::Render();
 }
 

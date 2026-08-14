@@ -43,6 +43,7 @@
 #include <string>
 
 #include "overlay.h"
+#include "overlay_log.h"
 #include "overlay_vk.h"
 #include <utl/options.h>
 
@@ -934,6 +935,9 @@ bool pumpEvents() {
     if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
         e.key.scancode == SDL_SCANCODE_F1)
       overlayToggle();
+    if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+        e.key.scancode == SDL_SCANCODE_F2)
+      overlayLogToggle();
     if (e.type == SDL_EVENT_GAMEPAD_ADDED && !g.gamepad)
       g.gamepad = SDL_OpenGamepad(e.gdevice.which);
     if (e.type == SDL_EVENT_GAMEPAD_REMOVED && g.gamepad &&
