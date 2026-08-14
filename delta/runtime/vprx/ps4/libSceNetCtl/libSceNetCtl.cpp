@@ -1,7 +1,6 @@
 #include "libSceNetCtl.h"
 #include "base/arch.h"
 
-#include <cstdint>
 #include <cstring>
 
 // A single wired ethernet interface with a static LAN config. Values are only
@@ -52,23 +51,23 @@ int PS4ABI sceNetCtlGetInfo(i32 code, void *info) {
   // the union's largest members are 256 bytes
   std::memset(info, 0, 256);
   auto str = [&](const char *s) { std::strcpy(static_cast<char *>(info), s); };
-  auto u32 = [&](u32 v) { std::memcpy(info, &v, 4); };
+  auto word = [&](u32 v) { std::memcpy(info, &v, 4); };
   switch (code) {
-  case kInfoDevice:        u32(0); break;
+  case kInfoDevice:        word(0); break;
   case kInfoEtherAddr: {
     static const u8 mac[6] = {0x02, 0x50, 0x54, 0x00, 0x00, 0x01};
     std::memcpy(info, mac, 6);
     break;
   }
-  case kInfoMtu:           u32(1500); break;
-  case kInfoLink:          u32(1); break;
+  case kInfoMtu:           word(1500); break;
+  case kInfoLink:          word(1); break;
   case kInfoBssid:         break; // wired: zeroed
   case kInfoSsid:          break;
   case kInfoWifiSecurity:  break;
   case kInfoRssiDbm:       break;
   case kInfoRssiPercentage:break;
   case kInfoChannel:       break;
-  case kInfoIpConfig:      u32(0); break; // dhcp
+  case kInfoIpConfig:      word(0); break; // dhcp
   case kInfoDhcpHostname:  str("ps4"); break;
   case kInfoPppoeAuthName: break;
   case kInfoIpAddress:     str("192.168.1.100"); break;
@@ -76,7 +75,7 @@ int PS4ABI sceNetCtlGetInfo(i32 code, void *info) {
   case kInfoDefaultRoute:  str("192.168.1.1"); break;
   case kInfoPrimaryDns:    str("8.8.8.8"); break;
   case kInfoSecondaryDns:  str("8.8.4.4"); break;
-  case kInfoHttpProxyConfig: u32(0); break;
+  case kInfoHttpProxyConfig: word(0); break;
   case kInfoHttpProxyServer: break;
   case kInfoHttpProxyPort: break;
   default:

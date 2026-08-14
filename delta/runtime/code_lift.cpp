@@ -111,6 +111,7 @@ bool codeLift::transform(u8 *data, size_t size, u64 base) {
   insn = cs_malloc(handle);
 
   const u8 *codePtr = data; // iterator
+  uint64_t addr = base;     // capstone's own cursor type
   // Executable PT_LOAD segments interleave code with rodata (strings, constants,
   // jump tables) that capstone can't decode. A plain linear sweep stops dead at
   // the first such blob, leaving every later instruction un-lifted; that code
@@ -120,10 +121,10 @@ bool codeLift::transform(u8 *data, size_t size, u64 base) {
   // bail (rather than trap) on anything they don't recognise, so a data byte that
   // briefly mis-decodes as a syscall/fs access is left untouched.
   while (size > 0) {
-    if (!cs_disasm_iter(handle, &codePtr, &size, &base, insn)) {
+    if (!cs_disasm_iter(handle, &codePtr, &size, &addr, insn)) {
       ++codePtr;
       --size;
-      ++base;
+      ++addr;
       continue;
     }
 

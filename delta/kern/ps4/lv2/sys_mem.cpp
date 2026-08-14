@@ -402,12 +402,12 @@ void shmAudioProbeMain(long periodUs) {
       continue;
     for (size_t k = 0; k < kSlots; k++) {
       u8 *slot = ctlRaw + kHdr + k * kStride;
-      auto u32 = [&](size_t o) { return *reinterpret_cast<volatile u32 *>(slot + o); };
-      const u32 bpf = u32(0x08), rate = u32(0x34), grain = u32(0x60);
-      const u32 stype = u32(0x2c), state = u32(0x90);
+      auto word = [&](size_t o) { return *reinterpret_cast<volatile u32 *>(slot + o); };
+      const u32 bpf = word(0x08), rate = word(0x34), grain = word(0x60);
+      const u32 stype = word(0x2c), state = word(0x90);
       if (!bpf || !grain)
         continue;                       // slot never opened
-      if (!u32(0x00))
+      if (!word(0x00))
         continue;                       // no block pending
       u8 *src = nullptr;
       size_t srcSz = 0;

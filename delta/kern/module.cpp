@@ -1044,7 +1044,7 @@ bool smodule::applyRelocations() {
     ElfSym *sym = &symbols[isym];
     i32 bind = ELF64_ST_BIND(sym->st_info);
 
-    u64 symVal = 0;
+    uintptr_t symVal = 0;
 
     if (bind == STB_LOCAL)
       symVal = sym->st_value;

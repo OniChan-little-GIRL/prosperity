@@ -219,19 +219,19 @@ void daemonMain() {
       for (size_t k = 0; k < kSlots; k++) {
         Port &p = ports[k];
         const u8 *slot = ctl.base + kCtlHdr + k * kSlotStride;
-        auto u32 = [&](size_t o) {
+        auto word = [&](size_t o) {
           return *reinterpret_cast<const volatile u32 *>(slot + o);
         };
 
         // Only the low half of the token is tested by the module's submit(), and
         // it is the last thing written, so an acquire fence here pairs with the
         // guest's release and guarantees the block is fully visible.
-        if (u32(kOffToken) == 0)
+        if (word(kOffToken) == 0)
           continue;
         std::atomic_thread_fence(std::memory_order_acquire);
 
-        const u32 bpf = u32(kOffBpf), type = u32(kOffType);
-        const u32 rate = u32(kOffRate), grain = u32(kOffGrain);
+        const u32 bpf = word(kOffBpf), type = word(kOffType);
+        const u32 rate = word(kOffRate), grain = word(kOffGrain);
         if (!plausibleSlot(bpf, type, rate, grain)) {
           if (!p.badFormat) {
             p.badFormat = true;
@@ -251,13 +251,13 @@ void daemonMain() {
         // when every one of those bits is set, so granting the wrong bit
         // deadlocks that thread's whole port set rather than degrading one
         // port. Verify rather than assume.
-        if (u32(kOffIndex) != k) {
+        if (word(kOffIndex) != k) {
           if (!p.badFormat) {
             p.badFormat = true;
             BASE_LOGI("audiod",
                       "slot {} declares port index {} -- refusing to grant, the "
                       "event-flag bit would be wrong",
-                      k, u32(kOffIndex));
+                      k, word(kOffIndex));
           }
           continue;
         }
