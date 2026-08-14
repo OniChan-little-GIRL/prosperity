@@ -17,7 +17,6 @@
 
 #include <array>
 #include "base/arch.h"
-#include <cstdint>
 
 namespace gpu {
 

@@ -17,7 +17,6 @@
  * the terminal, not a mirror of it.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gfx {

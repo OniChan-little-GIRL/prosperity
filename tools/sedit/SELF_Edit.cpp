@@ -1,7 +1,6 @@
 
 // Copyright (C) 2019 Force67
 
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdio>
 #include <memory>

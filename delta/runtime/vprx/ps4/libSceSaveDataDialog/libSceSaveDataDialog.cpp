@@ -21,7 +21,6 @@
 #include "base/arch.h"
 
 #include <atomic>
-#include <cstdint>
 #include <cstring>
 
 namespace {

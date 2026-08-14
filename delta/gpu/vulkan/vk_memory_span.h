@@ -5,7 +5,6 @@
 
 // Aligned free-span allocation used inside one Vulkan device-memory block.
 
-#include <cstdint>
 #include "base/arch.h"
 #include <vector>
 

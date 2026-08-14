@@ -1,6 +1,5 @@
 // Synthetic SELF -> ELF round trip for crypto::self2elf. Mirrors the layout the
 // real fake-pkg eboots use, without needing a pkg fixture.
-#include <cstdint>
 #include "base/arch.h"
 #include <cstring>
 #include <vector>

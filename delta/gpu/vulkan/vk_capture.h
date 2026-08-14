@@ -6,7 +6,6 @@
 // Frame captures written to disk: the PPM writers behind the DELTA_GPU_DUMP /
 // SNAP / RTDUMP knobs, and the directory they land in.
 
-#include <cstdint>
 #include "base/arch.h"
 #include <utl/options.h>
 

@@ -6,7 +6,6 @@
 // Guest index decoding and the host upload policy. Vulkan consumes 16- and
 // 32-bit indices directly; guest 8-bit indices are widened to 16-bit.
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::vk {

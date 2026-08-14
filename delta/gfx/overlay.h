@@ -9,7 +9,6 @@
  * Desktop/Linux only; the Android build has its own touch overlay.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gfx {

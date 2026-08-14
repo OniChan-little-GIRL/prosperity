@@ -19,7 +19,6 @@
 #include "../../vprx.h"
 #include "base/arch.h"
 
-#include <cstdint>
 
 extern "C" {
 int PS4ABI sceSystemServiceReportAbnormalTermination(void *param);

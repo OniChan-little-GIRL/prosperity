@@ -22,7 +22,6 @@
 #include <utl/mem.h>
 #include <utl/mem.h>
 
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 

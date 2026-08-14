@@ -20,7 +20,6 @@
 #include <vulkan/vulkan.h>
 #include "base/arch.h"
 
-#include <cstdint>
 
 #include "gpu/rhi/command.h"
 

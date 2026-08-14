@@ -79,7 +79,6 @@
 
 #include "gfx/gfx_audio.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

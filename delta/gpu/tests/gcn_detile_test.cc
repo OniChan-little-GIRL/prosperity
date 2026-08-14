@@ -1,7 +1,6 @@
 #include <algorithm>
 #include "base/arch.h"
 #include <atomic>
-#include <cstdint>
 #include <vector>
 
 #include <gtest/gtest.h>

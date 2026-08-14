@@ -11,7 +11,6 @@
 #include <vulkan/vulkan.h>
 #include "base/arch.h"
 
-#include <cstdint>
 #include <unordered_map>
 #include <vector>
 

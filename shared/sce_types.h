@@ -9,7 +9,6 @@
  */
 // Sony Elf custom extensions
 
-#include <cstdint>
 #include "base/arch.h"
 
 // increments by 0x10 for each new

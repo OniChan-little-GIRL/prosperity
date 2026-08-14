@@ -13,7 +13,6 @@
  * GPU path is actually built; for now this only compiles as scaffolding.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::ps5 {

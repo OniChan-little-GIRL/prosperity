@@ -1,7 +1,6 @@
 // Opens the gfx window and presents an animated synthetic framebuffer, to
 // exercise the window, Vulkan swapchain and present() path without the emulator.
 // Close the window to exit.
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdio>
 #include <cstdlib>

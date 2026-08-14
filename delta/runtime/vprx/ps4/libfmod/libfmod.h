@@ -13,7 +13,6 @@
 #include "../../vprx.h"
 #include "base/arch.h"
 
-#include <cstdint>
 
 extern "C" {
 // Generic FMOD export stub: returns FMOD_OK (0). Used for every imported NID

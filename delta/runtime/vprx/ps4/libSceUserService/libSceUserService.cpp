@@ -1,7 +1,6 @@
 #include "libSceUserService.h"
 #include "base/arch.h"
 
-#include <cstdint>
 #include <cstring>
 
 // A single fixed local user. The PS4 user service normally tracks PSN/local

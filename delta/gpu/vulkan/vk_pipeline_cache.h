@@ -10,7 +10,6 @@
 #include <vulkan/vulkan.h>
 #include "base/arch.h"
 
-#include <cstdint>
 #include <unordered_map>
 
 #include "gpu/rhi/command.h"

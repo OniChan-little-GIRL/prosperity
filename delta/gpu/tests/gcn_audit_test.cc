@@ -1,6 +1,5 @@
 #include <base/option_file.h>
 #include "base/arch.h"
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string>

@@ -16,7 +16,6 @@
  * user either way.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "services.h"

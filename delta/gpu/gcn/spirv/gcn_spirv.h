@@ -9,7 +9,6 @@
  * gcn_translate.h facade.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"

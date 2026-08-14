@@ -9,7 +9,6 @@
 
 #include <chrono>
 #include "base/arch.h"
-#include <cstdint>
 
 namespace gpu::vk {
 

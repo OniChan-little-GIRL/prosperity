@@ -13,7 +13,6 @@
 
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
 
-#include <cstdint>
 
 namespace {
 constexpr int kAgcUnsupported = 0x8a6c0044;

@@ -13,7 +13,6 @@
 #include <jni.h>
 #include "base/arch.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>

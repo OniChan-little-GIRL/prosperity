@@ -16,7 +16,6 @@
  * assembler.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <map>
 #include <string>

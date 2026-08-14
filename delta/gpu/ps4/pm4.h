@@ -9,7 +9,6 @@
  * Vulkan.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu {

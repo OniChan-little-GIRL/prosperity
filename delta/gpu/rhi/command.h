@@ -11,7 +11,6 @@
  * Addresses are guest addresses (identity-mapped, host-readable).
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::gcn {

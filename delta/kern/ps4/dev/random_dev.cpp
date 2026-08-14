@@ -4,7 +4,6 @@
 
 #include <base.h>
 #include "base/arch.h"
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

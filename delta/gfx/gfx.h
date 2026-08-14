@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include "base/arch.h"
-#include <cstdint>
 
 // SDL3 window backed by a Vulkan swapchain. present() uploads a CPU framebuffer
 // and blits it to the swapchain, scaling to the window size. The VideoOut flip

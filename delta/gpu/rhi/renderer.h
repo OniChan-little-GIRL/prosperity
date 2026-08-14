@@ -21,7 +21,6 @@
 
 #include <cstddef>
 #include "base/arch.h"
-#include <cstdint>
 
 // Spelled from the delta root, the one include convention the layering check
 // (tests/check_layering.py) accepts; all modules share that include root, so

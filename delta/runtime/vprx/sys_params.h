@@ -11,7 +11,6 @@
  * stub), so both copies of the module include this rather than sharing a symbol.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdlib>
 #include <strings.h>

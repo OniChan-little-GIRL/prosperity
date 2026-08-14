@@ -6,7 +6,6 @@
 // Hashing shared by the renderer caches: FNV-1a mixing for descriptor keys, and
 // a content fingerprint for a range of guest memory.
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::vk {

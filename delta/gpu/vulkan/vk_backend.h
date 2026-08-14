@@ -22,7 +22,6 @@
 #include "gpu/vulkan/vk_texture_cache.h"
 #include "gpu/vulkan/vk_upload_ring.h"
 
-#include <cstdint>
 #include <unordered_map>
 #include <vector>
 

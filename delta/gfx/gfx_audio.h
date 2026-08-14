@@ -9,7 +9,6 @@
  * Android (no SDL in the gfx build) these are no-ops for now.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 extern "C" {

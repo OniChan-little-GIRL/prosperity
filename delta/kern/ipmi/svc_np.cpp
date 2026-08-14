@@ -10,7 +10,6 @@
  * before it leaves its boot screen will wait forever.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "services.h"

@@ -10,7 +10,6 @@
  * to come up at all.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "services.h"

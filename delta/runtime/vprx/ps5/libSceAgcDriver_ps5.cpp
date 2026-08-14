@@ -15,7 +15,6 @@
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
 #include "base/arch.h"
 
-#include <cstdint>
 
 namespace {
 // libSceAgc "unsupported" status. The title's own SDK wrappers already return this

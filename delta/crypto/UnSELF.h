@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include "base/arch.h"
-#include <cstdint>
 
 #include <base/containers/vector.h>
 

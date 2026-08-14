@@ -11,7 +11,6 @@
  * regression check for the decoder + recompiler until submission is unblocked.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdio>
 #include <cstring>

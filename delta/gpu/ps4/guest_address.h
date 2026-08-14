@@ -15,7 +15,6 @@
  * bytes are readable right now and costs a syscall. Ask this one first.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::ps4 {

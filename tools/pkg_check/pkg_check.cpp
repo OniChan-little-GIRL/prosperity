@@ -3,7 +3,6 @@
 // eboot.bin into an ELF. Usage: pkg_check <game.pkg> [out.elf]
 #include <algorithm>
 #include "base/arch.h"
-#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>

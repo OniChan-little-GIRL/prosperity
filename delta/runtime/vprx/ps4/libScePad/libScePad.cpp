@@ -7,7 +7,6 @@
 #include "base/arch.h"
 
 #include <chrono>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

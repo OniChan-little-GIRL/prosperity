@@ -9,7 +9,6 @@
 
 #include <condition_variable>
 #include "base/arch.h"
-#include <cstdint>
 #include <mutex>
 #include <thread>
 #include <vector>

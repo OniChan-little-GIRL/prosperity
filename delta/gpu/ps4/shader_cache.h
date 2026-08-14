@@ -17,7 +17,6 @@
  * milliseconds and the working set is bounded by the title's shader count.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"

@@ -18,7 +18,6 @@
  * so a refused dispatch is loud (DELTA_GPU_CSDROPS / DELTA_GPU_CSRES).
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/ps4/liverpool.h"

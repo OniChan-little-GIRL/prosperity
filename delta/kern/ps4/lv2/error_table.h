@@ -3,7 +3,6 @@
 // source:
 // https://github.com/idc/uplift/blob/master/uplift/src/syscall_error_table.hpp
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace krnl {

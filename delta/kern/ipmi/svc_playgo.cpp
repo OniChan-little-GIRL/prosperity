@@ -6,7 +6,6 @@
  * answer as a fully installed title, which is what a whole-pkg mount is.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdlib>
 

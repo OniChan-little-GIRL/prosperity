@@ -17,7 +17,6 @@
  * https://docs.amd.com/v/u/en-US/sea-islands-instruction-set-architecture_0
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <unordered_map>
 #include <unordered_set>

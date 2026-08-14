@@ -17,7 +17,6 @@
 #include "../vprx.h"  // PS4ABI (via <base.h>), MODULE_INIT_PS5
 #include "base/arch.h"
 
-#include <cstdint>
 
 namespace {
 constexpr int kImeNoKeyboard = 0x80bc0004;

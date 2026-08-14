@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include "base/arch.h"
 
 // PS5 (FreeBSD 11 / Prospero) initial-thread setup. Kept out of the PS4 tree so

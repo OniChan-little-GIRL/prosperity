@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include "base/arch.h"
 #include <utl/options.h>
 

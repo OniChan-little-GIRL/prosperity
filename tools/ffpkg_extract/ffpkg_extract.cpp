@@ -2,7 +2,6 @@
 // Ufs2Filesystem reader.
 //   ffpkg_extract <game.ffpkg>                     list every file
 //   ffpkg_extract <game.ffpkg> <relpath> <out>     extract one file
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdio>
 #include <string>

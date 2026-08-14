@@ -15,7 +15,6 @@
  * reference gfx10.3 decoder (src/graphics/shader/recompiler/ShaderDecoder.cpp).
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/gcn/gcn_decode.h"

@@ -15,7 +15,6 @@
 #include <array>
 #include "base/arch.h"
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 
 namespace gpu::gcn {

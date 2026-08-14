@@ -11,7 +11,6 @@
 #include <algorithm>
 #include "base/arch.h"
 #include <cfloat>
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>

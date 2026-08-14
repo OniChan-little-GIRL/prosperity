@@ -1,7 +1,6 @@
 #include <base.h>
 #include "base/arch.h"
 #include <base/logging.h>
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 

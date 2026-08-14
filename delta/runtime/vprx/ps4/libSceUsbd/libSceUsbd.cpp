@@ -1,7 +1,6 @@
 #include "libSceUsbd.h"
 #include "base/arch.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 

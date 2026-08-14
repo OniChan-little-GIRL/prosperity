@@ -13,7 +13,6 @@
 #include "../../vprx.h"
 #include "base/arch.h"
 
-#include <cstdint>
 
 extern "C" {
 

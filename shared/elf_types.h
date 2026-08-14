@@ -9,7 +9,6 @@
  */
 // Elf spec with Sony additions
 
-#include <cstdint>
 #include "base/arch.h"
 
 enum ELFDynTag {

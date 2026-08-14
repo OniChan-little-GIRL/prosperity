@@ -12,7 +12,6 @@
  * The packet walker only says which draw packet arrived.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/ps4/liverpool.h"

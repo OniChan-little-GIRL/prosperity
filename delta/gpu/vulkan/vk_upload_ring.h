@@ -11,7 +11,6 @@
 #include <vulkan/vulkan.h>
 #include "base/arch.h"
 
-#include <cstdint>
 #include <vector>
 
 #include "gpu/gcn/gcn_translate.h"

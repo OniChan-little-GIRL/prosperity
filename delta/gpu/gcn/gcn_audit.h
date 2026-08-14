@@ -26,7 +26,6 @@
  * All hooks are no-ops unless one of the env vars is set.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <cstdio>
 #include <string>

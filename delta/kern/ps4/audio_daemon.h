@@ -20,7 +20,6 @@
 
 #include <cstddef>
 #include "base/arch.h"
-#include <cstdint>
 
 namespace krnl {
 

@@ -1,7 +1,6 @@
 #include "libSceAvPlayer.h"
 #include "base/arch.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <utl/options.h>

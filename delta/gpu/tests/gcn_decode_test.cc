@@ -1,4 +1,3 @@
-#include <cstdint>
 #include "base/arch.h"
 
 #include <gtest/gtest.h>

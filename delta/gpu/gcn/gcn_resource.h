@@ -13,7 +13,6 @@
  * https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/amd/include/asic_reg/gca/gfx_7_2_enum.h
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <memory>
 #include <unordered_map>

@@ -15,7 +15,6 @@
  * rdna_translate.cc; everything downstream is the GFX7 path's code.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"

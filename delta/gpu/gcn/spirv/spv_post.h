@@ -14,7 +14,6 @@
  * pipeline (vs. GCN->GLSL->shaderc).
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <string>
 #include <vector>

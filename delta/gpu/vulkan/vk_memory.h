@@ -9,7 +9,6 @@
 #include <vulkan/vulkan.h>
 #include "base/arch.h"
 
-#include <cstdint>
 #include <unordered_set>
 #include <vector>
 

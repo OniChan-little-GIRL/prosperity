@@ -13,7 +13,6 @@
  * from this directory's own decoder/CFG, so that is what lives here.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 #include "gpu/gcn/gcn_translate.h"

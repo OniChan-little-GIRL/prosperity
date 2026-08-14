@@ -9,7 +9,6 @@
  * content + metrics live in overlay.cpp.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <vector>
 

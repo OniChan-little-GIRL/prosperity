@@ -29,7 +29,6 @@
    THE SOFTWARE.
 */
 
-#include <cstdint>
 
 namespace utl {
 class init_function {

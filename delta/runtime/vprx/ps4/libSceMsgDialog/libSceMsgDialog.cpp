@@ -16,7 +16,6 @@
 #include "base/arch.h"
 
 #include <atomic>
-#include <cstdint>
 
 namespace {
 std::atomic<bool> g_initialized{false};

@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include "base/arch.h"
-#include <cstdint>
 #include <memory>
 #include <type_traits>
 

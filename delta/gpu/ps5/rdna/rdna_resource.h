@@ -9,7 +9,6 @@
  * even in a build without the recompiler backend.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <unordered_map>
 #include <vector>

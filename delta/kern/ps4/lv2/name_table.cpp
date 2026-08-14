@@ -7,7 +7,6 @@
  * in the root of the source tree.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace krnl {

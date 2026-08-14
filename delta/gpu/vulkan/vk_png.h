@@ -9,7 +9,6 @@
 // loop. Self-contained (a small fixed-Huffman deflate), so dumping a render
 // target costs the build no new dependency.
 
-#include <cstdint>
 #include "base/arch.h"
 
 namespace gpu::vk {

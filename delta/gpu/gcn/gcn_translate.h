@@ -13,7 +13,6 @@
  * recompile rather than silently emitting approximate shaders.
  */
 
-#include <cstdint>
 #include "base/arch.h"
 #include <vector>
 
