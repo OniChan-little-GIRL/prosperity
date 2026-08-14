@@ -31,6 +31,9 @@
 namespace {
 DELTA_OPTION(bool, kDingDong, "DELTA_GPU_DINGDONG", false);
 DELTA_OPTION(bool, kGcSubmit, "DELTA_GC_SUBMIT", false);
+// Dwords of async-compute ring executed per queue per FRAME (0 = off).
+DELTA_OPTION(uint32_t, kGcAcbFrame, "DELTA_GPU_ACB_FRAME", 0);
+DELTA_OPTION(uint64_t, kGcSubmitMax, "DELTA_GC_SUBMIT_MAX", 0);
 DELTA_OPTION(bool, kPm4dump, "DELTA_PM4DUMP", false);
 }  // namespace
 
@@ -76,8 +79,13 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
                    descArray, descCount);
     return;
   }
+  // A dozen lines answers "what does a submit look like"; comparing the set of
+  // submitted buffers against something else (which command buffers a title
+  // BUILDS but never submits) needs the whole run.
   static int submitDumps = 0;
-  const bool dumpThis = kGcSubmit && submitDumps++ < 12;
+  const bool dumpThis =
+      kGcSubmit && (kGcSubmitMax == 0 ? submitDumps++ < 12
+                                      : submitDumps++ < (int)kGcSubmitMax);
   if (dumpThis)
     std::fprintf(stderr, "[gc] submit descArray=%p count=%u\n", descArray,
                  descCount);
@@ -107,11 +115,21 @@ extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount) 
   }
 }
 
+extern "C" void prosperity_gc_submit_acb(const void *commands, uint32_t bytes) {
+  gpu::SubmitDcb(commands, bytes);
+}
+
 // LLE flip bridge: /dev/dce owns display-buffer registration and supplies the
 // selected scanout address to /dev/gc when the real GnmDriver submits the frame.
 // endFrame falls back to the last RT if the address was not registered.
+extern "C" void prosperity_gc_drain_acb(uint32_t budget_dw);
+
 extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
                                     int64_t flipArg) {
+  // Execute the async-compute rings once per frame, before the frame ends.
+  // Draining them inside the DingDong handler instead charges a whole backlog
+  // to whichever frame rang the doorbell.
+  prosperity_gc_drain_acb(kGcAcbFrame);
   gpu::EndFrame(scanoutBase);
   if (displayBufferIndex >= 0)
     prosperity_videoout_set_flip(displayBufferIndex, flipArg);

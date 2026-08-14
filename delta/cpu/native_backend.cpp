@@ -109,6 +109,8 @@ uintptr_t makeGuestReturnHook(void *realTarget, uint32_t /*hookId*/,
   return reinterpret_cast<uintptr_t>(realTarget);
 }
 
+uintptr_t makeGuestLockWrapper(void *, void *, void *, const char *) { return 0; }
+
 uintptr_t makeGuestTrampoline(const void *fnBytes, uint32_t /*prologueLen*/,
                               const void * /*continueAt*/) {
   return reinterpret_cast<uintptr_t>(const_cast<void *>(fnBytes));
@@ -127,6 +129,8 @@ uint64_t currentGuestRip() { return 0; }
 uint64_t currentGuestFsBase() { return krnl::threadFsBase(); }
 void guestThreadFsBases(std::vector<uint64_t> & /*out*/) {} // FEX only
 const uint64_t *currentGuestGregs() { return nullptr; }
+
+bool guestGregsFromSignal(const void *, uint64_t[16]) { return false; }
 int faultingSyscall() { return -1; }
 uint64_t reconstructGuestRip(uint64_t) { return 0; }
 bool tryHandleJitSignal(int, void *, void *) { return false; }

@@ -83,15 +83,21 @@ struct Translator {
   Id gfx_buf_type = 0;  // shared Buf { uint data[]; } type (set 2)
   std::unordered_map<uint32_t, Id> gfx_buf_vars;  // binding -> raw-buffer SSBO
   // Indexed by (arrayed ? 1 : 0) | (dref ? 2 : 0) | (3D ? 4 : 0).
-  Id img_types[8] = {};          // sampled 2D / 2D-array / 3D, color / depth
-  Id sampled_types[8] = {};      // corresponding combined image-sampler types
-  Id sampled_ptrs[8] = {};       // UniformConstant pointers to sampled_types
+  // Index: arrayed | dref<<1 | 3d<<2 | integer<<3. An integer-format image
+  // needs its own OpTypeImage (sampled type uint) and yields a uvec4.
+  Id img_types[16] = {};      // sampled 2D / 2D-array / 3D, color / depth
+  Id sampled_types[16] = {};  // corresponding combined image-sampler types
+  Id sampled_ptrs[16] = {};   // UniformConstant pointers to sampled_types
   Id storage_img_types[2] = {};  // storage 2D / 2D-array images
   Id storage_img_ptrs[2] = {};   // UniformConstant pointers to storage images
   bool image_query = false;
   // DELTA_GPU_PSTEX: the most recent image sample, so the PS epilogue can
   // export it instead of the shader's own colour maths (see gcn_spirv.cc).
   Id last_texel = 0;
+  // DELTA_GPU_PSTEX keeps the sampled texel in a Private variable rather than
+  // an SSA value: a sample taken inside a branch does not dominate the shader
+  // epilogue, and using the value directly made the module fail validation.
+  Id last_texel_var = 0;
   Id dbg_file = 0;  // OpString for OpLine pc markers (DELTA_GPU_SHDUMP)
 
   void InitTypes() {
@@ -236,6 +242,33 @@ struct Translator {
   Id VgF(uint32_t i) { return m.Bitcast(t_f, Vg(i)); }
   void SetVgF(uint32_t i, Id f) { SetVg(i, m.Bitcast(t_u, f)); }
 
+  // ---- SGPR spill slots ------------------------------------------------
+  // A shader out of scalar registers parks scalars in the LANES of a VGPR with
+  // v_writelane_b32 and reloads them with v_readlane_b32. Both scalar operands
+  // of that pair are wave-uniform by encoding -- neither the value nor the
+  // lane may be a VGPR -- so every invocation writes and reads exactly the
+  // same thing, and a Private array per spilled VGPR reproduces the wave's
+  // lane file exactly, with no cross-lane channel and no lane index. That
+  // matters most in a graphics stage, where no lane index exists at all: the
+  // old lowering dropped every write whose lane was not 0 and answered every
+  // read with the invocation's own value, and SotC restores descriptor-table
+  // pointers this way.
+  // Populated by PlanLaneSpills before the body is translated, so a reload
+  // that textually precedes its spill still resolves here.
+  std::unordered_set<uint32_t> spill_vgprs;
+  std::unordered_map<uint32_t, Id> spill_vars;
+  bool IsSpillVgpr(uint32_t v) const { return spill_vgprs.count(v) != 0; }
+  Id SpillAt(uint32_t vgpr, Id lane) {
+    Id& var = spill_vars[vgpr];
+    if (!var) {
+      const Id arr = m.TypeArray(t_u, 64);
+      var = m.Variable(m.TypePointer(spv::StorageClass::Private, arr),
+                       spv::StorageClass::Private, m.ConstNull(arr));
+      m.Name(var, "lane_spill");
+    }
+    return m.AccessChain(p_priv_u, var, {And(lane, U32(63))});
+  }
+
   // ---- constants ----
   Id U32(uint32_t v) { return m.ConstU32(v); }
   Id F32(float v) { return m.ConstF32(v); }
@@ -244,6 +277,16 @@ struct Translator {
   Id Ext1(uint32_t op, Id a) { return m.ExtInst(t_f, op, {a}); }
   Id Ext2(uint32_t op, Id a, Id b) { return m.ExtInst(t_f, op, {a, b}); }
   Id FMul(Id a, Id b) { return m.Emit(spv::Op::OpFMul, t_f, {a, b}); }
+  // GCN's V_*_LEGACY_F32 multiply: zero times anything is zero, including
+  // inf and NaN, where IEEE gives NaN. Shaders rely on it to kill a term
+  // guarded by a reciprocal that may have divided by zero.
+  Id LegacyMul(Id a, Id b) {
+    const Id zero = F32(0.f);
+    const Id any_zero = m.Emit(spv::Op::OpLogicalOr, t_bool,
+                               {m.Emit(spv::Op::OpFOrdEqual, t_bool, {a, zero}),
+                                m.Emit(spv::Op::OpFOrdEqual, t_bool, {b, zero})});
+    return SelectF(any_zero, zero, FMul(a, b));
+  }
   Id FAdd(Id a, Id b) { return m.Emit(spv::Op::OpFAdd, t_f, {a, b}); }
   Id FSub(Id a, Id b) { return m.Emit(spv::Op::OpFSub, t_f, {a, b}); }
   Id FDiv(Id a, Id b) { return m.Emit(spv::Op::OpFDiv, t_f, {a, b}); }
@@ -525,6 +568,20 @@ inline void SeedPsInputVgprs(Translator& t,
 // Per-stage state carried into the shared per-instruction emitter (EmitInst).
 struct StageContext {
   bool is_ps = false;
+  // SPI_PS_INPUT_CNTL_0..31: which VS PARAMETER EXPORT each PS input attribute
+  // slot reads (OFFSET, bits [5:0]). The mapping is NOT the identity -- a VS
+  // commonly exports the clip position as param0 and the real texture
+  // coordinate as param1, and points the PS's attr0 at param1. Null means no
+  // mapping was supplied and attr_i falls back to param_i.
+  const uint32_t* ps_in_cntl = nullptr;
+  // SPI_PS_IN_CONTROL.NUM_INTERP: how many of those 32 slots are MEANINGFUL.
+  // Slots at or above it are don't-care and read 0, which is not a mapping --
+  // honouring them would send every such attribute to Location 0.
+  uint32_t ps_num_interp = 0;
+  // The VS parameter exports that actually EXIST, ascending. OFFSET indexes the
+  // parameter CACHE, which packs exports densely in export order, so OFFSET is
+  // the param NUMBER only when the exports happen to be dense.
+  const std::vector<uint32_t>* vs_exported_params = nullptr;
   bool is_cs = false;
   Recompiled* r = nullptr;
   std::vector<Id>* iface = nullptr;
@@ -558,6 +615,11 @@ struct StageContext {
 
   // PS
   Id color_outs[8] = {};  // lazily declared per MRT target (location == target)
+  // Bit n set = MRT n is an integer-format target, so its output is declared
+  // uvec4 and the export stores raw VGPR bits instead of reinterpreting them
+  // as floats. Bit n of tex_uint_mask says the same for sampler binding n.
+  uint32_t mrt_uint_mask = 0;
+  uint32_t tex_uint_mask = 0;
   Id depth_out = 0;       // MRTZ -> FragDepth (lazily declared)
   std::unordered_map<uint32_t, Id> in_vars;
   bool wrote_color = false;  // compile-time: shader has a color export
@@ -626,6 +688,9 @@ struct StageContext {
   // The idiom that would break it is mbcnt applied to EXEC (a compaction
   // index), where lanes share and reuse slots over time.
   spv::StorageClass lds_storage = spv::StorageClass::Workgroup;
+  // pcs of the DS instructions whose address is proven to be the lane's own
+  // slot, so Private storage answers them exactly (PlanDsOwnLane).
+  std::unordered_set<uint32_t> ds_own_lane;
   Id subgroup_local_id = 0;     // SubgroupLocalInvocationId for DS swizzles
   // Instruction indices (sorted) at which a workgroup barrier must be emitted
   // because the guest compiler omitted one it was entitled to omit on a
@@ -692,6 +757,19 @@ void EmitVopc(Translator& t,
               Id s0_hi = 0,
               Id s1_hi = 0);
 bool IsVop3b(uint32_t op);
+// The VGPRs a shader uses as SGPR spill areas: every v_writelane_b32
+// destination, including the VOP3 form. See Translator::spill_vgprs.
+std::unordered_set<uint32_t> PlanLaneSpills(const Program& program,
+                                            const uint8_t* reachable = nullptr);
+// v_readlane_b32 / v_writelane_b32 against such a VGPR, which is exact in
+// every stage. False when the VGPR is not a spill area, leaving the general
+// cross-lane lowering to answer the instruction.
+bool EmitLaneSpill(Translator& t,
+                   uint32_t op,
+                   uint32_t dst,
+                   uint32_t src0,
+                   uint32_t src1,
+                   uint32_t literal);
 bool EmitNeoVop1(Translator& t, const Inst& inst);
 bool EmitNeoVop2(Translator& t, const Inst& inst);
 bool EmitNeoVopc(Translator& t,

@@ -40,11 +40,18 @@ DELTA_OPTION(bool, kDumpUpload, "DELTA_GPU_TEXDUMP_UPLOAD", false);
 DELTA_OPTION(bool, kForceWhite, "DELTA_GPU_FORCEWHITE", false);
 DELTA_OPTION(bool, kNoDetile, "DELTA_GPU_NODETILE", false);
 DELTA_OPTION(bool, kTexDump, "DELTA_GPU_TEXDUMP", false);
+DELTA_OPTION(uint64_t, kDumpBase, "DELTA_GPU_TEXDUMP_BASE", 0);
+DELTA_OPTION(bool, kForceNearest, "DELTA_GPU_FORCENEAREST", false);
 DELTA_OPTION(bool, kTexFail, "DELTA_GPU_TEXFAIL", false);
 DELTA_OPTION(bool, kTexMiss, "DELTA_GPU_TEXMISS", false);
+DELTA_OPTION(bool, kIntegerRt, "DELTA_GPU_INT_RT", true);
 DELTA_OPTION(bool, kTexRaw, "DELTA_GPU_TEXRAW", false);
 DELTA_OPTION(uint64_t, kTexWatch, "DELTA_GPU_TEXWATCH", 0);
 DELTA_OPTION(int, kTexCensus, "DELTA_GPU_TEXCENSUS", 0);
+// DELTA_GPU_FORCELOD=<n>: clamp every sampler to mip n. A streamed title
+// uploads its mip chain progressively, so "this surface is fine" from a
+// close-up view says nothing about the levels a minified one samples.
+DELTA_OPTION(int, kForceLod, "DELTA_GPU_FORCELOD", -1);
 }  // namespace
 
 namespace gpu::vk {
@@ -93,10 +100,12 @@ struct SamplerKey {
   bool valid = false;
   bool force_lod_zero = false;
   bool depth_compare = false;
+  // Vulkan permits only NEAREST filtering on an integer-format image.
+  bool integer = false;
   bool operator==(const SamplerKey& o) const {
     return valid == o.valid && image_min_lod == o.image_min_lod &&
            force_lod_zero == o.force_lod_zero &&
-           depth_compare == o.depth_compare &&
+           depth_compare == o.depth_compare && integer == o.integer &&
            std::memcmp(raw, o.raw, sizeof(raw)) == 0;
   }
 };
@@ -109,6 +118,7 @@ struct SamplerKeyHash {
     h = HashWord(h, k.image_min_lod);
     h = HashWord(h, k.force_lod_zero);
     h = HashWord(h, k.depth_compare);
+    h = HashWord(h, k.integer);
     return static_cast<size_t>(h);
   }
 };
@@ -265,6 +275,10 @@ TexKey TextureKey(uint64_t base,
   key.sampler.image_min_lod = min_lod;
   key.sampler.force_lod_zero = force_lod_zero;
   key.sampler.depth_compare = depth_compare;
+  // An integer-format view may only be sampled with NEAREST (no format feature
+  // for linear filtering); the multi-binding path already keys this, and the
+  // single-texture path has to agree or the same descriptor is rejected.
+  key.sampler.integer = kIntegerRt && (nfmt == 4 || nfmt == 5);
   key.arrayed = arrayed;
   return key;
 }
@@ -285,6 +299,52 @@ bool UploadTexPixelsImmediate(VkImage img,
                               uint32_t texel_h,
                               bool is_3d = false);  // defined below
 void ClearMultiTexCache();
+
+// Put the 1x1 depth default into DEPTH_READ_ONLY_OPTIMAL holding 1.0.
+void ClearDepthDefaultToFar() {
+  VkCommandBufferAllocateInfo ca{
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+  ca.commandPool = g_dev.pool;
+  ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  ca.commandBufferCount = 1;
+  VkCommandBuffer c = VK_NULL_HANDLE;
+  if (vkAllocateCommandBuffers(g_dev.device, &ca, &c) != VK_SUCCESS)
+    return;
+  VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(c, &bi);
+  VkImageMemoryBarrier b0{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  b0.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  b0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  b0.image = g_tex.depth_default_img;
+  b0.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+  b0.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  b0.srcQueueFamilyIndex = b0.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &b0);
+  const VkClearDepthStencilValue far{1.0f, 0};
+  const VkImageSubresourceRange sr{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+  vkCmdClearDepthStencilImage(c, g_tex.depth_default_img,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &far, 1,
+                              &sr);
+  VkImageMemoryBarrier b1 = b0;
+  b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  b1.newLayout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+  b1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  b1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &b1);
+  vkEndCommandBuffer(c);
+  VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  si.commandBufferCount = 1;
+  si.pCommandBuffers = &c;
+  if (vkResetFences(g_dev.device, 1, &g_dev.fence) == VK_SUCCESS &&
+      vkQueueSubmit(g_dev.queue, 1, &si, g_dev.fence) == VK_SUCCESS)
+    vkWaitForFences(g_dev.device, 1, &g_dev.fence, VK_TRUE, UINT64_MAX);
+  vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
+}
 
 bool CreateTextureDescriptors() {
   if (g_tex.descriptors_ready)
@@ -394,6 +454,37 @@ bool CreateTextureDescriptors() {
       g_image_memory.Free(g_dev, g_tex.white_3d_allocation);
       g_tex.white_3d_img = VK_NULL_HANDLE;
       return false;
+    }
+    // 1x1 D32 "far plane" for a compare sample that cannot resolve to a real
+    // depth surface (see TextureBindings::depth_default_view).
+    {
+      VkImageCreateInfo di{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      di.imageType = VK_IMAGE_TYPE_2D;
+      di.format = VK_FORMAT_D32_SFLOAT;
+      di.extent = {1, 1, 1};
+      di.mipLevels = 1;
+      di.arrayLayers = 1;
+      di.samples = VK_SAMPLE_COUNT_1_BIT;
+      di.tiling = VK_IMAGE_TILING_OPTIMAL;
+      di.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+      di.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      if (vkCreateImage(g_dev.device, &di, nullptr,
+                        &g_tex.depth_default_img) == VK_SUCCESS &&
+          g_image_memory.Allocate(g_dev, g_tex.depth_default_img,
+                                  g_tex.depth_default_allocation)) {
+        VkImageViewCreateInfo dv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        dv.image = g_tex.depth_default_img;
+        dv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        dv.format = VK_FORMAT_D32_SFLOAT;
+        dv.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(g_dev.device, &dv, nullptr,
+                              &g_tex.depth_default_view) != VK_SUCCESS)
+          g_tex.depth_default_view = VK_NULL_HANDLE;
+        else
+          ClearDepthDefaultToFar();
+      }
     }
     VkImageViewCreateInfo wv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     wv.image = g_tex.white_img;
@@ -548,13 +639,21 @@ VkSampler SamplerFor(const SamplerKey& key) {
   ci.addressModeU = address_mode(key.raw[0]);
   ci.addressModeV = address_mode(key.raw[0] >> 3);
   ci.addressModeW = address_mode(key.raw[0] >> 6);
-  uint32_t mag = (key.raw[2] >> 20) & 3;
-  uint32_t min = (key.raw[2] >> 22) & 3;
-  ci.magFilter = (mag & 1) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-  ci.minFilter = (min & 1) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+  // DELTA_GPU_FORCENEAREST=1: diagnostic only. Force point sampling everywhere,
+  // to separate "this pass reads the texel it addresses" from "its 2x2 bilinear
+  // footprint straddles a neighbour". A pass that thresholds on what it samples
+  // behaves completely differently under the two, and nothing else distinguishes
+  // them from outside the shader.
+  uint32_t mag = kForceNearest ? 0u : (key.raw[2] >> 20) & 3;
+  uint32_t min = kForceNearest ? 0u : (key.raw[2] >> 22) & 3;
+  ci.magFilter = (mag & 1) && !key.integer ? VK_FILTER_LINEAR
+                                           : VK_FILTER_NEAREST;
+  ci.minFilter = (min & 1) && !key.integer ? VK_FILTER_LINEAR
+                                           : VK_FILTER_NEAREST;
   uint32_t mip_filter = (key.raw[2] >> 26) & 3;
-  ci.mipmapMode = mip_filter == 2 ? VK_SAMPLER_MIPMAP_MODE_LINEAR
-                                  : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  ci.mipmapMode = mip_filter == 2 && !key.integer
+                      ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                      : VK_SAMPLER_MIPMAP_MODE_NEAREST;
   if (mip_filter) {
     uint32_t min_lod = std::max(key.raw[1] & 0xFFF, key.image_min_lod);
     ci.minLod = static_cast<float>(min_lod) / 256.0f;
@@ -563,6 +662,8 @@ VkSampler SamplerFor(const SamplerKey& key) {
   }
   if (key.force_lod_zero)
     ci.minLod = ci.maxLod = 0.0f;
+  if (kForceLod >= 0)
+    ci.minLod = ci.maxLod = static_cast<float>(kForceLod.get());
   int32_t bias = static_cast<int32_t>(key.raw[2] << 18) >> 18;
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(g_dev.phys, &props);
@@ -669,6 +770,35 @@ void PackTexPixels(uint8_t* linear,
     }
     linear_offset += layer_bytes * layout.layers;
   }
+  // DELTA_GPU_TEXDUMP_BASE=<guest addr>: write the post-detile mip 0 of ONE
+  // named texture to <dumpdir>/tex_<addr>.bin, whatever its size or format.
+  // The size-capped text dump below cannot reach a 2048x2048 compressed
+  // atlas, and a light cookie's decoded ALPHA is what shapes P.T.'s light
+  // pools -- there is no way to tell a ragged cookie from a ragged decode of
+  // a smooth one without looking at the texels.
+  // Dump the LAST upload seen, not the first: a once-only guard reports the
+  // state at first sample, which for a surface the title fills later is zero
+  // and says nothing about what the shader eventually reads.
+  if (kDumpBase && base == kDumpBase.get()) {
+    {
+      char dp[256];
+      std::snprintf(dp, sizeof(dp), "%s/tex_%lx.bin", DumpDir(),
+                    (unsigned long)base);
+      if (FILE* df = std::fopen(dp, "wb")) {
+        std::fwrite(linear, 1,
+                    static_cast<size_t>(layout.mips[0].width) *
+                        layout.mips[0].height * elem,
+                    df);
+        std::fclose(df);
+      }
+      std::fprintf(stderr,
+                   "[texdumpbase] %#lx mip0 %ux%u texel=%ux%u elem=%u "
+                   "tiling=%u mips=%u -> %s\n",
+                   (unsigned long)base, layout.mips[0].width,
+                   layout.mips[0].height, texel_w, texel_h, elem,
+                   layout.tiling_idx, layout.mip_levels, dp);
+    }
+  }
   // DELTA_GPU_TEXDUMP_UPLOAD: dump the post-detile pixels that Vulkan
   // receives. This differs from DELTA_GPU_TEXDUMP, which inspects raw guest
   // memory and is intentionally useful for spotting tiling rather than
@@ -750,6 +880,18 @@ void PackTexPixels(uint8_t* linear,
         std::fputc(p[2], file);
       }
       std::fclose(file);
+    }
+    if (texel_w == 1024 && texel_h == 2048) {
+      char alpha_path[256];
+      std::snprintf(alpha_path, sizeof(alpha_path),
+                    "%s/tex_upload_alpha_%#lx.pgm", DumpDir(),
+                    (unsigned long)base);
+      if (FILE* alpha = std::fopen(alpha_path, "wb")) {
+        std::fprintf(alpha, "P5\n%u %u\n255\n", texel_w, texel_h);
+        for (uint64_t i = 0; i < pixels; i++)
+          std::fputc(linear[i * 4 + 3], alpha);
+        std::fclose(alpha);
+      }
     }
     std::fprintf(stderr,
                  "[texupload] %d base=%#lx %ux%u rgb=%lu alpha=%lu/%lu -> %s\n",
@@ -1029,14 +1171,29 @@ VkDescriptorSet GetTexture(uint64_t base,
       vkGetPhysicalDeviceProperties(g_dev.phys, &props);
       max_3d = props.limits.maxImageDimension3D;
     }
-    if (!depth || depth > max_3d || w > max_3d || h > max_3d)
+    if (!depth || depth > max_3d || w > max_3d || h > max_3d) {
+      if (kTexFail) {
+        static int n = 0;
+        if (n++ < 12)
+          std::fprintf(stderr,
+                       "[texfail] volume %#lx %ux%ux%u (device max %u)\n",
+                       (unsigned long)base, w, h, depth, max_3d);
+      }
       return VK_NULL_HANDLE;
+    }
     layers = 1;
   } else {
     depth = 1;
   }
-  if (!layers || base_array >= layers)
+  if (!layers || base_array >= layers) {
+    if (kTexFail) {
+      static int n = 0;
+      if (n++ < 12)
+        std::fprintf(stderr, "[texfail] layers %#lx layers=%u base_array=%u\n",
+                     (unsigned long)base, layers, base_array);
+    }
     return VK_NULL_HANDLE;
+  }
   view_layers = std::min(view_layers, layers - base_array);
   if (!arrayed)
     view_layers = 1;
@@ -1197,14 +1354,35 @@ VkDescriptorSet GetTexture(uint64_t base,
     // Mapping probes are syscall-heavy. Perform one alongside the
     // once-per-frame content validation rather than on every draw that reuses
     // this image.
-    if (!gpu::IsReadableRange(base, footprint))
+    if (!gpu::IsReadableRange(base, footprint)) {
+      // The commonest way a binding ends up on the white fallback, and until
+      // now the only silent one: the descriptor is fine, the memory behind it
+      // just is not mapped (yet).
+      if (kTexFail) {
+        static int n = 0;
+        if (n++ < 12)
+          std::fprintf(stderr,
+                       "[texfail] unmapped %#lx %ux%ux%u tiling=%u mips=%u "
+                       "footprint=%lu\n",
+                       (unsigned long)base, w, h, is_3d ? depth : layers,
+                       tiling, mip_levels, (unsigned long)footprint);
+      }
       return VK_NULL_HANDLE;
+    }
     hsh = TexHash(base, footprint);
     if (image_it != g_tex_images.end() && image_it->second.hash != hsh) {
       if (!RecordTexPixels(image_it->second.image,
                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, base,
-                           layout, w, h, is_3d))
+                           layout, w, h, is_3d)) {
+        if (kTexFail) {
+          static int n = 0;
+          if (n++ < 12)
+            std::fprintf(stderr, "[texfail] refresh %#lx %ux%ux%u tiling=%u\n",
+                         (unsigned long)base, w, h, is_3d ? depth : layers,
+                         tiling);
+        }
         return VK_NULL_HANDLE;
+      }
       image_it->second.hash = hsh;
     }
   }
@@ -1250,6 +1428,13 @@ VkDescriptorSet GetTexture(uint64_t base,
     }
     if (!RecordTexPixels(image_entry.image, VK_IMAGE_LAYOUT_UNDEFINED, base,
                          layout, w, h, is_3d)) {
+      if (kTexFail) {
+        static int n = 0;
+        if (n++ < 12)
+          std::fprintf(stderr, "[texfail] upload %#lx %ux%ux%u tiling=%u\n",
+                       (unsigned long)base, w, h, is_3d ? depth : layers,
+                       tiling);
+      }
       vkDestroyImage(g_dev.device, image_entry.image, nullptr);
       g_image_memory.Free(g_dev, image_entry.allocation);
       return VK_NULL_HANDLE;
@@ -1300,8 +1485,15 @@ VkDescriptorSet GetTexture(uint64_t base,
   e.set = AllocateSamplerSet(g_tex.ds_layout, false, e.pool);
   if (!e.set)
     return VK_NULL_HANDLE;
-  VkDescriptorImageInfo dii{SamplerFor(key.sampler), view_it->second.view,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+  // See GetMultiTexSet: a guest texture is never a depth format, so a compare
+  // sample of one reads the far-plane default rather than an undefined
+  // comparison against a colour view.
+  const bool cmp_default = key.sampler.depth_compare && g_tex.depth_default_view;
+  VkDescriptorImageInfo dii{
+      SamplerFor(key.sampler),
+      cmp_default ? g_tex.depth_default_view : view_it->second.view,
+      cmp_default ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
   VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
   wr.dstSet = e.set;
   wr.descriptorCount = 1;
@@ -1322,21 +1514,41 @@ bool GuestTextureUploadSupported(uint32_t dfmt, uint32_t nfmt) {
 }
 
 VkImageView TexViewFor(const DrawInfo::DrawTex& t) {
-  if (!t.base || !t.w || !t.h || !GuestTextureUploadSupported(t.dfmt, t.nfmt))
+  // Each exit here leaves the binding on the white fallback, so each one needs
+  // to be able to say so (DELTA_GPU_TEXFAIL) -- an unsupported format and an
+  // unmapped surface look identical from the draw side.
+  const auto fail = [&](const char* why) {
+    if (kTexFail) {
+      static int n = 0;
+      if (n++ < 16)
+        std::fprintf(stderr,
+                     "[texfail] %s %#lx %ux%ux%u dfmt=%u nfmt=%u tiling=%u "
+                     "mips=%u 3d=%d arr=%d\n",
+                     why, (unsigned long)t.base, t.w, t.h,
+                     t.is_3d ? t.depth : t.layers, t.dfmt, t.nfmt, t.tiling,
+                     t.mip_levels, (int)t.is_3d, (int)t.arrayed);
+    }
     return VK_NULL_HANDLE;
+  };
+  if (!t.base || !t.w || !t.h)
+    return fail("degenerate");
+  if (!GuestTextureUploadSupported(t.dfmt, t.nfmt))
+    return fail("format");
   if (GetTexture(t.base, t.w, t.h, t.dfmt, t.nfmt, t.tiling, t.pitch, t.layers,
                  t.base_array, t.view_layers, t.mip_levels, t.base_mip,
                  t.view_mips, t.min_lod, t.pow2_pad, t.sampler, t.sampler_valid,
                  t.arrayed, t.force_lod_zero, t.depth_compare, t.swizzle,
                  t.depth, t.is_3d) == VK_NULL_HANDLE)
-    return VK_NULL_HANDLE;
+    return fail("get-texture");
   TexKey key = TextureKey(
       t.base, t.w, t.h, t.dfmt, t.nfmt, TextureTiling(t.tiling), t.pitch,
       t.layers, t.base_array, t.view_layers, t.mip_levels, t.base_mip,
       t.view_mips, t.min_lod, t.pow2_pad, t.sampler, t.sampler_valid, t.arrayed,
       t.force_lod_zero, t.depth_compare, t.swizzle, t.depth, t.is_3d);
   auto it = g_tex_views.find(TextureViewKey(key));
-  return it != g_tex_views.end() ? it->second.view : VK_NULL_HANDLE;
+  if (it == g_tex_views.end())
+    return fail("no-view");
+  return it->second.view;
 }
 
 // An N-sampler descriptor set (set 0, bindings 0..kMaxTex-1) for a recomp PS
@@ -1427,7 +1639,8 @@ void ReleaseRetiredTextures() {
 VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
                                VkDescriptorSetLayout set_layout,
                                const VkImageView* resolved_views,
-                               const VkImageLayout* resolved_layouts) {
+                               const VkImageLayout* resolved_layouts,
+                               const uint64_t* depth_src) {
   MultiTexKey key;
   key.num_texs = std::min(d.num_texs, kMaxTex);
   for (uint32_t i = 0; i < key.num_texs; i++) {
@@ -1507,10 +1720,31 @@ VkDescriptorSet GetMultiTexSet(const DrawInfo& d,
       std::memcpy(sampler.raw, d.texs[i].sampler, sizeof(sampler.raw));
       sampler.image_min_lod = d.texs[i].min_lod;
       sampler.force_lod_zero = d.texs[i].force_lod_zero;
-      sampler.depth_compare = d.texs[i].depth_compare;
+      // A depth comparison is only defined on a view whose format supports
+      // it. This binding may have resolved to a colour target instead of the
+      // depth surface the guest named, and a compare sampler on that is
+      // undefined (VUID-vkCmdDrawIndexed-None-06479) -- GCN compares against
+      // the first component of any format, Vulkan does not. Sample it plainly.
+      sampler.depth_compare =
+          d.texs[i].depth_compare && depth_src && depth_src[i];
+      sampler.integer = kIntegerRt && !d.texs[i].storage &&
+                        (d.texs[i].nfmt == 4 || d.texs[i].nfmt == 5);
     }
-    dii[i] = {d.texs[i].storage ? VK_NULL_HANDLE : SamplerFor(sampler),
-              views[i], layouts[i]};
+    // A compare sample that did not resolve to a depth surface has nothing
+    // valid to read: Vulkan defines the comparison only on a format that
+    // supports it, and every colour target and guest texture is the wrong kind.
+    // Bind the 1x1 far-plane depth default and keep the comparison, which reads
+    // as "nothing occludes this" instead of as undefined.
+    VkImageView view_i = views[i];
+    VkImageLayout layout_i = layouts[i];
+    if (i < key.num_texs && d.texs[i].depth_compare && !d.texs[i].storage &&
+        !(depth_src && depth_src[i]) && g_tex.depth_default_view) {
+      view_i = g_tex.depth_default_view;
+      layout_i = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+      sampler.depth_compare = true;
+    }
+    dii[i] = {d.texs[i].storage ? VK_NULL_HANDLE : SamplerFor(sampler), view_i,
+              layout_i};
     wr[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     wr[i].dstSet = entry.set;
     wr[i].dstBinding = i;

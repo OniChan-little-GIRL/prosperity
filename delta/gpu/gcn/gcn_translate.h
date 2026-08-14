@@ -52,7 +52,12 @@ struct ShaderAttr {
 // Set-1 UBO bindings shared by VS + PS. A shader pair whose constant buffers
 // exceed this gets planned only up to the cap, and every s_buffer_load from a
 // dropped base then emits nothing, leaving its destination SGPRs zero.
-constexpr uint32_t kMaxCbufBindings = 16;
+// Bounded by maxDescriptorSetUniformBuffersDynamic, not by what the ISA can
+// address: set 1 binds every cbuffer as a dynamic UBO, and declaring more of
+// those than the device allows is an out-of-spec layout the driver is free to
+// mishandle silently. 15 is what current NVIDIA parts report; the check in
+// vk_upload_ring.cc still reports a device below that rather than assuming.
+constexpr uint32_t kMaxCbufBindings = 15;
 constexpr uint32_t kCbufDwords = 4096;
 
 // A constant buffer a shader stage reads (s_buffer_load). Bound as a UBO.
@@ -206,13 +211,21 @@ extern uint32_t g_recomp_n;
 // same code sampled through a 2D and a 3D descriptor is two different modules.
 // tex_1d_mask is the same for 1D[_ARRAY] descriptors, whose address body
 // carries one fewer coordinate than the 2D case the DA bit alone suggests.
+// tex_uint_mask / mrt_uint_mask mark integer-format sampled images and colour
+// targets: those change the SPIR-V types (uvec4 in and out), so like the two
+// above they are part of the module's identity, not per-draw state.
 Recompiled Recompile(const uint32_t* vs_code,
                       const uint32_t* ps_code,
                       const uint32_t* vs_user_data,
                       const uint32_t* ps_user_data,
                       uint32_t ps_input_ena = 0,
+                      const uint32_t* ps_in_cntl = nullptr,
+                      uint32_t ps_num_interp = 0,
                       uint32_t tex_3d_mask = 0,
-                      uint32_t tex_1d_mask = 0);
+                      uint32_t tex_1d_mask = 0,
+                      uint32_t tex_uint_mask = 0,
+                      uint32_t mrt_uint_mask = 0,
+                      bool gl_clip_space = false);
 
 // A memory resource a compute shader touches. The descriptor may be inline in
 // user data or loaded through an SRT chain; `base_sgpr` names its live location
@@ -225,6 +238,13 @@ struct CsResource {
   uint32_t binding = 0;    // storage-buffer binding (set 0)
   uint8_t kind = 0;        // 0 = buffer V#, 1 = image T#, 2 = scalar pointer
   bool written = false;    // dispatch writes it -> copy back to guest
+  // Does the dispatch READ it? A resource that is written and never read does
+  // not have to be staged in from guest memory before the dispatch -- and
+  // SotC's material fills are whole 4 MiB arenas of exactly that shape, so
+  // uploading them is pure cost. Tracked per access and OR'd, so a
+  // read-modify-write (an atomic, or a load and a store to the same buffer)
+  // still reports read.
+  bool read = false;
   uint32_t min_bytes = 0;  // lower bound on size from immediate offsets
 };
 

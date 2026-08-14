@@ -28,10 +28,13 @@
 #include <vector>
 
 #include "crash.h"
+
+#include <utl/mem.h>
 #include "module.h"
 #include "proc.h"
 #include "vfs.h"
 #include "cpu/cpu_backend.h"
+#include "gpu/ps4/cmd_processor.h"
 #include <logger/logger.h>
 #include <utl/options.h>
 
@@ -133,6 +136,132 @@ inline bool trkRd64(uint64_t va, uint64_t &out) {
   out = *reinterpret_cast<const uint64_t *>(va);
   return true;
 }
+// Re-walk the title's size-ordered free tree the way the faulting insert does,
+// and name the FIELD that holds the bad pointer. The insert loop only ever has
+// the bad VALUE in a register (rax) -- the address it was loaded FROM is the one
+// thing needed to arm a write census, and it is gone by the time we fault.
+//
+// The walk (eboot+0x48a70, a dlmalloc-shaped allocator): `state+0x80` is the
+// tree head and doubles as the loop's sentinel; a node points at chunk+0x10, so
+// its size word is at node-8; children are node[0] and node[1]; the branch taken
+// is `newsz < cursz ? 0 : 1`, and an exact size match ends the walk.
+void sotcWalkFreeTree(uint64_t state, uint64_t newsz) {
+  const uint64_t sentinel = state + 0x80;
+  std::fprintf(stderr,
+               "  [freetree] state=%#llx sentinel=%#llx newsz=%#llx\n",
+               (unsigned long long)state, (unsigned long long)sentinel,
+               (unsigned long long)newsz);
+  uint64_t cur = 0;
+  if (!trkRd64(sentinel, cur)) {
+    std::fprintf(stderr, "  [freetree] head not mapped -- nothing to walk\n");
+    return;
+  }
+  uint64_t field = sentinel;  // where `cur` was loaded from
+  for (int step = 0; step < 64; step++) {
+    if (cur == sentinel) {
+      std::fprintf(stderr, "  [freetree] step %d: back at the sentinel, the "
+                          "tree is intact -- the bad pointer is NOT here\n", step);
+      return;
+    }
+    uint64_t sz = 0;
+    if (!trkRd64(cur - 8, sz)) {
+      std::fprintf(stderr,
+                   "  [freetree] step %d: node %#llx is UNMAPPED (its size word "
+                   "at %#llx cannot be read) -- THIS IS THE FAULT\n",
+                   step, (unsigned long long)cur, (unsigned long long)(cur - 8));
+      std::fprintf(stderr,
+                   "  [freetree] the bad pointer was loaded FROM %#llx  <== arm "
+                   "the write census here (DELTA_GUEST_WHIST=%llx:8:8)\n",
+                   (unsigned long long)field, (unsigned long long)field);
+      // What surrounds the corrupt field: its neighbours often show the intact
+      // originals, which says whether the whole node or just one word was hit.
+      const uint64_t win = field & ~0x3full;
+      for (int i = 0; i < 8; i++) {
+        uint64_t v = 0;
+        if ((i % 4) == 0)
+          std::fprintf(stderr, "\n  [freetree] %#llx:",
+                       (unsigned long long)(win + i * 8));
+        std::fprintf(stderr, " %016llx",
+                     (unsigned long long)(trkRd64(win + i * 8, v) ? v : 0));
+      }
+      // Split the value: SotC's stale links read as a valid 40-bit guest
+      // pointer with rubbish above it, because the word is not a pointer at all
+      // -- it is whatever the new owner of the reused chunk stored there, and
+      // the arrays in question hold packed descriptors.
+      std::fprintf(stderr, "\n  [freetree] bad value %#llx: low40=%#llx, "
+                          "bits40+=%#llx (so probably not a pointer)\n",
+                   (unsigned long long)cur,
+                   (unsigned long long)(cur & 0xffffffffffull),
+                   (unsigned long long)(cur >> 40));
+      // Is the corrupt word inside guest memory the GPU module snapshots and
+      // copies back? If it is, the compute writeback is reverting the
+      // allocator's own stores and this is our corruption, not the title's.
+      char csr[256];
+      if (gpu::DescribeCsRangeCovering(field, csr, sizeof(csr)))
+        std::fprintf(stderr, "  [freetree] the field IS inside a compute "
+                            "staging range: %s\n", csr);
+      else
+        std::fprintf(stderr, "  [freetree] no compute staging range covers the "
+                            "field\n");
+      return;
+    }
+    sz &= ~7ull;
+    const int idx = (newsz < sz) ? 0 : 1;
+    // A free chunk's size is small, non-zero and 16-byte aligned. The walk
+    // running off the tree shows up HERE, one step before it dereferences
+    // something unmapped: the node is memory that has been handed back out and
+    // refilled, so its "size" is whatever the new owner stored there. Reporting
+    // only the unmapped dereference blames the wrong field -- by then the walk
+    // has been reading live application data as nodes for several steps.
+    // 8-granular, not 16: the allocator masks the size word with ~7 and a real
+    // free chunk of 0x158 turned up in a later crash, which a 16-alignment test
+    // flagged as "no longer a free chunk" and blamed the wrong link for.
+    const bool plausible = sz && sz < 0x8000000ull && (sz & 7) == 0;
+    std::fprintf(stderr,
+                 "  [freetree] step %d: node=%#llx size=%#llx -> child[%d]%s\n",
+                 step, (unsigned long long)cur, (unsigned long long)sz, idx,
+                 plausible ? "" : "   <== NOT A FREE CHUNK ANY MORE");
+    if (!plausible) {
+      std::fprintf(stderr,
+                   "  [freetree] the tree left itself here: the link at %#llx "
+                   "still points at %#llx, which is no longer a free chunk\n",
+                   (unsigned long long)field, (unsigned long long)cur);
+      char csr1[256];
+      if (gpu::DescribeCsRangeCovering(field, csr1, sizeof(csr1)))
+        std::fprintf(stderr, "  [freetree]   the STALE LINK is inside a compute "
+                            "staging range: %s\n", csr1);
+      else
+        std::fprintf(stderr, "  [freetree]   no compute staging range covers "
+                            "the stale link at %#llx\n",
+                     (unsigned long long)field);
+      if (gpu::DescribeCsRangeCovering(cur, csr1, sizeof(csr1)))
+        std::fprintf(stderr, "  [freetree]   the reused CHUNK is inside a "
+                            "compute staging range: %s\n", csr1);
+      const uint64_t win2 = (field & ~0x1full) - 0x20;
+      for (int i = 0; i < 12; i++) {
+        uint64_t v = 0;
+        if ((i % 4) == 0)
+          std::fprintf(stderr, "\n  [freetree] %#llx:",
+                       (unsigned long long)(win2 + i * 8));
+        std::fprintf(stderr, " %016llx",
+                     (unsigned long long)(trkRd64(win2 + i * 8, v) ? v : 0));
+      }
+      std::fprintf(stderr, "\n");
+    }
+    if (newsz == sz) {
+      std::fprintf(stderr, "  [freetree] exact size match, walk ends here\n");
+      return;
+    }
+    field = cur + (uint64_t)idx * 8;
+    if (!trkRd64(field, cur)) {
+      std::fprintf(stderr, "  [freetree] child field %#llx unmapped -- stop\n",
+                   (unsigned long long)field);
+      return;
+    }
+  }
+  std::fprintf(stderr, "  [freetree] 64 steps without terminating (a cycle?)\n");
+}
+
 // Walk one tracker's circular record list; report count/bytes, whether `key`
 // is covered by a record, and the 8 records nearest to `key` by |base-key|.
 // Returns true if `key` fell inside some record's [base,base+size).
@@ -524,6 +653,12 @@ static int g_fnArgsCount = 0;
 static std::atomic<uintptr_t> g_wprotBase{0};
 static std::atomic<size_t> g_wprotLen{0};
 static std::atomic<bool> g_wprotRegs{false};
+static std::atomic<bool> g_wprotStep{false};
+static std::atomic<uintptr_t> g_wprotReportBase{0};
+static std::atomic<size_t> g_wprotReportLen{0};
+#if defined(__x86_64__)
+static thread_local uintptr_t g_wprotStepPage = 0;
+#endif
 
 // DELTA_GUEST_WHIST census state (see startWriteHist). A one-shot watch names
 // the first writer of a page and then goes quiet; this one re-arms, so a pool
@@ -538,9 +673,106 @@ static std::atomic<uint32_t> g_whistBucket[kWhistBuckets];
 static std::atomic<uintptr_t> g_whistSite[kWhistSites];
 static std::atomic<uintptr_t> g_whistSiteCaller[kWhistSites];
 static std::atomic<uint32_t> g_whistSiteHits[kWhistSites];
+// Faults whose guest instruction could not be established (see
+// watchFaultGuestRip). Reported alongside the sites so a census can never read
+// as "these are all the writers" when some of them went unnamed.
+static std::atomic<uint64_t> g_whistUnattributed{0};
+
+// The guest instruction behind a memory-watch fault. Returns false when it
+// cannot be established, and then `rip` is 0.
+//
+// On an x86 host the signal context's RIP already IS the guest RIP. Under FEX on
+// ARM the fault is raised inside JIT'd code, so the host pc must be mapped back
+// through FEX. `cpu::currentGuestRip()` must NOT serve as a fallback here: it is
+// only block-accurate (see cpu_backend.h), so under multiblock compilation it
+// names some earlier instruction of whatever block is running. That reads as an
+// authoritative answer while being wrong -- it attributed a write to one of
+// SotC's descriptor pages to libc's memcpy, a store the title never made, and
+// sent a whole investigation down a dead end. An unattributable fault must SAY
+// it is unattributable.
+static bool watchFaultGuestRip(void *ucv, uintptr_t &rip) {
+  rip = 0;
+#if defined(__x86_64__)
+  rip = (uintptr_t)static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_RIP];
+  return rip != 0;
+#elif defined(__aarch64__)
+  rip = (uintptr_t)cpu::reconstructGuestRip(
+      static_cast<ucontext_t *>(ucv)->uc_mcontext.pc);
+  return rip != 0;
+#else
+  (void)ucv;
+  return false;
+#endif
+}
+
+// Guest stack pointer at the fault, or 0. Lets a leaf writer (libc memcpy names
+// no subsystem) be attributed to its caller.
+static uintptr_t watchFaultGuestRsp(void *ucv) {
+#if defined(__x86_64__)
+  return (uintptr_t)static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_RSP];
+#else
+  (void)ucv;
+  if (const uint64_t *g = cpu::currentGuestGregs()) {
+    enum { RAX, RCX, RDX, RBX, RSP };
+    return (uintptr_t)g[RSP];
+  }
+  return 0;
+#endif
+}
+
+#if defined(__aarch64__)
+static void probeHandler(int, siginfo_t *, void *ucv) {
+  uintptr_t rip = 0;
+  const bool attributed = watchFaultGuestRip(ucv, rip);
+  char sym[256];
+  if (attributed)
+    symbolize(rip, sym, sizeof(sym));
+  else
+    std::snprintf(sym, sizeof(sym), "<unattributed FEX host pc>");
+  const auto host_pc = static_cast<ucontext_t *>(ucv)->uc_mcontext.pc;
+  std::fprintf(stderr, "[probe] tid=%ld host_pc=%#llx guest_pc=%#lx %s\n",
+               (long)gettid(), (unsigned long long)host_pc,
+               (unsigned long)rip, sym);
+  if (const uintptr_t sp = watchFaultGuestRsp(ucv))
+    guestStackTraceFrom(sp, "probe", 8, (long)syscall(SYS_gettid));
+  std::fflush(stderr);
+}
+#endif
+
+// Reopen the one page a watch fault landed on so the guest can retry the access.
+// Arch-independent: returning from the handler re-executes the faulting
+// instruction, which is what turns a one-shot trap into a running trace. Without
+// this the watch is not merely blind, it is FATAL -- on ARM both watches used to
+// fall through to the crash reporter and kill the title.
+static void reopenWatchPage(uintptr_t at) {
+  const long pgsz = sysconf(_SC_PAGESIZE);
+  ::mprotect(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)),
+             (size_t)pgsz, PROT_READ | PROT_WRITE | PROT_EXEC);
+}
+
+static void resumeWatchedWrite(uintptr_t at, void *ucv) {
+  reopenWatchPage(at);
+#if defined(__x86_64__)
+  if (g_wprotStep.load(std::memory_order_relaxed)) {
+    const uintptr_t pgsz = (uintptr_t)sysconf(_SC_PAGESIZE);
+    g_wprotStepPage = at & ~(pgsz - 1);
+    static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_EFL] |= 0x100;
+  }
+#else
+  (void)ucv;
+#endif
+}
 
 static void crashHandler(int sig, siginfo_t *si, void *ucv) {
 #if defined(__x86_64__)
+  if (sig == SIGTRAP && ucv && g_wprotStepPage) {
+    const size_t pgsz = (size_t)sysconf(_SC_PAGESIZE);
+    ::mprotect(reinterpret_cast<void *>(g_wprotStepPage), pgsz, PROT_READ);
+    static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_EFL] &= ~0x100;
+    g_wprotStepPage = 0;
+    return;
+  }
+#endif
   // Write census: same trap as the write watch, but it only counts (per 16 MiB
   // bucket and per faulting instruction) and reopens the page, so it survives a
   // multi-GB range being re-armed for the length of a run.
@@ -548,30 +780,36 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     const uintptr_t base = g_whistBase.load();
     const uintptr_t at = reinterpret_cast<uintptr_t>(si->si_addr);
     if (at >= base && at < base + g_whistLen.load()) {
-      auto *uc = static_cast<ucontext_t *>(ucv);
-      const uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+      uintptr_t rip = 0;
+      const bool attributed = watchFaultGuestRip(ucv, rip);
       const size_t b = (at - base) / kWhistGranule;
       if (b < kWhistBuckets)
         g_whistBucket[b].fetch_add(1, std::memory_order_relaxed);
-      for (int i = 0; i < kWhistSites; i++) {
-        uintptr_t cur = g_whistSite[i].load(std::memory_order_relaxed);
-        if (cur == rip) {
-          g_whistSiteHits[i].fetch_add(1, std::memory_order_relaxed);
-          break;
-        }
-        if (!cur && g_whistSite[i].compare_exchange_strong(cur, rip)) {
-          // A leaf writer (libc memcpy) names no subsystem; keep one sample of
-          // its return address so the report can name the caller too.
-          g_whistSiteCaller[i].store(
-              *reinterpret_cast<const uintptr_t *>(uc->uc_mcontext.gregs[REG_RSP]),
-              std::memory_order_relaxed);
-          g_whistSiteHits[i].fetch_add(1, std::memory_order_relaxed);
-          break;
+      // Slot 0 doubles as "empty" in the site table, so an unattributable
+      // fault must not be filed as a writer at rip 0 -- it is counted apart and
+      // the report says how many there were.
+      if (!attributed) {
+        g_whistUnattributed.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        for (int i = 0; i < kWhistSites; i++) {
+          uintptr_t cur = g_whistSite[i].load(std::memory_order_relaxed);
+          if (cur == rip) {
+            g_whistSiteHits[i].fetch_add(1, std::memory_order_relaxed);
+            break;
+          }
+          if (!cur && g_whistSite[i].compare_exchange_strong(cur, rip)) {
+            // A leaf writer (libc memcpy) names no subsystem; keep one sample
+            // of its return address so the report can name the caller too.
+            if (const uintptr_t sp = watchFaultGuestRsp(ucv))
+              g_whistSiteCaller[i].store(
+                  *reinterpret_cast<const uintptr_t *>(sp),
+                  std::memory_order_relaxed);
+            g_whistSiteHits[i].fetch_add(1, std::memory_order_relaxed);
+            break;
+          }
         }
       }
-      const long pgsz = sysconf(_SC_PAGESIZE);
-      ::mprotect(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)),
-                 (size_t)pgsz, PROT_READ | PROT_WRITE | PROT_EXEC);
+      reopenWatchPage(at);
       return;
     }
   }
@@ -583,41 +821,162 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     const size_t len = g_wprotLen.load();
     const uintptr_t at = reinterpret_cast<uintptr_t>(si->si_addr);
     if (at >= base && at < base + len) {
-      auto *uc = static_cast<ucontext_t *>(ucv);
-      const uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+      const uintptr_t report_base = g_wprotReportBase.load();
+      const size_t report_len = g_wprotReportLen.load();
+      const bool report = !g_wprotStep.load() ||
+                          (at >= report_base && at < report_base + report_len);
+      if (!report) {
+        resumeWatchedWrite(at, ucv);
+        return;
+      }
+      uintptr_t rip = 0;
+      const bool attributed = watchFaultGuestRip(ucv, rip);
       char sym[192];
-      symbolize(rip, sym, sizeof(sym));
-      std::fprintf(stderr, "[wprot] %s %#llx from %s\n",
-                   (uc->uc_mcontext.gregs[REG_ERR] & 2) ? "write" : "read",
-                   (unsigned long long)at, sym);
+      if (attributed)
+        symbolize(rip, sym, sizeof(sym));
+      else {
+        // Not guest code, so it is OUR code writing into the guest's memory
+        // (an HLE call, the kernel, a GPU readback). Naming the host module is
+        // the point: "unattributed" alone reads as noise when it may be the
+        // emulator scribbling on the title's heap. Only the leaf is named --
+        // backtrace() cannot unwind past the signal trampoline, and a hand
+        // walk of the interrupted frame chain yields addresses dladdr cannot
+        // symbolise in our own binary, so resolving our own frames would need
+        // the project's symbolize() driven from uc_mcontext.
+#if defined(__x86_64__)
+        const uintptr_t host_pc = (uintptr_t)static_cast<ucontext_t *>(ucv)
+                                      ->uc_mcontext.gregs[REG_RIP];
+#elif defined(__aarch64__)
+        const uintptr_t host_pc =
+            (uintptr_t)static_cast<ucontext_t *>(ucv)->uc_mcontext.pc;
+#else
+        const uintptr_t host_pc = 0;
+#endif
+        Dl_info di{};
+        const char *base = nullptr;
+        if (dladdr(reinterpret_cast<void *>(host_pc), &di) && di.dli_fname)
+          base = std::strrchr(di.dli_fname, '/');
+        if (di.dli_sname)
+          std::snprintf(sym, sizeof(sym), "HOST %s+%#lx", di.dli_sname,
+                        (unsigned long)(host_pc -
+                                        reinterpret_cast<uintptr_t>(di.dli_saddr)));
+        else if (di.dli_fname)
+          std::snprintf(sym, sizeof(sym), "HOST %s+%#lx",
+                        base ? base + 1 : di.dli_fname,
+                        (unsigned long)(host_pc -
+                                        reinterpret_cast<uintptr_t>(di.dli_fbase)));
+        else
+          std::snprintf(sym, sizeof(sym), "HOST pc=%#lx (no symbol)",
+                        (unsigned long)host_pc);
+      }
+      // Only a write-only watch can name the access from the protection alone.
+      // A reads-too watch (PROT_NONE) cannot on ARM, where there is no x86
+      // page-fault error code -- so it says "access" rather than guessing.
+#if defined(__x86_64__)
+      const char *kind =
+          (static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs[REG_ERR] & 2)
+              ? "write"
+              : "read";
+#else
+      const char *kind = g_wprotRegs.load() ? "access" : "write";
+#endif
+      if (const uintptr_t probe = utl::writeWatchValueProbe();
+          probe && utl::isMemoryRangeMapped(reinterpret_cast<void *>(probe), 8))
+        std::fprintf(stderr, "[wprot] %s %#llx from %s | probe %#lx = %#llx\n",
+                     kind, (unsigned long long)at, sym,
+                     (unsigned long)probe,
+                     (unsigned long long)*reinterpret_cast<uint64_t *>(probe));
+      else
+        std::fprintf(stderr, "[wprot] %s %#llx from %s\n", kind,
+                     (unsigned long long)at, sym);
+      // The writer of a descriptor/command ring is nearly always libc memcpy,
+      // which names no subsystem -- so the CALLER is the whole point of the
+      // report, not an extra for the reads-too mode. Reading the single qword at
+      // the guest rsp does not find it: the leaf is mid-body by the time it
+      // faults (and on ARM the guest rsp snapshot can lag), which yields a stack
+      // address rather than a return address. Scan the stack window for values
+      // that land in a loaded module's .text, the same way the fatal reporter
+      // recovers a call chain the frame pointer misses.
+      if (attributed) {
+        if (const uintptr_t sp = watchFaultGuestRsp(ucv))
+          guestStackTraceFrom(sp, "wprot", 4, (long)syscall(SYS_gettid));
+      }
       // A consumer's other pointer (where it puts what it just read) is only
-      // visible in its registers at the access.
-      if (g_wprotRegs.load()) {
-        auto *g = uc->uc_mcontext.gregs;
-        std::fprintf(stderr,
-                     "[wprot]  ax=%lx bx=%lx cx=%lx dx=%lx si=%lx di=%lx "
-                     "bp=%lx sp=%lx r8=%lx r9=%lx r10=%lx r11=%lx r12=%lx "
-                     "r13=%lx r14=%lx r15=%lx\n",
-                     (long)g[REG_RAX], (long)g[REG_RBX], (long)g[REG_RCX],
-                     (long)g[REG_RDX], (long)g[REG_RSI], (long)g[REG_RDI],
-                     (long)g[REG_RBP], (long)g[REG_RSP], (long)g[REG_R8],
-                     (long)g[REG_R9], (long)g[REG_R10], (long)g[REG_R11],
-                     (long)g[REG_R12], (long)g[REG_R13], (long)g[REG_R14],
-                     (long)g[REG_R15]);
-        // The writer is nearly always libc memcpy, which names no subsystem.
-        // memcpy is a leaf, so the qword at rsp is its caller.
-        const auto ret = *reinterpret_cast<const uintptr_t *>(g[REG_RSP]);
-        char csym[192];
-        symbolize(ret, csym, sizeof(csym));
-        std::fprintf(stderr, "[wprot]  caller %s\n", csym);
+      // visible in its registers at the access. A value probe is an explicit
+      // request to follow one word, and the word's SOURCE (a memcpy's rsi) is
+      // the next hop, so dump registers for that case too.
+      if (g_wprotRegs.load() || utl::writeWatchValueProbe()) {
+        const uint64_t *g = nullptr;
+#if defined(__x86_64__)
+        uint64_t xg[16];
+        auto *hg = static_cast<ucontext_t *>(ucv)->uc_mcontext.gregs;
+        const int kOrder[16] = {REG_RAX, REG_RCX, REG_RDX, REG_RBX,
+                                REG_RSP, REG_RBP, REG_RSI, REG_RDI,
+                                REG_R8,  REG_R9,  REG_R10, REG_R11,
+                                REG_R12, REG_R13, REG_R14, REG_R15};
+        for (int i = 0; i < 16; i++)
+          xg[i] = (uint64_t)hg[kOrder[i]];
+        g = xg;
+#else
+        // FEX pins every guest GPR to a fixed host register, so the signal
+        // context holds the exact values at the faulting instruction. Only fall
+        // back to the in-memory thread state -- which is written back at block
+        // boundaries and therefore lags -- when the fault was not in JIT code.
+        uint64_t sig_gregs[16];
+        bool exact = cpu::guestGregsFromSignal(ucv, sig_gregs);
+        g = exact ? sig_gregs : cpu::currentGuestGregs();
+#endif
+        if (g) {
+          enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI,
+                 R8, R9, R10, R11, R12, R13, R14, R15 };
+          std::fprintf(stderr,
+                       "[wprot]  ax=%lx bx=%lx cx=%lx dx=%lx si=%lx di=%lx "
+                       "bp=%lx sp=%lx r8=%lx r9=%lx r10=%lx r11=%lx r12=%lx "
+                       "r13=%lx r14=%lx r15=%lx%s\n",
+                       (long)g[RAX], (long)g[RBX], (long)g[RCX], (long)g[RDX],
+                       (long)g[RSI], (long)g[RDI], (long)g[RBP], (long)g[RSP],
+                       (long)g[R8], (long)g[R9], (long)g[R10], (long)g[R11],
+                       (long)g[R12], (long)g[R13], (long)g[R14], (long)g[R15],
+#if defined(__x86_64__)
+                       "");
+#else
+                       exact ? "" : "  (guest regs may lag the faulting insn)");
+#endif
+#if !defined(__x86_64__)
+          // Chase the probed word upstream. With exact registers a block copy
+          // reads as rdi=dest, rsi=source, rcx=length; the word we are watching
+          // sits at (probe - rdi) into the destination, so the same word in the
+          // SOURCE is rsi + that delta. Re-aim there and watch it: that is one
+          // hop back towards wherever the value was first produced.
+          enum { C_RCX = 1, C_RSI = 6, C_RDI = 7 };
+          const uintptr_t probe = utl::writeWatchValueProbe();
+          if (exact && probe && utl::writeWatchChaseLeft()) {
+            const uint64_t rdi = g[C_RDI], rsi = g[C_RSI], rcx = g[C_RCX];
+            const bool looks_like_copy =
+                rdi && rsi && rcx && probe >= rdi && probe - rdi < rcx;
+            const uintptr_t src = rsi + (probe - rdi);
+            if (looks_like_copy &&
+                utl::isMemoryRangeMapped(reinterpret_cast<void *>(src), 8)) {
+              utl::writeWatchChaseTook();
+              std::fprintf(stderr,
+                           "[wprot] chase: probe %#lx came from %#lx "
+                           "(copy %#lx <- %#lx len %#lx); watching the source\n",
+                           (unsigned long)probe, (unsigned long)src,
+                           (unsigned long)rdi, (unsigned long)rsi,
+                           (unsigned long)rcx);
+              utl::setWriteWatchValueProbe(src);
+              utl::armWriteWatch(src, 8, 200);
+            }
+          }
+#endif
+        }
       }
       std::fflush(stderr);
-      const long pgsz = sysconf(_SC_PAGESIZE);
-      ::mprotect(reinterpret_cast<void *>(at & ~((uintptr_t)pgsz - 1)),
-                 (size_t)pgsz, PROT_READ | PROT_WRITE | PROT_EXEC);
+      resumeWatchedWrite(at, ucv);
       return;
     }
   }
+#if defined(__x86_64__)
   // DELTA_GUEST_BRK_TRACE: a RESUMABLE planted breakpoint. The ud2 replaced the
   // first bytes of a known instruction, so the handler emulates that
   // instruction, logs what we came for, and returns -- turning a one-shot trap
@@ -1173,38 +1532,73 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     const uint64_t fa = (uint64_t)si->si_addr;
     int mf = open("/proc/self/maps", O_RDONLY);
     if (mf >= 0) {
-      static char mbuf[1 << 20];
-      ssize_t n = 0, off = 0, r;
-      while ((r = read(mf, mbuf + off, sizeof(mbuf) - 1 - off)) > 0)
-        off += r;
-      n = off;
-      close(mf);
-      mbuf[n] = 0;
-      char *prev = nullptr, *line = mbuf;
-      while (line && *line) {
-        char *nl = strchr(line, '\n');
-        if (nl) *nl = 0;
-        uint64_t lo = strtoull(line, nullptr, 16);
-        const char *dash = strchr(line, '-');
-        uint64_t hi = dash ? strtoull(dash + 1, nullptr, 16) : 0;
-        if (fa < hi || !nl) {
-          if (prev)
-            std::fprintf(stderr, "  maps prev: %s\n", prev);
-          std::fprintf(stderr, "  maps %s : %s\n",
-                       (fa >= lo && fa < hi) ? "HIT " : "next", line);
-          // A couple of following lines: what the faulting pointer sits under.
-          char *after = nl ? nl + 1 : nullptr;
-          for (int k = 0; k < 3 && after && *after; k++) {
-            char *anl = strchr(after, '\n');
-            if (anl) *anl = 0;
-            std::fprintf(stderr, "  maps  +%d : %s\n", k + 1, after);
-            after = anl ? anl + 1 : nullptr;
+      // Stream the file a line at a time. Slurping it into one fixed buffer
+      // silently truncated instead: a guest process has tens of thousands of
+      // mappings, /proc/self/maps runs past a megabyte, the fill loop's count
+      // went to zero at the brim, and the walk then fell off the end and
+      // reported the LAST (half-read) line as the neighbour of the fault. Every
+      // SotC fault dump so far "landed next to /dev/nvidiactl" for that reason
+      // alone -- the one fact the block exists to establish, whether the
+      // faulting page was mapped at all, was the fact it destroyed.
+      static char buf[65536];
+      static char prev[512];
+      size_t held = 0;      // bytes of a partial line kept at buf's front
+      bool havePrev = false, found = false, eof = false;
+      int after = -1;       // counts the trailing lines once the hit is printed
+      while (!found || after >= 0) {
+        if (!eof) {
+          ssize_t r = read(mf, buf + held, sizeof(buf) - held);
+          if (r > 0)
+            held += (size_t)r;
+          else
+            eof = true;
+        }
+        size_t start = 0;
+        for (;;) {
+          char *nl = static_cast<char *>(
+              memchr(buf + start, '\n', held - start));
+          if (!nl)
+            break;
+          *nl = 0;
+          char *line = buf + start;
+          start = (size_t)(nl - buf) + 1;
+          if (after >= 0) {  // trailing context after the hit
+            std::fprintf(stderr, "  maps  +%d : %s\n", after + 1, line);
+            if (++after >= 3) { after = -1; found = true; }
+            continue;
           }
+          const uint64_t lo = strtoull(line, nullptr, 16);
+          const char *dash = strchr(line, '-');
+          const uint64_t hi = dash ? strtoull(dash + 1, nullptr, 16) : 0;
+          if (fa < hi) {
+            if (havePrev)
+              std::fprintf(stderr, "  maps prev: %s\n", prev);
+            std::fprintf(stderr, "  maps %s : %s\n",
+                         (fa >= lo && fa < hi) ? "HIT " : "next (fault is in a "
+                                                         "GAP -- unmapped)",
+                         line);
+            after = 0;
+            continue;
+          }
+          size_t len = (size_t)(nl - line);
+          if (len >= sizeof(prev)) len = sizeof(prev) - 1;
+          memcpy(prev, line, len);
+          prev[len] = 0;
+          havePrev = true;
+        }
+        held -= start;
+        memmove(buf, buf + start, held);
+        if (held == sizeof(buf))  // a single line longer than the buffer
+          held = 0;
+        if (eof && held == 0) {
+          if (!found && after < 0)
+            std::fprintf(stderr,
+                         "  maps: fault is above every mapping (last was %s)\n",
+                         havePrev ? prev : "(none)");
           break;
         }
-        prev = line;
-        line = nl ? nl + 1 : nullptr;
       }
+      close(mf);
     }
   }
 #if defined(__x86_64__)
@@ -1475,7 +1869,24 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
   // Guest GPR dump + rbp backtrace (parity with the native x86 dump above).
   // gregs order is FEXCore::X86State::REG_* (RAX,RCX,RDX,RBX,RSP,RBP,RSI,RDI,
   // R8..R15); mirror it locally so this TU needs no FEXCore headers.
-  if (const uint64_t *g = cpu::currentGuestGregs()) {
+  //
+  // Take the registers from the SIGNAL CONTEXT, not from the in-memory CPUState.
+  // FEX pins every guest GPR to a fixed host register, so the host context holds
+  // the values AT the faulting instruction; CPUState.gregs is only written back
+  // when the JIT leaves a block, and FEX's syscall op spills just the subset the
+  // syscall ABI reads. Reading it here reports whichever registers the thread's
+  // last syscall happened to publish, dressed up as the fault state -- which is
+  // exactly how SotC's New-Game crash got diagnosed as a fiber running on a
+  // freed stack: rdi/rsi were verbatim the last sys_umtx_op's arguments, and the
+  // "faulting" rax-8 disagreed with si_addr in every log. Label the fallback so
+  // a stale dump can never again be mistaken for a precise one.
+  uint64_t sig_gregs[16];
+  const bool gexact = cpu::guestGregsFromSignal(ucv, sig_gregs);
+  if (!gexact)
+    std::fprintf(stderr,
+                 "  [regs] NOT from the fault: host pc is outside the JIT, so "
+                 "these are the last spilled CPUState values (STALE)\n");
+  if (const uint64_t *g = gexact ? sig_gregs : cpu::currentGuestGregs()) {
     enum { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15 };
     std::fprintf(stderr, "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n",
                  (unsigned long long)g[RAX], (unsigned long long)g[RBX],
@@ -1489,6 +1900,54 @@ static void crashHandler(int sig, siginfo_t *si, void *ucv) {
     std::fprintf(stderr, "  r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
                  (unsigned long long)g[R12], (unsigned long long)g[R13],
                  (unsigned long long)g[R14], (unsigned long long)g[R15]);
+
+    // Corroborate the recovery against si_addr: a faulting memory operand is
+    // built out of a base register, so SOME GPR should sit within a small
+    // displacement of the address that faulted. If none does, the recovery is
+    // wrong (vendored FEX's x64::SRA moved under us) and every conclusion drawn
+    // from the dump is worthless -- say so instead of printing plausible lies.
+    if (gexact && si && si->si_addr) {
+      static const char *kN[16] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp",
+                                   "rsi", "rdi", "r8",  "r9",  "r10", "r11",
+                                   "r12", "r13", "r14", "r15"};
+      const uint64_t fa = (uint64_t)si->si_addr;
+      bool any = false;
+      for (int i = 0; i < 16; i++) {
+        const int64_t d = (int64_t)fa - (int64_t)g[i];
+        if (d >= -0x2000 && d <= 0x2000) {
+          std::fprintf(stderr, "  [regs] fault = %s%+lld  (exact, from the JIT "
+                              "signal context)\n", kN[i], (long long)d);
+          any = true;
+        }
+      }
+      if (!any)
+        std::fprintf(stderr,
+                     "  [regs] WARNING no GPR is within 0x2000 of the fault "
+                     "address -- the SRA recovery is suspect, do not trust "
+                     "these values\n");
+    }
+
+    // ---- SOTC free-tree walk (diagnostic; see helper above) ----
+    // Fire when the fault is inside the eboot's size-ordered free-tree insert
+    // (+0x48a70..+0x48b64), which is where every heap-corruption fault in this
+    // title lands. r15 is arg0 (the allocator state) and rdx the size being
+    // inserted; both are live for the whole loop, so the walk can be replayed.
+    {
+      uint64_t ebase2 = 0;
+      if (auto *proc = proc::getActive()) {
+        for (auto &mod : proc->getModuleList()) {
+          auto &mi = mod->getInfo();
+          auto *t = mi.textSeg.addr;
+          if (t && grip >= (uintptr_t)t && grip < (uintptr_t)t + mi.textSeg.size) {
+            ebase2 = (uint64_t)t;
+            break;
+          }
+        }
+      }
+      const uint64_t off2 = ebase2 ? grip - ebase2 : 0;
+      if (gexact && ebase2 && off2 >= 0x48a70 && off2 < 0x48b64)
+        sotcWalkFreeTree(g[R15], g[RDX] & ~7ull);
+    }
 
     // ---- SOTC AllocationTracker walk (diagnostic; see helper above) ----
     // Fire only when the fault is inside the eboot's slot-21 untrack-on-free
@@ -1889,15 +2348,45 @@ void setFnArgs(uintptr_t addr, const char *label, const uint64_t *offsets,
 // instruction and reopen that page. Memory that stays empty while the title
 // behaves as if it filled it either has no writer at all or one writing
 // elsewhere, and only the fault distinguishes those.
+//
+// The trap RE-ARMS every `ms` instead of firing once. Each fault reopens its own
+// page so the guest makes progress, which used to end the watch after a single
+// report for a range the title writes continuously -- one sample cannot tell a
+// one-time initialiser from a per-frame producer, and it certainly cannot follow
+// a value from one buffer to the next. Re-arming keeps the cost at roughly one
+// fault per page per interval while turning the watch into a stream.
 void startWriteWatch(uintptr_t addr, size_t bytes, unsigned everyMs,
-                     bool trapReads) {
+                     bool trapReads, bool singleStep) {
   if (!addr || !bytes)
     return;
+#if !defined(__x86_64__)
+  singleStep = false;
+#endif
+  const size_t pgsz = (size_t)sysconf(_SC_PAGESIZE);
+  const uintptr_t base = addr & ~((uintptr_t)pgsz - 1);
+  const size_t span = (addr + bytes - base + pgsz - 1) & ~(pgsz - 1);
+  if (singleStep) {
+    g_wprotBase = base;
+    g_wprotLen = span;
+    g_wprotRegs = trapReads;
+    g_wprotStep = true;
+    g_wprotReportBase = addr;
+    g_wprotReportLen = bytes;
+    if (::mprotect(reinterpret_cast<void *>(base), span,
+                   trapReads ? PROT_NONE : PROT_READ) == 0) {
+      std::fprintf(stderr, "[wprot] single-stepping %#lx+%#zx, reporting %#lx+%#zx (%s)\n",
+                   (unsigned long)base, span, (unsigned long)addr, bytes,
+                   trapReads ? "reads+writes" : "writes");
+      std::fflush(stderr);
+    }
+    return;
+  }
   std::thread([addr, bytes, everyMs, trapReads] {
     const long pgsz = sysconf(_SC_PAGESIZE);
     const uintptr_t base = addr & ~((uintptr_t)pgsz - 1);
     const size_t span =
         (addr + bytes - base + (size_t)pgsz - 1) & ~((size_t)pgsz - 1);
+    bool announced = false;
     for (;;) {
       std::this_thread::sleep_for(std::chrono::milliseconds(everyMs));
       unsigned char vec = 0;
@@ -1909,11 +2398,16 @@ void startWriteWatch(uintptr_t addr, size_t bytes, unsigned everyMs,
       g_wprotBase = base;
       g_wprotLen = span;
       g_wprotRegs = trapReads;
-      std::fprintf(stderr, "[wprot] watching %#lx+%#zx (%s)\n",
-                   (unsigned long)base, span, trapReads ? "reads+writes"
-                                                        : "writes");
-      std::fflush(stderr);
-      return;
+      g_wprotStep = false;
+      g_wprotReportBase = base;
+      g_wprotReportLen = span;
+      if (!announced) {
+        announced = true;
+        std::fprintf(stderr, "[wprot] watching %#lx+%#zx (%s), re-armed every %ums\n",
+                     (unsigned long)base, span,
+                     trapReads ? "reads+writes" : "writes", everyMs);
+        std::fflush(stderr);
+      }
     }
   }).detach();
 }
@@ -1963,6 +2457,11 @@ void startWriteHist(uintptr_t addr, size_t bytes, unsigned everyMs) {
         std::fprintf(stderr, "[whist]   %8u %s <- %s\n",
                      g_whistSiteHits[i].load(), sym, csym);
       }
+      // Never let the site list read as the complete set of writers when some
+      // faults could not be attributed to a guest instruction.
+      if (const uint64_t unattributed = g_whistUnattributed.load())
+        std::fprintf(stderr, "[whist]   %8llu <unattributed>\n",
+                     (unsigned long long)unattributed);
       std::fflush(stderr);
     }
   }).detach();
@@ -2227,6 +2726,12 @@ void installSigAltStack() {
 }
 
 void installCrashHandler() {
+  // Let layers that cannot reach the kernel arm a watch (see utl::armWriteWatch):
+  // the GPU only learns the address worth watching -- the descriptor pointer a
+  // shader actually read -- while a draw is being processed.
+  utl::setWriteWatchArmer([](uintptr_t addr, size_t bytes, unsigned everyMs) {
+    startWriteWatch(addr, bytes, everyMs);
+  });
   struct sigaction sa = {};
   sa.sa_sigaction = crashHandler;
   // SA_NODEFER: don't auto-mask the signal during the handler, so a re-fault
@@ -2245,7 +2750,7 @@ void installCrashHandler() {
   sigaction(SIGFPE, &sa, nullptr);
   sigaction(SIGBUS, &sa, nullptr);
   sigaction(SIGABRT, &sa, nullptr);  // guest/runtime std::abort, assert, libc
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
   struct sigaction pa = {};
   pa.sa_sigaction = probeHandler;
   pa.sa_flags = SA_SIGINFO | SA_RESTART;  // don't abort the thread's blocking call

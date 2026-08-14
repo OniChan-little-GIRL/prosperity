@@ -26,14 +26,139 @@
 
 namespace {
 DELTA_OPTION(bool, kDoCull, "DELTA_GPU_CULL", false);
-DELTA_OPTION(bool, kGpuPipetrace, "DELTA_GPU_PIPETRACE", false);
+// DELTA_GPU_PIPETRACE=1 traces the first pipelines built; =<ps addr> traces
+// only that shader's. Pipelines are built in load order, so a flat cap only
+// ever shows the loading screens -- a negative from it says nothing about the
+// draw you care about.
+DELTA_OPTION(uint64_t, kGpuPipetrace, "DELTA_GPU_PIPETRACE", 0);
 DELTA_OPTION(bool, kNoMaskDiag, "DELTA_GPU_NOMASK", false);
 DELTA_OPTION(bool, kNoRectGs, "DELTA_GPU_NORECTGS", false);
+// A depth prepass leaves the shaded pass testing ZFUNC=EQUAL against depth we
+// cannot reproduce bit-exactly; on by default because rejecting the whole scene
+// is never the better failure. DELTA_GPU_ZEQUAL=strict restores the raw op.
+DELTA_OPTION(bool, kRelaxDepthEqual, "DELTA_GPU_RELAX_ZEQUAL", true);
+// DELTA_GPU_NOZTEST=1: build every pipeline with the depth test off. Tells
+// "this pass produced nothing because the depth test rejected it" apart from
+// "its shader computed nothing", which look identical in an empty target.
+DELTA_OPTION(bool, kNoZTest, "DELTA_GPU_NOZTEST", false);
+// DELTA_GPU_NOZTEST_PS=<ps guest addr>: the same, for ONE pass. NOZTEST is a
+// blunt instrument -- it disables the depth test on every pipeline, so a frame
+// that improves under it has told you only that SOME depth test was responsible,
+// and every other pass is now drawing over everything at the same time. Naming
+// one shader answers the question the blunt version cannot: whether THIS pass is
+// being rejected by the comparison, or is computing nothing to begin with.
+DELTA_OPTION(const char*, kNoZTestPs, "DELTA_GPU_NOZTEST_PS", nullptr);
+// DELTA_GPU_NOZWRITE_PS=<list>: the twin of the above for depth WRITES. The pair
+// separates the two things a depth-tested, depth-writing pass can get wrong:
+// disabling the TEST asks whether the pass is being rejected by what it reads
+// from the plane; disabling the WRITE asks whether what it puts INTO the plane
+// is what breaks a later pass. Neither question is answerable from the other.
+DELTA_OPTION(const char*, kNoZWritePs, "DELTA_GPU_NOZWRITE_PS", nullptr);
+// DELTA_GPU_ZWRITE_PS=<list>: force depth WRITE ON for named shaders. The point
+// is measurement, not correctness: a pass that only ever READS the depth plane
+// leaves no trace of the z it computed, so there is no way to find out where its
+// geometry actually lands. Force its write, turn its test off with
+// DELTA_GPU_NOZTEST_PS so every fragment gets through, and the depth plane then
+// holds that pass's own z for you to read back. It corrupts the plane for
+// everything downstream, so it is a probe and nothing else.
+DELTA_OPTION(const char*, kZWritePs, "DELTA_GPU_ZWRITE_PS", nullptr);
+
+// Comma-separated list, because a target is routinely written by more than one
+// pass: P.T.'s light buffers take 34 draws from one shader and 28 from another,
+// and disabling the depth test on either alone proves nothing about the pair.
+std::vector<uint64_t> ParsePsList(const char* e, const char* tag) {
+  std::vector<uint64_t> out;
+  if (e)
+    for (const char* p = e; *p;) {
+      while (*p == ',' || *p == ' ')
+        p++;
+      if (!*p)
+        break;
+      out.push_back(std::strtoull(p, nullptr, 0));
+      while (*p && *p != ',')
+        p++;
+    }
+  if (!out.empty()) {
+    std::fprintf(stderr, "[%s] armed for %zu shader(s):", tag, out.size());
+    for (uint64_t v : out)
+      std::fprintf(stderr, " %#llx", (unsigned long long)v);
+    std::fprintf(stderr, "\n");
+  }
+  return out;
+}
+
+bool NoZTestForPs(uint64_t ps) {
+  static const std::vector<uint64_t> list = ParsePsList(kNoZTestPs, "nozps");
+  if (list.empty() || !ps)
+    return false;
+  for (uint64_t v : list)
+    if (v == ps)
+      return true;
+  return false;
+}
+
+bool NoZWriteForPs(uint64_t ps) {
+  static const std::vector<uint64_t> list = ParsePsList(kNoZWritePs, "nozwps");
+  if (list.empty() || !ps)
+    return false;
+  for (uint64_t v : list)
+    if (v == ps)
+      return true;
+  return false;
+}
+
+bool ForceZWriteForPs(uint64_t ps) {
+  static const std::vector<uint64_t> list = ParsePsList(kZWritePs, "zwps");
+  if (list.empty() || !ps)
+    return false;
+  for (uint64_t v : list)
+    if (v == ps)
+      return true;
+  return false;
+}
 }  // namespace
 
 namespace gpu::vk {
 
 using rhi::DrawInfo;
+
+VkStencilOp StencilOp(uint32_t op) {
+  switch (op & 0xF) {
+    case 1:
+      return VK_STENCIL_OP_ZERO;
+    case 2:
+    case 3:
+    case 4:
+      return VK_STENCIL_OP_REPLACE;
+    case 5:
+      return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case 6:
+      return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case 7:
+      return VK_STENCIL_OP_INVERT;
+    case 8:
+      return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    case 9:
+      return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    default:
+      return VK_STENCIL_OP_KEEP;
+  }
+}
+
+VkStencilOpState StencilState(const DrawInfo& d, bool back) {
+  const uint32_t shift = back ? 12 : 0;
+  const uint32_t refmask = back ? d.stencil_refmask_bf : d.stencil_refmask;
+  VkStencilOpState state{};
+  state.failOp = StencilOp(d.stencil_control >> shift);
+  state.passOp = StencilOp(d.stencil_control >> (shift + 4));
+  state.depthFailOp = StencilOp(d.stencil_control >> (shift + 8));
+  state.compareOp = static_cast<VkCompareOp>(
+      (d.depth_control >> (back ? 20 : 8)) & 0x7);
+  state.compareMask = (refmask >> 8) & 0xFF;
+  state.writeMask = (refmask >> 16) & 0xFF;
+  state.reference = refmask & 0xFF;
+  return state;
+}
 
 RecompPipe* RecompiledPipelineCache::Find(uint64_t key) {
   const auto it = pipelines_.find(key);
@@ -130,6 +255,8 @@ VkPipeline BuildPipeline(bool textured,
   VkPipeline p = VK_NULL_HANDLE;
   vkCreateGraphicsPipelines(g_dev.device, g_dev.pipeline_cache, 1, &pi, nullptr,
                             &p);
+  // New pipeline compiled: fold it into the on-disk cache (throttled).
+  SavePipelineCache();
   vkDestroyShaderModule(g_dev.device, vs, nullptr);
   vkDestroyShaderModule(g_dev.device, fs, nullptr);
   return p;
@@ -234,6 +361,12 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
       ((uint64_t)d.vertex_stride << 33) ^ ((uint64_t)mrt_n << 60) ^
       ((uint64_t)dstate * 0x100000001b3ull);
   key = HashWord(key, d.ps4_neo ? 1 : 0);
+  key = HashWord(key, d.stencil_enable ? d.depth_control : 0);
+  key = HashWord(key, d.stencil_enable ? d.stencil_control : 0);
+  key = HashWord(key, d.stencil_enable ? d.stencil_refmask : 0);
+  key = HashWord(key, d.stencil_enable && d.stencil_backface_enable
+                          ? d.stencil_refmask_bf
+                          : 0);
   key = HashWord(key, d.num_vattrs);
   // A sampler reading a volume image translates the same PS address to a
   // different module, whose image types the pipeline layout has to match.
@@ -309,19 +442,29 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   rp.raw_bufs = !d.recomp->vs_bufs.empty() || !d.recomp->ps_bufs.empty();
   VkDescriptorSetLayout sls[3] = {set0, g_ring.ubo_layout, g_ring.sbo_layout};
   // One 64-byte window per stage: 16 user-data dwords each, 128 bytes total,
-  // which is the guaranteed minimum push-constant size. With budget past the
-  // floor, each stage's range extends over its own code-address words (VS
-  // 128..135, PS 136..143) pushed per draw for s_getpc_b64 -- one range per
-  // stage, since Vulkan forbids two ranges naming the same stage.
+  // which is the guaranteed minimum push-constant size, plus each stage's own
+  // code-address words (VS 128..135, PS 136..143) pushed per draw for
+  // s_getpc_b64.
+  //
+  // ONE range naming both stages, not one range per stage. The two stages'
+  // windows interleave -- VS owns [0,64) and [128,136), PS [64,128) and
+  // [136,144) -- so no pair of per-stage ranges can cover that without
+  // overlapping, and Vulkan requires a push to name every stage of every range
+  // it overlaps (VUID-vkCmdPushConstants-offset-01796). The per-stage form
+  // declared VERTEX over [0,136) and FRAGMENT over [64,144), so the PS user
+  // data and the VS code address were both being pushed through a range that
+  // did not name their stage: undefined, and the PS user data is where the
+  // shader's descriptor pointers live. Every push below names both stages to
+  // match; the bytes written are unchanged.
   const bool pc_base = gpu::gcn::PushCodeBase();
-  const VkPushConstantRange push[2] = {
-      {VK_SHADER_STAGE_VERTEX_BIT, 0, pc_base ? 136u : 64u},
-      {VK_SHADER_STAGE_FRAGMENT_BIT, 64, pc_base ? 80u : 64u},
+  const VkPushConstantRange push[1] = {
+      {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+       pc_base ? 144u : 128u},
   };
   VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   li.setLayoutCount = rp.raw_bufs ? 3 : 2;
   li.pSetLayouts = sls;
-  li.pushConstantRangeCount = 2;
+  li.pushConstantRangeCount = 1;
   li.pPushConstantRanges = push;
   if (vkCreatePipelineLayout(g_dev.device, &li, nullptr, &rp.layout) !=
       VK_SUCCESS)
@@ -406,9 +549,69 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   VkPipelineDepthStencilStateCreateInfo dss{
       VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
   if (d.depth_base) {
-    dss.depthTestEnable = d.depth_test_enable ? VK_TRUE : VK_FALSE;
-    dss.depthWriteEnable = d.depth_write_enable ? VK_TRUE : VK_FALSE;
+    const bool per_ps = NoZTestForPs(d.ps_addr);
+    const bool skip_ztest = kNoZTest || per_ps;
+    // Say so, once per shader. A knob that silently does not match its target
+    // produces a null result indistinguishable from a real one, and this
+    // title's record is full of exactly that mistake.
+    if (per_ps) {
+      static std::vector<uint64_t> said;
+      if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
+        said.push_back(d.ps_addr);
+        std::fprintf(stderr,
+                     "[nozps] depth test disabled for ps=%#llx (test_enable was "
+                     "%d, func %u)\n",
+                     (unsigned long long)d.ps_addr, (int)d.depth_test_enable,
+                     d.depth_func & 0x7);
+      }
+    }
+    dss.depthTestEnable =
+        (d.depth_test_enable && !skip_ztest) ? VK_TRUE : VK_FALSE;
+    const bool no_write = NoZWriteForPs(d.ps_addr);
+    if (no_write) {
+      static std::vector<uint64_t> said;
+      if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
+        said.push_back(d.ps_addr);
+        std::fprintf(stderr,
+                     "[nozwps] depth write disabled for ps=%#llx (was %d)\n",
+                     (unsigned long long)d.ps_addr,
+                     (int)d.depth_write_enable);
+      }
+    }
+    const bool force_write = ForceZWriteForPs(d.ps_addr);
+    if (force_write) {
+      static std::vector<uint64_t> said;
+      if (std::find(said.begin(), said.end(), d.ps_addr) == said.end()) {
+        said.push_back(d.ps_addr);
+        std::fprintf(stderr,
+                     "[zwps] depth write FORCED for ps=%#llx (was %d)\n",
+                     (unsigned long long)d.ps_addr,
+                     (int)d.depth_write_enable);
+      }
+    }
+    dss.depthWriteEnable =
+        ((d.depth_write_enable || force_write) && !no_write) ? VK_TRUE
+                                                            : VK_FALSE;
     dss.depthCompareOp = (VkCompareOp)(d.depth_func & 0x7);  // ZFUNC maps 1:1
+    // A depth-prepass title re-draws its geometry with ZFUNC=EQUAL against the
+    // depth the prepass laid down. That only works when both passes compute
+    // gl_Position bit-identically, which a hardware driver guarantees for one
+    // shader but we cannot: the title uses a position-only VS for the prepass
+    // and the full VS for the shaded pass, and our two SPIR-V modules are
+    // optimised independently, so the interpolated depth differs by an ULP and
+    // EQUAL rejects the whole scene. Widen EQUAL to the direction the prepass
+    // wrote, which admits exactly the surface the prepass kept -- nothing can
+    // be nearer than the nearest surface -- so the visible result matches.
+    if (kRelaxDepthEqual && dss.depthCompareOp == VK_COMPARE_OP_EQUAL &&
+        !d.depth_write_enable)
+      dss.depthCompareOp = d.depth_clear <= 0.5f
+                               ? VK_COMPARE_OP_GREATER_OR_EQUAL
+                               : VK_COMPARE_OP_LESS_OR_EQUAL;
+    if (d.stencil_enable) {
+      dss.stencilTestEnable = VK_TRUE;
+      dss.front = StencilState(d, false);
+      dss.back = d.stencil_backface_enable ? StencilState(d, true) : dss.front;
+    }
   }
   // One blend attachment per bound MRT target, each from its own
   // CB_BLENDn_CONTROL (mrt_blend[i] / mrt_blend_mask bit i); target 0 mirrors
@@ -419,6 +622,10 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   for (uint32_t i = 0; i < mrt_n; i++) {
     uint32_t bc = i == 0 ? d.blend_control : d.mrt_blend[i];
     bool en = i == 0 ? d.blend_enable : ((d.mrt_blend_mask >> i) & 1u);
+    // Vulkan forbids blending on an integer attachment, and the hardware
+    // agrees: CB_COLORn_INFO sets BLEND_BYPASS on exactly these targets.
+    if (IsIntegerColorFormat(ColorTargetFormat(d.mrt_info[i])))
+      en = false;
     cb_att[i] = BlendAttachment(bc, en);
     // Mask attachments the PS does not export to. A PS with no color export
     // at all (depth-only / buffer-store passes) writes nothing -- previously a
@@ -437,14 +644,16 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   // DELTA_GPU_PIPETRACE: the colour-blend state a pipeline is actually built
   // with, next to the PS's export mask -- the two have to agree or an
   // attachment is silently write-masked off (or written unblended).
-  if (kGpuPipetrace) {
+  if (kGpuPipetrace &&
+      (kGpuPipetrace == 1 || d.ps_addr == kGpuPipetrace)) {
     static int n = 0;
     if (n++ < 24)
       std::fprintf(
           stderr,
-          "[pipe] ps=%#lx mrtN=%u psMrtMask=%#x att0: en=%u src=%d dst=%d "
-          "src_a=%d dst_a=%d writeMask=%#x\n",
-          (unsigned long)d.ps_addr, mrt_n, d.recomp->ps_mrt_mask,
+          "[pipe] ps=%#lx mrtN=%u psMrtMask=%#x tmask=%#x smask=%#x att0: "
+          "en=%u src=%d dst=%d src_a=%d dst_a=%d writeMask=%#x\n",
+          (unsigned long)d.ps_addr, mrt_n, d.recomp->ps_mrt_mask, d.target_mask,
+          d.shader_mask,
           cb_att[0].blendEnable, (int)cb_att[0].srcColorBlendFactor,
           (int)cb_att[0].dstColorBlendFactor,
           (int)cb_att[0].srcAlphaBlendFactor,
@@ -469,6 +678,8 @@ RecompPipe* GetRecompPipe(const DrawInfo& d) {
   rci.pColorAttachmentFormats = fmts;
   if (d.depth_base)
     rci.depthAttachmentFormat = kDepthFormat;
+  if (d.stencil_enable)
+    rci.stencilAttachmentFormat = kDepthFormat;
   VkGraphicsPipelineCreateInfo pi{
       VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
   pi.pNext = &rci;

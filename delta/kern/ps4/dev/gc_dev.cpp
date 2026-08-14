@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 #include <sys/mman.h>
 
@@ -14,18 +15,32 @@
 #include "kern/proc.h"
 #include "kern/ps4/lv2/sys_event.h"
 #include "kern/ps4/lv2/sys_mem.h"
+#include <utl/mem.h>
 #include <utl/options.h>
 
 namespace {
 DELTA_OPTION(bool, kGcCaller, "DELTA_GC_CALLER", false);
+// Execute the async-compute rings a title maps and rings doorbells on. A
+// title that uploads through them (P.T. streams every texture as a compute
+// copy on ring 1/0/0) renders nothing at all without this, and the work is
+// invisible: no draw is declined, no dispatch is dropped, the packets are
+// simply never walked. Off is the old boot-safe behaviour, not a default
+// worth keeping; DELTA_GPU_ACB=0 still turns it back off.
+DELTA_OPTION(bool, kGcAcb, "DELTA_GPU_ACB", true);
+// Drain mapped compute rings by their contents rather than by a matching
+// doorbell; see the walk in the DingDong handler.
+DELTA_OPTION(uint32_t, kGcAcbScan, "DELTA_GPU_ACB_SCAN", 0);
 DELTA_OPTION(bool, kGcFlip, "DELTA_GC_FLIP", false);
 DELTA_OPTION(bool, kGcTrace, "DELTA_GC_TRACE", false);
+DELTA_OPTION(uint32_t, kGcTraceMax, "DELTA_GC_TRACE_MAX", 0);
 }  // namespace
 
 // LLE GPU submit bridge (delta_runtime). The real libSceGnmDriver.sprx submits
 // PM4 through these ioctls; forward the descriptor array to the GPU command
 // processor. See prosperity_gc_submit in libSceGnmDriver.cpp.
 extern "C" void prosperity_gc_submit(const void *descArray, uint32_t descCount);
+extern "C" void prosperity_gc_submit_acb(const void *commands, uint32_t bytes);
+
 extern "C" void prosperity_gc_flip(uint64_t scanoutBase, int displayBufferIndex,
                                     int64_t flipArg);
 
@@ -263,6 +278,60 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   }
   case 0xC030810D:   // sceGnmMapComputeQueue
   case 0xC030811A: { // sceGnmMapComputeQueueWithPriority (same 0x30 struct)
+    struct Args {
+      uint32_t me;
+      uint32_t pipe;
+      uint32_t queue;
+      uint32_t vqueue;
+      uint64_t ringBase;
+      uint64_t readPtr;
+      uint64_t state;
+      uint32_t ringSizeLog2Dw;
+      uint32_t reserved;
+    };
+    static_assert(sizeof(Args) == 0x30);
+    const auto* args = static_cast<const Args*>(data);
+    if (kGcTrace) {
+      const auto* words = static_cast<const uint32_t*>(data);
+      std::fprintf(stderr, "[gc] map compute queue ioctl=%#x:", cmd);
+      for (uint32_t i = 0; i < 12; i++)
+        std::fprintf(stderr, " %08x", words[i]);
+      std::fprintf(stderr, "\n");
+    }
+    if (kGcAcb && args && args->ringSizeLog2Dw < 31) {
+      const uint32_t ring_size_dw = 1u << args->ringSizeLog2Dw;
+      const uint64_t ring_bytes = static_cast<uint64_t>(ring_size_dw) * 4;
+      if (ring_size_dw >= 2 && utl::isMemoryRangeMapped(
+                                   reinterpret_cast<const void*>(args->ringBase),
+                                   ring_bytes) &&
+          utl::isMemoryRangeMapped(reinterpret_cast<const void*>(args->readPtr),
+                                   sizeof(uint32_t))) {
+        std::lock_guard lock(computeMutex);
+        ComputeQueue* slot = nullptr;
+        for (ComputeQueue& entry : computeQueues) {
+          if (entry.mapped && entry.me == args->me && entry.pipe == args->pipe &&
+              entry.queue == args->queue) {
+            slot = &entry;
+            break;
+          }
+          if (!entry.mapped && !slot)
+            slot = &entry;
+        }
+        if (slot) {
+          *slot = {.me = args->me,
+                   .pipe = args->pipe,
+                   .queue = args->queue,
+                   .vqueue = args->vqueue,
+                   .ringBase = args->ringBase,
+                   .readPtr = args->readPtr,
+                   .state = args->state,
+                   .ringSizeDw = ring_size_dw,
+                   .readOffsetDw = 0,
+                   .mapped = true};
+          *reinterpret_cast<uint32_t*>(args->readPtr) = 0;
+        }
+      }
+    }
     // Synchronous CPU submit path: no real HQD/doorbell to program. Accept the
     // mapping and return success WITHOUT touching the caller's struct --
     // vqueueId (+0x0C) is the handle the GnmDriver wrapper hands back to the
@@ -272,8 +341,17 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
     // inputs intact.
     return 0;
   }
-  case 0xC00C810E: // sceGnmUnmapComputeQueue
+  case 0xC00C810E: { // sceGnmUnmapComputeQueue
+    if (kGcAcb && data) {
+      const auto* args = static_cast<const uint32_t*>(data);
+      std::lock_guard lock(computeMutex);
+      for (ComputeQueue& entry : computeQueues)
+        if (entry.mapped && entry.me == args[0] && entry.pipe == args[1] &&
+            entry.queue == args[2])
+          entry = {};
+    }
     return 0;
+  }
   case 0xC0108108: {
     // kernel: VA->GPU-physical translate, arg[0] -> arg[1]. Used for GPU-visible buffers. Guest GPU space is identity-mapped to host,
     // so the translation is the input VA itself.
@@ -288,6 +366,80 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
   case 0xC010811C: // sceGnmDingDong: kicks a mapped compute queue. No-op is
                    // safe for boot but drops async-compute work; wire into the
                    // CP if a title depends on compute results.
+    if (kGcTrace) {
+      static uint32_t traced = 0;
+      if (traced++ < 100) {
+        const auto* words = static_cast<const uint32_t*>(data);
+        std::fprintf(stderr, "[gc] DingDong: %08x %08x %08x %08x\n", words[0],
+                     words[1], words[2], words[3]);
+      }
+    }
+    if (kGcAcb && data) {
+      const auto* args = static_cast<const uint32_t*>(data);
+      std::lock_guard lock(computeMutex);
+      // Periodic census of EVERY mapped queue, not just the kicked one. SotC
+      // maps seven and only 1/0/0 ever arrives here, which leaves two very
+      // different possibilities: the other six are genuinely empty, or they
+      // hold work whose doorbell we never see (the driver can ring one by
+      // writing to its /dev/gc mapping instead of calling this ioctl). Reading
+      // the first packet of each ring separates them.
+      if (kGcTrace) {
+        static uint32_t kicks = 0;
+        if ((kicks++ % 500) == 0) {
+          for (const ComputeQueue &q : computeQueues) {
+            if (!q.mapped)
+              continue;
+            const auto *ring = reinterpret_cast<const uint32_t *>(q.ringBase);
+            const bool readable = utl::isMemoryRangeMapped(ring, 16);
+            std::fprintf(stderr,
+                         "[acbcensus] %u/%u/%u read=%#x ring=%08x %08x %08x "
+                         "%08x%s\n",
+                         q.me, q.pipe, q.queue, q.readOffsetDw,
+                         readable ? ring[0] : 0, readable ? ring[1] : 0,
+                         readable ? ring[2] : 0, readable ? ring[3] : 0,
+                         readable ? "" : " (ring unmapped)");
+          }
+          std::fflush(stderr);
+        }
+      }
+      if (kGcAcbScan)
+        drainQueues(kGcAcbScan);
+      for (ComputeQueue& entry : computeQueues) {
+        if (!entry.mapped || entry.me != args[0] || entry.pipe != args[1] ||
+            entry.queue != args[2])
+          continue;
+        const uint32_t next = args[3];
+        if (next >= entry.ringSizeDw)
+          break;
+        const uint32_t available =
+            (next - entry.readOffsetDw) & (entry.ringSizeDw - 1);
+        if (available) {
+          std::vector<uint32_t> commands(available);
+          const auto* ring = reinterpret_cast<const uint32_t*>(entry.ringBase);
+          for (uint32_t i = 0; i < available; i++)
+            commands[i] = ring[(entry.readOffsetDw + i) &
+                               (entry.ringSizeDw - 1)];
+          if (kGcTrace) {
+            // The whole run, not a sample, when a comparison needs the full
+            // set of ring IBs (DELTA_GC_TRACE_MAX=0 keeps the old 100).
+            static uint32_t traced_commands = 0;
+            if (traced_commands++ < (kGcTraceMax ? kGcTraceMax : 100u)) {
+              std::fprintf(stderr, "[gc] ACB %u/%u/%u %#x..%#x:", entry.me,
+                           entry.pipe, entry.queue, entry.readOffsetDw, next);
+              for (uint32_t word : commands)
+                std::fprintf(stderr, " %08x", word);
+              std::fprintf(stderr, "\n");
+            }
+          }
+          prosperity_gc_submit_acb(commands.data(), available * 4);
+        }
+        entry.readOffsetDw = next;
+        if (utl::isMemoryRangeMapped(reinterpret_cast<const void*>(entry.readPtr),
+                                     sizeof(uint32_t)))
+          *reinterpret_cast<uint32_t*>(entry.readPtr) = next;
+        break;
+      }
+    }
     return 0;
   case 0xC0088111: {  // kernel: coredump dbg-reg dump. Reads arg[0] (u32 reason
                       // tag), prints the SE/SH status regs (0x2002/0x2004/0x21a1/
@@ -344,6 +496,56 @@ int32_t gcDevice::ioctl(uint32_t cmd, void *data) {
 // pool instead: allocLowGuest hands out [512 GiB, 2^40), inside the identity
 // range the CP renders into, so a title that maps /dev/gc gets real, CP-usable
 // memory. Out-of-range offsets fall back to the anonymous mmap path (-1).
+std::array<gcDevice::ComputeQueue, 64> gcDevice::computeQueues{};
+std::mutex gcDevice::computeMutex;
+
+// SotC spreads its async compute over seven queues and only 1/0/0 ever arrives
+// as a DingDong ioctl; the other six hold real work and sit at read=0 for the
+// whole run, so their doorbell reaches the hardware some other way (the driver
+// can ring one by writing to its /dev/gc mapping). Consume a ring entry only
+// when it is a complete IB packet whose target resolves, advance readOffsetDw
+// past it so nothing executes twice, and stop at the first word that is not
+// one -- a half-written entry or the end of what the guest wrote.
+// NOTE: the caller must already hold computeMutex. The doorbell handler runs
+// this from inside its own lock scope, and std::mutex is not recursive --
+// locking here as well deadlocked the title the instant it rang a doorbell.
+void gcDevice::drainQueues(uint32_t budget_dw) {
+  for (ComputeQueue &q : computeQueues) {
+    if (!q.mapped || !q.ringSizeDw ||
+        !utl::isMemoryRangeMapped(reinterpret_cast<const void *>(q.ringBase),
+                                  static_cast<uint64_t>(q.ringSizeDw) * 4))
+      continue;
+    const auto *ring = reinterpret_cast<const uint32_t *>(q.ringBase);
+    const uint32_t mask = q.ringSizeDw - 1;
+    const uint32_t budget = std::min<uint32_t>(budget_dw, q.ringSizeDw);
+    uint32_t off = q.readOffsetDw, consumed = 0;
+    while (consumed < budget) {
+      uint32_t w[4];
+      for (uint32_t i = 0; i < 4; i++)
+        w[i] = ring[(off + i) & mask];
+      if ((w[0] & 0xFFFFFF00u) != 0xC0023F00u)
+        break;
+      const uint64_t addr = (static_cast<uint64_t>(w[2] & 0xFF) << 32) | w[1];
+      const uint32_t dw = w[3] & 0xFFFFF;
+      if (!dw || !utl::isMemoryRangeMapped(reinterpret_cast<const void *>(addr),
+                                           static_cast<uint64_t>(dw) * 4))
+        break;
+      prosperity_gc_submit_acb(w, sizeof(w));
+      off = (off + 4) & mask;
+      consumed += 4;
+    }
+    if (consumed) {
+      q.readOffsetDw = off;
+      if (utl::isMemoryRangeMapped(reinterpret_cast<const void *>(q.readPtr),
+                                   sizeof(uint32_t)))
+        *reinterpret_cast<uint32_t *>(q.readPtr) = off;
+      if (kGcTrace)
+        std::fprintf(stderr, "[acbscan] %u/%u/%u drained %u dwords -> %#x\n",
+                     q.me, q.pipe, q.queue, consumed, off);
+    }
+  }
+}
+
 uint8_t *gcDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) {
   constexpr uint64_t kPoolSize = 256ull * 1024 * 1024;
   // The pool belongs to the device, not to the descriptor: sys_open news a
@@ -366,3 +568,12 @@ uint8_t *gcDevice::map(void *, size_t size, uint32_t, uint32_t, size_t offset) {
   return reinterpret_cast<uint8_t *>(-1);
 }
 } // namespace krnl
+
+// Called once per flip: draining inside the doorbell handler charges the whole
+// backlog to whichever frame happened to ring it.
+extern "C" void prosperity_gc_drain_acb(uint32_t budget_dw) {
+  if (!budget_dw)
+    return;
+  std::lock_guard lock(krnl::gcDevice::computeMutex);
+  krnl::gcDevice::drainQueues(budget_dw);
+}

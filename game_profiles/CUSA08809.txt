@@ -12,9 +12,13 @@
 
 // The world-load spin hammers sched_yield (6.4M calls in 20 s), which our
 // default maps to a pause; a real host yield lets the load finish first.
+// COSTS ~10% IN STEADY STATE though (3.75 -> 3.40 fps, and it stages MORE per
+// frame without it, so that is not less content being drawn): 6.4M real yield
+// syscalls are not free. Turn it on to get through a load, not to run.
 // +DELTA_SCHED_YIELD_REAL=1
 
 // Cap read throughput so the streaming loader cannot outrun its own finalizer.
+// Measured no steady-state fps effect either way (3.40 with and without).
 // +DELTA_IO_MBPS=60
 
 // Watch the CPU heap's free map drain (address from the crash's r9).
@@ -32,6 +36,14 @@
 // "descriptors" were 59.94, 0.0167, +/-1.0 -- a cbuffer). TEXMISS now prints
 // the descriptor's source address and the memory behind it, and reports 0
 // misses a run (was 64, the log cap).
+//
+// Separate real bug found the same day, NOT the menu's cause: all 48 of the
+// CE RAM loads above are dropped. CcbGuestRange floors at 0x1000000000, but
+// the source is 0xfe0000c00 -- inside the Gnm driver area (0xfc0000000+1GiB,
+// which the guest devmaps at 0xfe0000000). CE RAM is never initialised. Inert
+// for SotC (nothing ever dumps CE RAM back to memory here), latent for any
+// title that drives its CUE through the CE ring.
+// +DELTA_GPU_CETRACE=1 +DELTA_GPU_CETRACE_MAX=200   every CE RAM packet
 // +DELTA_GPU_PRESENT_ADDR=0x804e660000   the busiest offscreen target
 // +DELTA_GPU_PSWHITE=1                   force the fragment colour
 // +DELTA_GPU_PSTEX=2 +DELTA_GPU_PSTEXSCALE=50   export a sampled texel
@@ -77,3 +89,524 @@
 // +DELTA_SOTC_FORCE_PAYLOAD=1
 // What the FIOS2 layer was asked for, when a load never completes.
 // +DELTA_FIOS_TRACE=1
+
+// THE FRAME, MAPPED (2026-08-04, with tools/gpu_capture.py -- see
+// delta/gpu/DEBUGGER.md). SotC is a deferred renderer: shadow cascades ->
+// main-view Z-prepass (reverse-Z, clear 0, ZFUNC=GEQUAL) -> 7-MRT G-buffer
+// re-drawing the same geometry with ZFUNC=EQUAL -> deferred lighting (samples
+// the G-buffer AND the depth buffer it has bound) -> a full-screen compute
+// resolve that publishes the scene colour -> half-res post -> tonemap -> UI
+// layer -> composite. Three defects were deleting most of that and are fixed:
+// the 16 MiB vertex ring declined 83 draws a frame (now 512 MiB), the EQUAL
+// depth test rejected the scene because our two vertex shaders are not
+// bit-identical (DELTA_GPU_RELAX_ZEQUAL, on by default), and the lighting pass
+// was declined as self-sampling (now bound DEPTH_READ_ONLY).
+//
+// The integer G-buffer is now implemented (DELTA_GPU_INT_RT=1, opt-in): all
+// seven targets carry real world geometry, where two of them used to read
+// exactly zero. The next break is one stage on -- the deferred lighting pass
+// discards nearly every pixel because it samples its material/stencil ID from
+// the draw's own stencil surface (0x805fe50000, R8_UINT), and we have no
+// stencil-aspect sampled view, so that binding resolves to an unrelated colour
+// RT. Needs ResolveSampledStencil + a VK_IMAGE_ASPECT_STENCIL_BIT view.
+//
+// WHY IT WAS BLACK BEFORE THAT: the G-buffer is an INTEGER buffer.
+// CB_COLORn_INFO says FORMAT=COLOR_32 / COLOR_32_32 with NUMBER_TYPE=UINT for
+// 6 of the 7 targets, and CB_SHADER_MASK=0x1331111 agrees (one component per
+// 32-bit target). We create them B8G8R8A8_UNORM, so two read back exactly
+// zero and the scene the compute resolve publishes is black. The integer path
+// is implemented but gated off -- with it on the title stops issuing the
+// G-buffer pass altogether, which is not yet understood.
+// +DELTA_GPU_INT_RT=1                    integer colour targets (UNVALIDATED)
+// +DELTA_GPU_RELAX_ZEQUAL=0              restore the strict EQUAL depth test
+// +DELTA_GPU_VBRING_MB=<n>               override the vertex ring
+// +DELTA_GPU_CAPTURE_AFTER=150 +DELTA_GPU_CAPTURE_DIR=/tmp/cap   frame capture
+// +DELTA_GPU_TSCAN=<surface> +DELTA_GPU_TWATCH=1   descriptor archaeology
+// +DELTA_GPU_NOMRT=1 +DELTA_GPU_CBINFO=1  colour-target binding
+
+// ROOT CAUSE LEAD (2026-08-04): the descriptor pool at 0x8052xxxxxx is the
+// TITLE'S OWN HEAP -- DELTA_GUEST_WHIST=8052000000:1000000:400 names the writer
+// as Shadow_Shipping+0x48f07 (from +0x48ec5), which disassembles as malloc
+// chunk bookkeeping. The SRT points at a descriptor table the title has already
+// freed, while a fresh copy sits ~6 MiB away. That is a guest lifetime bug, and
+// one that reproduces every frame is usually something the emulator caused.
+// Next step is the allocator hook, not the renderer.
+
+// THE ARENA BIAS, CLOSED (2026-08-06): it was the drain budget. With
+// DELTA_GPU_ACB_FRAME=65536 the async-compute material fills keep up and the
+// "-3 arena" bias does not exist -- DELTA_GPU_ARENA_PROBE=4 makes ZERO
+// substitutions over a 20-minute run and TEXMISS reports 64 misses of one
+// 16x16 LUT (vs 27% null descriptors at small budgets). The historic constant
+// bias was the fill backlog sitting exactly N arenas behind the SRTs. The
+// heap sentinel walk-off is also gone in this configuration: NULLGUARD armed
+// but never fired over multiple long runs (keep it armed anyway).
+// +DELTA_GPU_ACB=1 +DELTA_GPU_ACB_FRAME=65536
+
+// THE UI / FADE, CLOSED (2026-08-06): the "template nothing ever writes" is
+// filled by the same async compute as the material arenas. With the 65536
+// budget the Bluepoint logo, the JAPAN Studio card and the full title screen
+// ("SHADOW OF THE COLOSSUS -- Press Any Button") all render correctly on the
+// scanout. No CPU writer exists to find.
+//
+// BOOT TIMELINE at ~4-6 fps (LATEST_EVERY snapshots): logos to ~frame 450,
+// world load done by ~frame 700 (SUMWATCH 16k -> 0), attract demo ~700-2800
+// (cuts of 2.5k-11.6k draws a frame), title screen ~frame 2900+, i.e. ~20 min
+// wall. OPEN QUESTION: during the demo the SCANOUT stays black while the cuts
+// render into offscreen targets (light/tonemap buffers show real scenes) --
+// either the demo's composite is masked by the fade layer, or the cuts are
+// the title-screen backdrop warming up. Visible content on the scanout:
+// logos, then black through the demo, then the title screen.
+//
+// THE RING EXHAUSTION, FIXED IN CODE (2026-08-06): the per-frame upload rings
+// were the "flat colours + exploded geometry" -- every draw staged its vertex
+// records, indices and 16 KiB cbuffer windows again (world drawn 3x a frame:
+// prepass + G-buffer + shadows), RINGHWM showed VB/UBO/SBO pegged at their
+// caps from ~130-250 draws, and each further draw fell to the HEURISTIC path
+// (guessed transform = the spikes; guessed colour = the flat panels) or was
+// dropped: 3.5M ring declines and 9135 heuristic draws in one frame at the
+// worst. vk_draw_recomp now dedupes staging per frame (DELTA_GPU_RING_DEDUP=0
+// reverts) and the rings grew to measured need; same phase after: declines
+// 3.6x down, heuristic 50x down, UBO peak 95 of 128 MiB.
+// AUTOSKIP is silenced here: gfx::inGameplay() latches during the heavy
+// title-backdrop frames and zeroes the pulses. DELTA_PAD_SCRIPT bypasses the
+// latch (checked first). Working recipe -- quiet through boot, then Cross:
+//   DELTA_PAD_SCRIPT="none:4500,cross:3,none:40,cross:3,none:40,..." (env var)
+// Pad reads run ~2 per guest frame in the title phase.
+//
+// THE MENU CRASH (2026-08-06): the heap-corruption SIGSEGV in the title's
+// malloc at Shadow_Shipping+0x48ac5 is DELTA_GPU_CS_SKIP_UPLOAD writing stale
+// staging back over CPU-owned guest memory. First seen over the allocator's
+// static bin array in module .data (float garbage at module+0xfacff0); the
+// dmem-only restriction (commit "the upload skip must not cover module
+// .data") moved the corruption, not removed it -- next crash was the same
+// malloc walk over a FIBER STACK in dmem (rax=0x830a79fbd0, libSceFiber in
+// the backtrace). The plan's "written, never read" does NOT imply "writes
+// every byte", and the title keeps fiber stacks and heaps in the same dmem
+// the material arenas live in. LEAVE THE KNOB OFF for this title until a
+// write-coverage-tracking version exists; without it a full hour scripted
+// through the menu runs crash-free (costs ~45-60 ms/frame of staging-in).
+//
+// THE 16x16 SRGB TEXMISS, CHARACTERIZED (2026-08-06): the one persistent
+// texture miss (dfmt=10 nfmt=9, arena slots 0x809xxxxxxx, ~58/run around the
+// title backdrop) is a PUBLISH-ORDER RACE, not staleness: at resolve time the
+// T#'s word0 (base) is zero while words 1-3 are valid; the miss report
+// re-reading the same slot microseconds later sees the full descriptor. The
+// title patches the base in last (streaming residency); real hardware reads
+// descriptors at wave launch, long after. The writeback-flush fix (commit
+// "flush pending compute writebacks before the replay reads a descriptor")
+// closes the adjacent staleness class but not this. Impact: one LUT samples
+// white. Candidate fix: defer/retry resolution for base==0-but-plausible T#s
+// at the NEXT draw using the same slot, or resolve against the slot at
+// submit-end rather than record time.
+//
+// THE COMPUTE WRITEBACK REVERTS THE CPU, MEASURED (2026-08-07). Separate from
+// the New Game crash (it is NOT its cause -- see the ruled-out list below), but
+// the same shape as the two upload-skip corruptions above and real: the compute
+// writeback copied the WHOLE staged range back to guest memory, and only 4% of
+// those bytes had been written by the dispatch (+DELTA_GPU_CS_WB_AUDIT=1; the
+// perf line now carries wb=%). Ranges up to 8 MiB were written back with the
+// shader having written ZERO bytes -- e.g. base=0x8068838000 +0x7f8000. Every
+// CPU write sharing such a range was reverted to the stage-in snapshot, and this
+// title keeps its heap in the same direct memory as the buffers it hands to
+// compute. The writeback now publishes only the words the dispatch changed
+// (compared against a shadow of the staged bytes) and adopts the CPU's word
+// otherwise, so staging, shadow and guest all agree again when it returns.
+// +DELTA_GPU_CS_WB_FULL=1   restore the copy-everything behaviour (A/B)
+// +DELTA_GPU_CS_WB_AUDIT=1  report every writeback the shader did not fill
+
+// PAST THE TITLE (2026-08-06): the menu opens and renders readable entries
+// (New Game / Settings / Image Gallery, difficulty select) on current
+// builds; the earlier "solid glyph blocks" existed only pre-dedupe.
+//
+// THE NEW-GAME CRASH: THE 2026-08-06 DIAGNOSIS WAS BUILT ON STALE REGISTERS
+// AND IS WITHDRAWN (2026-08-07). It read "a fiber returned its stack to the
+// pool and kept running on it" out of rax=0x830a79fbd0 / rsp=0x830a79fb10,
+// registers that were never the fault's. On aarch64 the dump printed FEX's
+// in-memory CPUState, which the JIT only spills at block boundaries and which
+// FEX's syscall op fills with just the subset the syscall ABI reads. Two facts
+// settle it: rdi/rsi in all four historic dumps are VERBATIM the thread's last
+// syscall arguments (sys_umtx_op(0x200003420,0x12) -> rdi=0x200003420,rsi=0x12;
+// sys_batch_map(0x10,0x10) -> rdi=0x10,rsi=0x10), and si_addr never equalled
+// rax-8 as `mov rcx,[rax-8]` requires. The dump now reads the JIT signal
+// context (guestGregsFromSignal) and prints a corroboration line -- every new
+// dump says "fault = rax-8". The maps block lied too: it slurped
+// /proc/self/maps into 1 MiB and silently truncated, so all four dumps reported
+// /dev/nvidiactl as the fault's neighbour. It streams now and says GAP.
+// libSceFiber is NOT implicated: that census page was picked from the stale rax.
+//
+// WHAT THE CRASH ACTUALLY IS (measured 2026-08-07, three crashes):
+// the faulting function (prologue 0x48a70) inserts a chunk into the allocator's
+// SIZE-ORDERED FREE TREE (dlmalloc-shaped: state+0x80 is the head and the loop
+// sentinel, a node is chunk+0x10, its size is at node-8, children at node+0x00
+// and node+0x08, dup-list at +0x10/+0x18, parent|colour at +0x20). The tree
+// holds STALE CHILD LINKS pointing at chunks that have been handed back out and
+// refilled with live data (recognisable 40-byte and 32-byte record arrays of
+// packed descriptors -- 0x00XX7080deYYYYYY / 0x180272040000YYYY). The walk then
+// reads that data as nodes and dies a few steps later on an unmapped "node".
+// The victim is the SAME node every run: 0x8052e00020, size 0xd0, and the split
+// inside it is exact -- +0x10/+0x18/+0x20 (dup list and parent, written by
+// SCALAR stores) are correct, while +0x00/+0x08 (the two children) are stale.
+// Crash timing is NOT deterministic (script step 86 / 48 / 8), so it is a race
+// and single-run A/B proves nothing; one run corrupted into a 4-thread
+// sched_yield livelock instead of a fault.
+// The walk is now a crash-time diagnostic: it replays the insert, flags the
+// first node that is no longer a free chunk, names the field holding the stale
+// link and prints the census command for it.
+//
+// RULED OUT BY MEASUREMENT, not by argument:
+//  - Compute staging writeback: "no compute staging range covers the stale
+//    link" for every stale link in two independent crashes (the crash handler
+//    asks gpu::DescribeCsRangeCovering directly).
+//  - FEX vector TSO (+DELTA_FEX_VECTOR_TSO=1): reproduces with an identical
+//    signature (same node, children stale, parent intact). Worth knowing the
+//    insert publishes both children with ONE `vmovups [rsi],xmm0` at 0x48b46,
+//    which made this the best-looking theory; it is still wrong.
+//  - Unaligned-atomic backpatching: 0 of the 1264 eboot backpatch sites fall in
+//    the allocator (0x47000-0x4b000), its entry (0x12000-0x13000), its caller
+//    at 0x16ac3e, or the job system (0x38000-0x3a000).
+//  - Any non-guest writer: a from-boot census of the page,
+//    +DELTA_GUEST_WHIST=8052e00000:1000:200, names nine writers over 120
+//    reports and every one is guest allocator code (0x48b3a, 0x48dfb, 0x499cc,
+//    0x4a0b7, 0x4a16e, 0x4a1bf, 0x4a1f5, 0x4a358, 0x4a388 -- insert plus the
+//    rebalance at 0x4a040). ZERO unattributed (emulator-side) writes.
+// So the corrupted words are written only by the title's own allocator. What is
+// left is (a) our JIT mis-executing one of those nine sites, or (b) two guest
+// threads inside the allocator at once -- a half-finished red-black rebalance
+// seen by a second walker has exactly this shape (children wrong, parent
+// right). The crashing thread runs on a fiber (backtrace ends at
+// libSceFiber+0x2f6, through the job system at 0x39ab6/0x38ad2) and its syscall
+// history is almost entirely MUTEX_WAIT/MUTEX_WAKE on one lock, 0x200003420,
+// which is the contention this allocator is under.
+//
+// (b) CANNOT BE SETTLED BY SAMPLING -- priced, not guessed (2026-08-07).
+// DELTA_RIPRACE (see the diag commit) signals every guest thread and has it
+// reconstruct its own guest rip from its signal context, so it reports where
+// threads REALLY are, and counts rounds with two or more inside a range.
+// Measured over 410k rounds / 8.1M thread-answers on the allocator core
+// 201400047000-20140004b000: 199 rounds caught ONE thread inside, two rounds
+// caught two (0x48f07 `mov [r13+r15+0x10],r13` and neighbours -- chunk
+// bookkeeping, not a lock spin), and the two samples in those rounds were 2832 ns
+// and 5760 ns apart. ZERO pairs within a microsecond, i.e. nothing that shows
+// simultaneity rather than adjacent serialised access.
+// The duty cycle is what kills the method: p(a thread-sample lands inside) =
+// 2.4e-5, so with NO exclusion at all the expected number of simultaneous pairs
+// in 410k rounds is 0.046. Observing zero is exactly what an unlocked section
+// produces. One expected detection needs 8.9e6 rounds (2.5 h at 1 ms); a
+// decisive ten needs a day. Narrowed to the insert + rebalance alone,
+// p = 2.6e-6 and it needs 7.6e8 rounds. Do not re-run this hoping for an answer.
+//   +DELTA_RIPRACE=1:201400047000-20140004b000        (allocator core)
+//   +DELTA_RIPRACE=1:201400048a70-201400048b64,20140004a040-20140004a205
+//
+// THE DETERMINISTIC TEST, RUN (2026-08-07): CONCURRENCY IS REAL BUT IS NOT THE
+// CAUSE. DELTA_SOTC_ALLOCLOCK detours the allocator entries (0x12820 alloc,
+// 0x12af0 free, 0x48a70 free-tree insert) and holds a native mutex across each
+// call, so every call is observed instead of one in 40000, and a failed try_lock
+// names a second thread already inside.
+//   +DELTA_SOTC_ALLOCLOCK=2   one mutex PER SITE -- the measurement
+//   +DELTA_SOTC_ALLOCLOCK=1   one SHARED mutex   -- the mitigation (~3x slower)
+// Mode 2, one boot into the menu:
+//   alloc(0x12820)          4809876 calls,  366064 contended
+//   free(0x12af0)           1505986 calls,    7103 contended
+//   freeTreeInsert(0x48a70)  184030 calls,       5 contended   <-- a violation
+// Five is real: 0x48a70 mutates the tree, takes no lock itself and makes exactly
+// one call (the rebalance at 0x4a040), so it must be entered with exclusion
+// already held. Two threads inside it is the exclusion failing, not contention.
+// Mode 1 then drives that to 0 over 194503 inserts -- and THE CRASH STILL HAPPENS,
+// same rip, same node 0x8052e00020, same stale child[0] into 0x80577xxxxx.
+// (A first mitigation attempt used mode 2 by mistake and proved nothing: per-site
+// locks let a thread in 0x12820 meet a thread in 0x12af0 over the same tree.)
+//
+// WHERE THAT LEAVES IT (corrected 2026-08-07 -- see the withdrawal below):
+// concurrency is real but disfavoured as the cause, and no emulator-side writer
+// touches the pages. The cause is still open.
+//
+// WITHDRAWN: "the corrupted node is the SAME every crash, so this is a
+// deterministic miscompile". That was true of five crashes and false of the
+// sixth. Runs 1-5 all tripped on node 0x8052e00020's child[0]; run 6 tripped on
+// node 0x807bbe6f90's child[1], pointing at 0x8052ec4170, with 0x8052e00020 not
+// even on the walk. Node identity was a small-sample artifact and the
+// determinism argument built on it does not stand. The victim varies; what is
+// stable is only the shape (a link that still points at a chunk which has been
+// handed back out and refilled).
+//
+// DELTA_SOTC_TREEWATCH=1 validates one node's child[0] on both sides of every
+// allocator call (entry clean + exit dirty names the call containing the store).
+// It reported 16070962 checks, 2 bad-on-entry, 0 transitions -- which says
+// nothing, because it was aimed at 0x8052e00020 and that run's victim was a
+// different node. A single-field watch is the wrong instrument once the victim
+// moves. Two lessons are baked into the code and worth keeping:
+//   - the node does not exist at boot, so the watch must stay disarmed until its
+//     page is mapped, or the first allocator call kills the process (it did);
+//   - it must only judge the field while the node is ITSELF a live free chunk,
+//     otherwise pre-membership junk reads as corruption (124 phantom hits).
+//
+// ALSO FIXED: chunk sizes are 8-GRANULAR, not 16. The allocator masks its size
+// word with ~7, and run 6 contained a real free chunk of 0x158, which the
+// crash-time walker's 16-alignment test flagged as "no longer a free chunk" --
+// blaming the wrong link. Both the walker and the watch now test 8-granularity.
+// Any earlier walk output that broke at a non-16-aligned size should be re-read.
+//
+// LATENT, NOT THIS CRASH (for whoever wants it): the guest pthread mutex at
+// 0x200003420 failed to exclude 5 times in 184030 free-tree inserts under
+// contention (DELTA_SOTC_ALLOCLOCK=2). Serialising it away does not fix the New
+// Game crash, so it is not the cause here -- but a userland-CAS or umtx wake that
+// leaks mutual exclusion is a latent bug for every title on this backend and
+// deserves its own chase. Start at the 27 unaligned-atomic backpatch sites
+// clustered in 0x270db-0x2719b of the module at 0x200200000000, since FEX
+// documents that backpatching makes even ALIGNED accesses through that site
+// non-atomic (HalfBarrierTSOEnabled).
+//
+// THE HOST-MUTEX EXPERIMENT WAS NEVER SERIALISING THE ALLOCATOR (2026-08-07).
+// A scan of every direct call in the eboot targeting the allocator core
+// (0x47000-0x4b000) finds 22 EXTERNAL entry points, called from all over the
+// image -- 0x8c536, 0x33710, 0x25707b, 0xa4675c, 0x443d8, 0x4bdea and more. So
+// locking 0x12820 + 0x12af0 covered 3 doors of 22+, and the earlier conclusion
+// "serialising the allocator does not stop the corruption, so it is not a race"
+// IS WITHDRAWN. The gap recorded at the time was wrong too: 0x12350 is 31 bytes
+// that decrement a scope depth counter (`dec dword [rax+0x400]`) and free nothing,
+// so there is no bulk-free path there, and its PIC prologue is 13 bytes -- not
+// detourable anyway.
+//
+// LOCK THE MUTATORS INSTEAD. All 11 call sites of the tree-mutating functions live
+// inside the core, so serialising those covers every door at once, and it is
+// narrower and cheaper than the API lock (2 fps against 1.3). The five mutators:
+//   0x48a70 treeInsert     cut 16      0x497f0 treeRemove    cut 16
+//   0x4a040 treeRebalance  cut 14      0x4a210 treeFixup     cut 15
+//   0x48c80 treeCoalesce   cut 17
+// 0x48c80 was missed by every earlier experiment: census site 0x48dfb lives there,
+// and it was mis-attributed to 0x48c70, a 9-byte leaf whose `ret` is followed by
+// SEVEN nops -- one short of the eight the function-boundary scan wanted. It is the
+// most contended site of all (6 contentions in its first 152 calls).
+// 0x4a040 uses rbp as a NODE pointer (loaded from rdx at 0x4a075), so its
+// [rbp+0x20] accesses are node fields, not stack args, and a detour is safe.
+//
+// MEASURED (+DELTA_SOTC_ALLOCLOCK=1 +DELTA_SOTC_TREEWALK=4096):
+//   treeInsert     290885 calls, 309 CONTENDED     treeRemove   103024 calls, 42
+//   treeRebalance   70316 calls,   0               treeFixup     29217 calls,  0
+// 351 events, against 5 for the old three-site configuration. Rebalance and fixup
+// show 0 because they are called from inside insert/remove, which already hold the
+// shared lock. Insert-versus-remove concurrency was invisible to the old setup by
+// construction, and it is exactly the shape the corruption has: a live parent link
+// into a chunk that has been handed back out and refilled.
+//
+// AND IT GETS FURTHER THAN ANY OTHER RUN: script step 92 with no fault, past all
+// five previously observed crash points (8, 40, 40, 48, 86). NOT a fix -- the
+// periodic walk still tripped once during that run, so the tree does still go bad,
+// and the fifth mutator was not yet covered when it ran. But "not a race" is off
+// the table, and the next run to make is simply this one with all five mutators
+// locked, twice, before anyone declares anything.
+//
+// THE BRACKETING WALK (+DELTA_SOTC_TREEWALK=<N>) walks the whole tree every N
+// allocator calls and reports the first link pointing at a non-free chunk, with a
+// ring of the last 8192 calls (site, tid, args) for the window. Its first trip:
+// "after 11591691 allocator calls, 181 nodes visited: the link at 0x8052ec2870
+// points at 0x271001541bad, size word 0". Note 0x2710 -- the values these dead
+// links point at are consistently 0x2710/0x270f (10000/9999) paired with an
+// incrementing 0x0154xxxx-0x015dxxxx, i.e. one live record array that keeps
+// getting handed the chunk. The ring was 64 entries then, far under the 4096
+// cadence, so it showed only allocs and no mutator; it is 8192 now.
+//
+// THE CONFIRMATION RUNS COULD NOT BE COMPLETED (2026-08-07), and the reason is
+// itself the finding. Serialising the coalescer 0x48c80 STALLS THE TITLE: seven
+// hooks installed but unlocked runs 174093 inserts and 3.3 fps in five minutes; the
+// same seven with the coalescer locked manages 129 inserts and never renders a
+// frame. Per-state locks do not help, so it is not false sharing -- the coalescer is
+// reached with guest locks already held and the sched_yield spin convoys behind it.
+// It is observed but NOT locked now (flip its flag in the site table to reproduce).
+// So there is no two-clean-run result; the step-92 survival above stands alone, on
+// four mutators, and must not be read as a confirmed mechanism.
+//
+// WHAT THE CONTENTION FORENSICS SETTLED (+DELTA_SOTC_ALLOCLOCK=1 reports it):
+// when the host try_lock fails, both threads are dumped with their guest tid, site,
+// allocator state and the owner word of the guest mutex at 0x200003420.
+//  - THE 351 CONTENTIONS FROM THE PREVIOUS ROUND WERE MOSTLY FALSE. 22 of the first
+//    24 were between DIFFERENT allocator instances. This title runs THREE: two
+//    static in module .data (0x201402dfc700, 0x201402dfc780) and one in direct
+//    memory (0x8309e0fd20, the one whose tree crashes). They share no tree, and a
+//    single global lock was serialising independent heaps against each other.
+//    arg0 is the state at insert, remove and coalesce (all reach it at arg0+0x70);
+//    rebalance and fixup take node pointers, which is why they always showed 0.
+//  - WITH PER-STATE LOCKING the count means something, and same-tree collisions ARE
+//    real: two guest threads inside the tree mutators of state 0x201402dfc700 at
+//    once, repeatedly.
+//  - AND THE GUEST MUTEX AT 0x200003420 IS UNOWNED IN EVERY ONE OF THEM (word=0).
+//    So it is NOT the lock protecting that allocator. The belief that it was came
+//    from the crashing thread's syscall history and does not survive contact.
+//  - Note the collisions seen were on 0x201402dfc700, NOT on 0x8309e0fd20, whose
+//    tree is the one that crashes. No same-tree collision on the crashing state has
+//    been observed yet.
+//
+// NEXT STEP: find what actually serialises the static allocator at 0x201402dfc700 --
+// it is a shared global heap, not a per-thread scope, so something must. Candidates:
+// a different umutex (dump the guest lock words the call path touches, not just
+// 0x200003420), a spinlock in a caller, or nothing at all because the title reaches
+// it only from one thread on hardware and our thread/affinity mapping breaks that.
+// Only once the real lock is named does "the exclusion fails under FEX" become a
+// testable claim. And the crashing state 0x8309e0fd20 needs the same treatment: get
+// a same-tree collision on IT before assuming its corruption is concurrency at all.
+//
+// CROSS-HEAP ROUTING: RULED OUT (2026-08-07, +DELTA_SOTC_HEAPROUTE=1). The idea was
+// that the corruption needs no concurrency if a chunk is freed into one heap's tree
+// while its memory belongs to another heap's arena that is later recycled wholesale.
+// The insert takes the state in rdi and inserts the chunk cached at state+0xc0, so
+// both sides are readable at the trampoline; bucketing chunk addresses by 256 MiB per
+// state over seven minutes of world load:
+//   state 0x8309e0fd20    23609 inserts  0x8052e00010..0x81120ae100  buckets 805..810
+//   state 0x201402dfc700  60074 inserts  0x83008a1190..0x8604780120  buckets 830,850..860
+//   state 0x201402ed3260     25 inserts  0x830fb72d50..0x830fc8f310  bucket  830
+// The crashing heap shares no bucket with either static heap, and ALL five dead links
+// so far (0x8052ec4170, 0x805776d090, 0x8057766c90, 0x8052ec2870, 0x8057763990) lie
+// inside the crashing heap's own range. The chunk was freed into this tree, its memory
+// belongs to this heap, and it was handed out again while the tree kept the link.
+// Two leads fall out: the two STATIC heaps do share bucket 0x830 (38695 vs 25), an
+// overlap between those two that nobody has looked at; and the corruption concentrates
+// where insertion is rarest -- bucket 0x805 takes 1.3% of the crashing heap's inserts
+// (313 of 23609) yet hosts four of the five dead links, and 0x8052e00010 is that
+// heap's lowest chunk address, i.e. its oldest arena.
+//
+// ===================== CASE FILE, AS IT STANDS (2026-08-07) =====================
+// THE DEFECT: confirming New Game corrupts the title's size-ordered free tree on the
+// direct-memory heap (state 0x8309e0fd20). A link keeps pointing at a chunk that has
+// been handed back out and refilled -- always a live record array, whose targets carry
+// a recognisable 0x2710/0x270f (10000/9999) plus incrementing 0x0154xxxx-0x015dxxxx
+// pattern. The insert at eboot+0x48a70 later walks that link and dies at +0x48ac5.
+// The victim node and field VARY between runs (an early claim that they were constant
+// was a five-sample artifact and is withdrawn). Crash timing varies too: script step
+// 8, 40, 40, 48, 86, and one run corrupted into a four-thread sched_yield livelock
+// instead of faulting.
+//
+// EXCLUDED BY MEASUREMENT, each with its instrument:
+//  - the compute writeback: no staged range covers any stale link (crash handler asks
+//    gpu::DescribeCsRangeCovering directly), in two independent crashes;
+//  - FEX vector TSO: +DELTA_FEX_VECTOR_TSO=1 reproduces with an identical signature;
+//  - unaligned-atomic backpatching in the allocator: 0 of 1264 eboot backpatch sites
+//    fall in the allocator, its entry, its caller, or the job system;
+//  - any emulator-side writer: a from-boot census of the page names nine writers over
+//    120 reports, every one guest allocator code, ZERO unattributed writes;
+//  - API-level concurrent entry: serialised, crash unchanged (but see the caveat --
+//    that lock only covered 3 of the core's 22 external entry points);
+//  - cross-heap routing: the heaps are address-disjoint, above.
+//
+// DEMONSTRATED BUT NOT TIED TO THE CRASH: concurrent tree mutation. With one lock per
+// allocator state, genuine same-tree collisions occur repeatedly on the STATIC heap
+// 0x201402dfc700 -- and in every one the guest mutex at 0x200003420 reads UNOWNED, so
+// that mutex is not what protects it (the belief that it was came from the crashing
+// thread's syscall history). No same-tree collision has ever been observed on
+// 0x8309e0fd20, the heap that crashes.
+//
+// INSTRUMENTS NOW AVAILABLE (all off by default):
+//  +DELTA_SOTC_ALLOCLOCK=1  per-allocator-state lock over the tree mutators; =2 gives
+//      one mutex per site instead, which is the contention MEASUREMENT mode. Prints
+//      per-site call/contention counts and, on each collision, both threads' guest
+//      tid, site, allocator state and the guest mutex owner word.
+//      Serialising the coalescer 0x48c80 STALLS the title (174093 inserts and 3.3 fps
+//      unlocked, 129 inserts and no frame locked) so it is observed, not locked.
+//  +DELTA_SOTC_TREEWALK=<N>  whole-tree integrity walk every N allocator calls, with a
+//      ring of the last 8192 calls for the window it brackets.
+//  +DELTA_SOTC_TREEWATCH=1   one node's child[0] checked on both sides of every call
+//      (needs DELTA_SOTC_TREEWATCH_NODE; only useful once a victim is known to recur).
+//  +DELTA_SOTC_HEAPROUTE=1   per-state chunk-address buckets.
+//  +DELTA_RIPRACE=<ms>:<lo>-<hi>  signal-sampled guest rips; do NOT use it to prove
+//      absence of concurrency, the duty cycle makes that unaffordable (0.046 expected
+//      detections even with no exclusion at all).
+//  The crash dump itself now replays the insert, names the first link that left the
+//  tree, prints the census command for it and asks whether a compute range covers it.
+//
+// RECOMMENDED OPENING MOVE NEXT SESSION: get a same-tree collision on 0x8309e0fd20, or
+// prove there is none. Run +DELTA_SOTC_ALLOCLOCK=2 (per-site, so nothing is serialised
+// and timing is untouched) for a full repro and grep the [contend] lines for
+// a0=0x8309e0fd20 on both sides. If none appear, concurrency is dead for this heap and
+// the remaining suspect is the allocator's own logic executing wrongly -- at which
+// point bracket it with +DELTA_SOTC_TREEWALK=512 and read the ring, which is what the
+// 8192-entry ring was enlarged for. If they do appear, find the lock that should have
+// excluded them by dumping every guest lock word the call path touches, not just
+// 0x200003420.
+
+// PERFORMANCE (2026-08-06). 2.4 -> 3.4 fps by moving the compute range buffers
+// into VRAM (commit "compute buffers the GPU hammers do not belong in system
+// RAM"). They were HOST_CACHED and never DEVICE_LOCAL, so every dispatch read
+// and wrote its storage over PCIe: 282 ms of a 457 ms frame, disguised as GPU
+// time because it surfaced as fence waits. nvidia-smi told the story -- 85%
+// utilisation at 163 W of a 350 W part is a memory-stalled GPU, not a busy one.
+// Mapping VRAM directly is much worse (uncached CPU reads ~100 MB/s -> 0.2 fps);
+// the host-cached mirror plus DMA at the staging edges is the shape that works.
+//
+// WHAT THE FRAME LOOKS LIKE NOW (per frame, at ~3.4 fps): out=163ms (writeback:
+// image retile, the memcpy to guest memory, and UploadCsRangeToRt's submit+wait
+// PER aliased image), gpu=92ms, draw=83ms, in=59ms. `out` is the next target,
+// and RunAliasedCopy's one-round-trip-per-image is the first thing to look at.
+// +DELTA_GPU_CSSYNC=1     submit+wait round trips a frame, by call site
+// +DELTA_GPU_CSVRAM=0     restore the old system-RAM placement
+// +DELTA_GPU_CSRENAME=1   removes the remaining stage-hazard syncs; measured
+//                         within run-to-run noise, so left off
+//
+// MEASUREMENT GOTCHA: scene weight drifts as the world streams in, so fps from
+// a 130 s run is not comparable to fps from a 300 s one, and the last-8-samples
+// window lands wherever the run happened to be. Compare same-length runs on the
+// same binary with the knob flipped (scratchpad/sotc/bench.sh does this: median
+// over all samples after the first 20). Run-to-run spread is ~15%.
+//
+// CSIMPORT (DELTA_GPU_CSIMPORT=1) is faster still but FAULTS: it dies in libc
+// on a null deref where a 300 s baseline covering MORE frames does not, so the
+// crash is the import, not the extra progress. Not a placement problem -- the
+// guest pages it maps outlive the mapping only by luck.
+
+// WHERE IT IS BOUND NOW (2026-08-06, after the VRAM staging fix). The GPU is
+// NO LONGER THE LIMIT: utilisation fell 85% -> ~18%, power 163 W -> 85 W, and
+// the card DOWNCLOCKS to 555-1500 MHz because it keeps running dry. This is a
+// CPU-bound frame now, and the old "the compute shaders must be slow" theory
+// is dead -- check nvidia-smi before believing a fence wait is GPU work.
+//
+// Ruled out, do not redo:
+//   - submit-lock contention: SubmitDcb holds one global mutex for the whole
+//     DCB walk, and the measured wait is 0.00 ms a frame. The guest submits one
+//     at a time regardless, so making the renderer concurrent buys nothing.
+//   - Resizable BAR (host-visible VRAM) for compute staging: built as its own
+//     path and measured at 0.4 fps, because staging-in goes 76 ms -> 2193 ms.
+//     Image detiling writes tile-by-tile, not linearly, which is the worst case
+//     for write-combined memory, and the one shape that WOULD suit it
+//     (read-only plain buffers) is 0.1 MB of the 128 MB a frame. The code was
+//     removed; only the measurement was worth keeping.
+//
+// The profile is FLAT -- nothing above 2.3%. Grouped, per unit of CPU:
+//   ~18%  guest thread sync through our emulation (sys_umtx_op, the WaitChan
+//         map, pthread mutex/cond, and the futex syscalls under them)
+//   ~8%   compute staging + writeback (CopyMacroTiledMip is the single biggest
+//         userspace symbol at 2.3%, then CsBatchFlush, FlushCsWritesRange)
+//   rest  lifted guest code
+// There is no next 2x here. The 34 MB a frame that still reaches the CPU
+// detiler could be GPU-copied when the texture cache already holds the image
+// (the RT bridge already does exactly this for the other 92 MB), but that is
+// worth a couple of percent, not a step change.
+
+// UMTX: 44-67% OF WALL TIME AND WORTH NOTHING (2026-08-06). The four threads
+// that submit our command buffers spend 44-67% of their WALL time inside
+// sys_umtx_op, and making it faster gains zero fps. Recorded because a huge
+// wall share reads like a bottleneck and this one is not. A CPU profile cannot
+// show it either -- a thread blocked in futex_wait burns no cycles and
+// vanishes from the samples -- so measure it with:
+// +DELTA_UMTX_PROF=1   per-thread wall share, per-op cost, fast-path hit rate
+//
+// Per 2 s window: MUTEX_WAIT 3.4M calls @ ~850ns, MUTEX_WAKE 2.1M @ ~500ns,
+// everything else single digits. Both used to take the bucket mutex and look
+// the address up in the channel map BEFORE reading the owner word that decides
+// the call; reading it first took WAIT to 850ns and answers 22% of WAITs and
+// 9% of WAKEs outright. The other 78% are real contention -- the title's job
+// system acquires one shared mutex 3.4M times a second, and we charge ~850ns
+// where hardware charges 20-100ns.
+//
+// THE TEST THAT SETTLES IT. Make MUTEX_WAIT cost 10us instead of 850ns
+// (+DELTA_UMTX_INJECT_NS=10000, 12x its natural cost at 3.4M calls/s) and fps
+// does not move at all: 3.30 median either way. The op is NOT on the critical
+// path -- those threads spin while nobody waits for them. 3.4M/s is 450K per
+// FRAME, which no job system does for real; the rate is a symptom of a slow
+// frame, not its cause (the same loop DELTA_SCHED_YIELD_REAL sits in).
+//
+// Injecting cost is the oracle for "is X on the critical path": a wall-time
+// measurement says where threads ARE, not whether anything waits on them.
+// Copy the trick before optimising anything else.
+//
+// The thundering-herd theory (one condvar per bucket, notify_all on every wake)
+// was refuted by the 850ns mean itself: one cv.wait_for tick is 2ms, so if even
+// 1% of calls slept the mean would be ~20us. Nothing blocks, so there is no
+// herd. Do not re-derive this.

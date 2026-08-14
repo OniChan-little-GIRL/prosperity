@@ -23,6 +23,7 @@
 #include "gpu/vulkan/vk_perf.h"
 #include "gpu/vulkan/vk_render_target.h"
 #include "gpu/vulkan/vk_texture_cache.h"
+#include "gpu/vulkan/vk_trace.h"
 
 #include <algorithm>
 #include <chrono>
@@ -34,6 +35,7 @@
 #include <map>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <utl/options.h>
 
@@ -43,13 +45,40 @@ DELTA_OPTION(bool, kCsList, "DELTA_GPU_CSLIST", false);
 DELTA_OPTION(int, kCsHist, "DELTA_GPU_CSHIST", 0);
 DELTA_OPTION(bool, kCsRtTrace, "DELTA_GPU_CSRT", false);
 DELTA_OPTION(bool, kCsRename, "DELTA_GPU_CSRENAME", false);
+// Skip staging in a compute range the shader never reads (see the use below).
+DELTA_OPTION(bool, kCsSkipUpload, "DELTA_GPU_CS_SKIP_UPLOAD", false);
+uint64_t g_cs_skip_n = 0;
 DELTA_OPTION(bool, kCsImport, "DELTA_GPU_CSIMPORT", false);
+// Revert to copying every staged byte back to guest memory, shader-written or
+// not (the behaviour before the write-coverage merge). Kept for A/B only: it
+// reverts CPU writes that share a staged range and corrupts SotC's heap.
+DELTA_OPTION(bool, kCsWbFull, "DELTA_GPU_CS_WB_FULL", false);
+// Report every writeback whose dispatch did not write the whole range: the
+// difference is guest memory we would have reverted.
+DELTA_OPTION(bool, kCsWbAudit, "DELTA_GPU_CS_WB_AUDIT", false);
+// Put compute range buffers in VRAM rather than system RAM, with a host-cached
+// mirror for the staging edges. The GPU reads and writes these every dispatch,
+// and doing that across PCIe was 282 ms of a 457 ms SotC frame. No-op on a UMA
+// part, where one buffer is already both (see FindDeviceMemoryType).
+DELTA_OPTION(bool, kCsVram, "DELTA_GPU_CSVRAM", true);
 DELTA_OPTION(uint64_t, kCsFlushTrace, "DELTA_GPU_CSFLUSHTRACE", 0);
+DELTA_OPTION(bool, kCsSyncReport, "DELTA_GPU_CSSYNC", false);
 DELTA_OPTION(bool, kGpuCsgpuVerbose, "DELTA_GPU_CSGPU_VERBOSE", false);
+uint64_t g_cs_image_staged = 0;
 }  // namespace
 
 namespace gpu::vk {
 namespace {
+// Writeback-half accounting (DELTA_GPU_CSSYNC); defined here because the
+// aliased-image bridge below is the thing being counted.
+uint64_t g_out_retile_ns = 0, g_out_rt_ns = 0, g_out_tail_ns = 0;
+uint64_t g_stage_ro_bytes = 0, g_stage_rw_bytes = 0, g_stage_img_bytes = 0;
+uint64_t g_stage_cpu_detile_bytes = 0, g_stage_cpu_detile_n = 0;
+// Staging-in halves: hashing guest memory to decide validity, CPU detiling,
+// the render-target bridge (its own submit+wait), and the plain copy.
+uint64_t g_in_hash_ns = 0, g_in_detile_ns = 0, g_in_rt_ns = 0, g_in_copy_ns = 0;
+uint64_t g_in_hash_n = 0, g_in_rt_n = 0;
+uint64_t g_out_retile_n = 0, g_out_rt_submits = 0;
 
 using rhi::ComputeInfo;
 
@@ -66,6 +95,28 @@ struct CsPipe {
 };
 
 std::unordered_map<uint64_t, CsPipe> g_cs_pipes;
+
+// Memory for a buffer the GPU alone touches: VRAM, host visibility irrelevant.
+// Only worth splitting off a host mirror when the device heap is NOT already
+// cheap for the CPU to read -- on a UMA part the one buffer serves both sides
+// and FindComputeMemoryType already returns it, so report none here.
+uint32_t FindDeviceMemoryType(uint32_t type_bits) {
+  VkPhysicalDeviceMemoryProperties properties;
+  vkGetPhysicalDeviceMemoryProperties(g_dev.phys, &properties);
+  constexpr VkMemoryPropertyFlags kUnified =
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+      VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+  for (uint32_t i = 0; i < properties.memoryTypeCount; i++)
+    if ((type_bits & (1u << i)) &&
+        (properties.memoryTypes[i].propertyFlags & kUnified) == kUnified)
+      return UINT32_MAX;
+  for (uint32_t i = 0; i < properties.memoryTypeCount; i++)
+    if ((type_bits & (1u << i)) &&
+        (properties.memoryTypes[i].propertyFlags &
+         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+      return i;
+  return UINT32_MAX;
+}
 
 uint32_t FindComputeMemoryType(uint32_t type_bits) {
   VkPhysicalDeviceMemoryProperties properties;
@@ -148,6 +199,7 @@ CsPipe* GetCsPipe(const ComputeInfo& ci) {
   pi.layout = cp.layout;
   VkResult r = vkCreateComputePipelines(g_dev.device, g_dev.pipeline_cache, 1,
                                         &pi, nullptr, &cp.pipe);
+  SavePipelineCache();  // persist the driver's compiled pipeline
   vkDestroyShaderModule(g_dev.device, cs, nullptr);
   if (r != VK_SUCCESS) {
     std::fprintf(stderr, "[gpuvk] compute pipeline failed: %d\n", (int)r);
@@ -351,8 +403,36 @@ bool StageCsImage(const ComputeInfo::Res& res, void* dst) {
 
 bool WritebackCsImage(const ComputeInfo::Res& res, const void* src) {
   gcn::TextureLayout32 tiled, linear;
-  if (!BuildCsImageLayouts(res, tiled, linear))
+  // A bail here leaves the destination holding whatever it held before the
+  // dispatch, which for a first upload is zeros -- indistinguishable from a
+  // dispatch that never ran unless it says so (DELTA_GPU_CS_WB_AUDIT).
+  if (!BuildCsImageLayouts(res, tiled, linear)) {
+    if (kCsWbAudit) {
+      static int n = 0;
+      if (n++ < 16) {
+        gcn::TextureLayout32 t2, l2;
+        const uint32_t stage_tiling = res.tiling_idx == 31 ? 31 : 8;
+        const bool tok = gcn::BuildTextureLayout32(
+            t2, res.width, res.height, res.pitch, res.layers, res.mip_levels,
+            res.tiling_idx, res.pow2_pad, res.elem_bytes);
+        const bool lok = gcn::BuildTextureLayout32(
+            l2, res.width, res.height, res.pitch, res.layers, res.mip_levels,
+            stage_tiling, res.pow2_pad, res.stage_elem_bytes);
+        std::fprintf(stderr,
+                     "[cswb] image layout REJECT base=%#llx %ux%u layers=%u "
+                     "mips=%u tiling=%u elem=%u/%u tiledOk=%d(%llu vs guest "
+                     "%llu) linearOk=%d(%llu vs size %llu)\n",
+                     (unsigned long long)res.base, res.width, res.height,
+                     res.layers, res.mip_levels, res.tiling_idx, res.elem_bytes,
+                     res.stage_elem_bytes, (int)tok,
+                     (unsigned long long)(tok ? t2.size : 0),
+                     (unsigned long long)res.guest_size, (int)lok,
+                     (unsigned long long)(lok ? l2.size : 0),
+                     (unsigned long long)res.size);
+      }
+    }
     return false;
+  }
   const bool direct = res.elem_bytes == res.stage_elem_bytes;
   std::vector<uint8_t> tight;
   if (!direct)
@@ -369,8 +449,18 @@ bool WritebackCsImage(const ComputeInfo::Res& res, const void* src) {
         if (!gcn::RetileTextureMip32Pitched(
                 level_src,
                 static_cast<size_t>(src_level.pitch) * res.stage_elem_bytes,
-                reinterpret_cast<void*>(res.base), tiled, mip, layer))
+                reinterpret_cast<void*>(res.base), tiled, mip, layer)) {
+          if (kCsWbAudit) {
+            static int n = 0;
+            if (n++ < 16)
+              std::fprintf(stderr,
+                           "[cswb] image retile REJECT base=%#llx mip=%u "
+                           "layer=%u tiling=%u\n",
+                           (unsigned long long)res.base, mip, layer,
+                           res.tiling_idx);
+          }
           return false;
+        }
         continue;
       }
       gcn::DetileParallelRows(dst_level.height, [&](uint32_t y0, uint32_t y1) {
@@ -426,6 +516,16 @@ struct CsRange {
   VkDeviceMemory mem = VK_NULL_HANDLE;
   void* map = nullptr;
   VkDeviceSize cap = 0;
+  // DELTA_GPU_CSVRAM: `buf` is in VRAM (what the shaders bind) and `map` is a
+  // separate host-cached mirror, moved across by DMA at the staging edges. The
+  // shaders then read and write at VRAM bandwidth instead of over PCIe, which
+  // is worth ~6x of the GPU time in a SotC frame; the CPU keeps a cached
+  // pointer, which the mapped-VRAM alternative does not.
+  VkBuffer host_buf = VK_NULL_HANDLE;
+  VkDeviceMemory host_mem = VK_NULL_HANDLE;
+  bool device_local = false;
+  bool readback_pending = false;  // copy recorded, not yet waited on
+  bool mirror_current = false;    // map holds the buffer's contents
   uint64_t size = 0;         // active staged (linear) byte size
   uint64_t guest_bytes = 0;  // guest footprint (hash + overlap checks)
   uint64_t hash = 0;         // TexHash of guest content when last in sync
@@ -445,7 +545,54 @@ struct CsRange {
   bool rt_sourced = false;
   int last_rt_frame = -1;
   ComputeInfo::Res res;  // writeback needs the full layout description
+  // A copy of the guest bytes as they were staged IN, kept so the writeback can
+  // tell "the shader wrote this word" from "the shader never touched it".
+  // Without it the writeback has to assume the whole range is GPU output and
+  // copies the stale snapshot back over anything the CPU changed meanwhile --
+  // see CsRangeFlushOne.
+  std::vector<uint8_t> shadow;
+  bool shadow_valid = false;
 };
+
+// Move a split range between its host mirror and its VRAM buffer, bracketed by
+// barriers against the dispatches on either side. Recorded rather than
+// submitted, so the caller decides which command buffer carries it.
+void RecordStagingCopy(VkCommandBuffer c,
+                       CsRange& e,
+                       VkDeviceSize bytes,
+                       bool to_device) {
+  if (!e.device_local || !e.host_buf || !e.buf || !bytes)
+    return;
+  if (bytes > e.cap)
+    bytes = e.cap;
+  VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+  b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.buffer = e.buf;
+  b.offset = 0;
+  b.size = VK_WHOLE_SIZE;
+  b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                    VK_ACCESS_HOST_WRITE_BIT;
+  b.dstAccessMask =
+      to_device ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(
+      c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &b, 0, nullptr);
+  const VkBufferCopy region{0, 0, bytes};
+  if (to_device)
+    vkCmdCopyBuffer(c, e.host_buf, e.buf, 1, &region);
+  else
+    vkCmdCopyBuffer(c, e.buf, e.host_buf, 1, &region);
+  b.srcAccessMask =
+      to_device ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
+  b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                    VK_ACCESS_HOST_READ_BIT;
+  b.buffer = to_device ? e.buf : e.host_buf;
+  vkCmdPipelineBarrier(
+      c, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0,
+      nullptr, 1, &b, 0, nullptr);
+}
 
 bool SameCsResourceShape(const ComputeInfo::Res& a, const ComputeInfo::Res& b) {
   if (a.image_staging != b.image_staging)
@@ -469,6 +616,7 @@ struct CsAliasedImage {
   VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
   VkImageLayout submitted_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   bool is_depth = false;
+  bool is_stencil = false;
 };
 
 // True when `base` names a live target the compute bridges apply to. The
@@ -486,7 +634,8 @@ bool FindCsAliasedImage(uint64_t base, CsAliasedImage& out) {
            FormatBytes(rt.fmt),
            VK_IMAGE_ASPECT_COLOR_BIT,
            rt.submitted_layout,
-           false};
+            false,
+            false};
     return out.submitted_layout != VK_IMAGE_LAYOUT_UNDEFINED;
   }
   auto depth_it = g_depths.find(base);
@@ -500,6 +649,21 @@ bool FindCsAliasedImage(uint64_t base, CsAliasedImage& out) {
            4,  // kDepthFormat == D32_SFLOAT
            VK_IMAGE_ASPECT_DEPTH_BIT,
            depth.submitted_layout,
+            true,
+            false};
+    return out.submitted_layout != VK_IMAGE_LAYOUT_UNDEFINED;
+  }
+  for (auto& [depth_base, depth] : g_depths) {
+    (void)depth_base;
+    if (depth.stencil_base != base || !depth.image)
+      continue;
+    out = {depth.image,
+           depth.w,
+           depth.h,
+           1,
+           VK_IMAGE_ASPECT_STENCIL_BIT,
+           depth.submitted_stencil_layout,
+           false,
            true};
     return out.submitted_layout != VK_IMAGE_LAYOUT_UNDEFINED;
   }
@@ -507,20 +671,26 @@ bool FindCsAliasedImage(uint64_t base, CsAliasedImage& out) {
 }
 
 bool CsAliasedBase(uint64_t base) {
-  return g_rts.find(base) != g_rts.end() ||
-         g_depths.find(base) != g_depths.end();
+  if (g_rts.find(base) != g_rts.end() || g_depths.find(base) != g_depths.end())
+    return true;
+  return std::any_of(g_depths.begin(), g_depths.end(),
+                     [base](const auto& entry) {
+                       return entry.second.stencil_base == base;
+                     });
 }
 
 VkAccessFlags AliasedImageAccess(const CsAliasedImage& img, VkImageLayout l) {
-  if (!img.is_depth)
+  if (!img.is_depth && !img.is_stencil)
     return ColorImageAccess(l);
   switch (l) {
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
     case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+    case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
       return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+    case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
       return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
              VK_ACCESS_SHADER_READ_BIT;
@@ -557,7 +727,9 @@ bool AliasedShapeMatches(const CsAliasedImage& img,
                          const ComputeInfo::Res& res,
                          const char* dir) {
   if (res.mip_levels == 1 && res.layers == 1 && img.w == res.width &&
-      img.h == res.height && img.elem_bytes == res.stage_elem_bytes)
+      img.h == res.height &&
+      img.elem_bytes ==
+          (img.is_stencil ? res.elem_bytes : res.stage_elem_bytes))
     return true;
   static int warned = 0;
   if (warned < 8) {
@@ -566,7 +738,8 @@ bool AliasedShapeMatches(const CsAliasedImage& img,
                  "[gpuvk] cs %s live %s target %#llx shape mismatch: image "
                  "%ux%u %uB vs cs %ux%u pitch=%u mips=%u dfmt=%u elem=%u/%uB "
                  "tiling=%u -> falling back to guest memory\n",
-                 dir, img.is_depth ? "depth" : "color",
+                  dir, img.is_depth ? "depth" : img.is_stencil ? "stencil"
+                                                              : "color",
                  (unsigned long long)res.base, img.w, img.h, img.elem_bytes,
                  res.width, res.height, res.pitch, res.mip_levels, res.dfmt,
                  res.elem_bytes, res.stage_elem_bytes, res.tiling_idx);
@@ -583,14 +756,26 @@ bool RunAliasedCopy(const CsAliasedImage& img,
   if (!BuildCsImageLayouts(res, tiled, linear))
     return false;
   const auto& level = linear.mips[0];
-  const uint64_t copy_bytes =
-      static_cast<uint64_t>(level.pitch) * img.h * res.stage_elem_bytes;
+  const uint64_t texels = static_cast<uint64_t>(level.pitch) * img.h;
+  const uint64_t copy_bytes = texels * res.stage_elem_bytes;
   if (level.offset + copy_bytes > e.cap)
     return false;
   // Host-zero any padding an image->buffer copy does not cover (host writes
   // are made available by the submission).
   if (!to_image && (level.offset != 0 || copy_bytes < res.size))
     std::memset(e.map, 0, res.size);
+  if (img.is_stencil) {
+    if (level.offset || texels > e.cap)
+      return false;
+    if (!to_image)
+      std::memset(e.map, 0, res.size);
+    else {
+      auto* packed = static_cast<uint8_t*>(e.map);
+      auto* expanded = static_cast<uint32_t*>(e.map);
+      for (uint64_t i = 0; i < texels; i++)
+        packed[i] = static_cast<uint8_t>(expanded[i]);
+    }
+  }
 
   VkCommandBufferAllocateInfo ca{
       VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -606,6 +791,11 @@ bool RunAliasedCopy(const CsAliasedImage& img,
     vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
     return false;
   }
+  // Everything above prepared the HOST mirror (padding zeroed, stencil packed).
+  // A split range has to carry that to VRAM before the image copy reads it, and
+  // ahead of an image->buffer copy so the padding it does not cover is zeroed
+  // there too.
+  RecordStagingCopy(c, e, e.cap, /*to_device=*/true);
   // Chain from -- and restore -- the SUBMITTED layout: this copy executes
   // before the current frame's still-recording barriers, whose oldLayout
   // chain must stay intact.
@@ -633,7 +823,7 @@ bool RunAliasedCopy(const CsAliasedImage& img,
                       AliasedImageAccess(img, img.submitted_layout),
                       transfer_access);
   VkBufferImageCopy copy{};
-  copy.bufferOffset = level.offset;
+  copy.bufferOffset = img.is_stencil ? 0 : level.offset;
   copy.bufferRowLength = level.pitch;
   copy.imageSubresource = {img.aspect, 0, 0, 1};
   copy.imageExtent = {img.w, img.h, 1};
@@ -669,12 +859,19 @@ bool RunAliasedCopy(const CsAliasedImage& img,
     r = vkQueueSubmit(g_dev.queue, 1, &si, g_dev.fence);
   if (r == VK_SUCCESS)
     r = vkWaitForFences(g_dev.device, 1, &g_dev.fence, VK_TRUE, UINT64_MAX);
+  g_out_rt_submits++;
   vkFreeCommandBuffers(g_dev.device, g_dev.pool, 1, &c);
   if (r != VK_SUCCESS) {
     std::fprintf(stderr, "[gpuvk] cs %s bridge copy failed: %d (base=%#llx)\n",
                  to_image ? "upload" : "staging", (int)r,
                  (unsigned long long)res.base);
     return false;
+  }
+  if (img.is_stencil) {
+    auto* packed = static_cast<uint8_t*>(e.map);
+    auto* expanded = static_cast<uint32_t*>(e.map);
+    for (uint64_t i = texels; i-- > 0;)
+      expanded[i] = packed[i];
   }
   return true;
 }
@@ -737,6 +934,11 @@ std::unordered_map<uint64_t, CsRange> g_cs_ranges;
 uint64_t g_cs_range_bytes = 0;
 constexpr uint32_t kCsDirtyPageShift = 16;
 std::unordered_map<uint64_t, std::vector<uint64_t>> g_cs_dirty_pages;
+// Bumped whenever compute results land in guest memory (writeback or an
+// executed batch of importing dispatches). The draw path's per-frame staging
+// caches stamp entries with this and re-copy when it has moved -- a cached
+// window of guest bytes is only as fresh as the last compute visibility point.
+uint64_t g_cs_writeback_gen = 1;
 
 uint64_t RangeEnd(uint64_t base, uint64_t bytes) {
   return bytes > UINT64_MAX - base ? UINT64_MAX : base + bytes;
@@ -895,7 +1097,7 @@ bool CsRangeEnsureBuffer(CsRange& e, VkDeviceSize size) {
   if (e.buf && e.cap >= size)
     return true;
   if (e.map && !e.imported) {
-    vkUnmapMemory(g_dev.device, e.mem);
+    vkUnmapMemory(g_dev.device, e.device_local ? e.host_mem : e.mem);
   }
   e.map = nullptr;
   if (e.buf) {
@@ -906,6 +1108,15 @@ bool CsRangeEnsureBuffer(CsRange& e, VkDeviceSize size) {
     vkFreeMemory(g_dev.device, e.mem, nullptr);
     e.mem = VK_NULL_HANDLE;
   }
+  if (e.host_buf) {
+    vkDestroyBuffer(g_dev.device, e.host_buf, nullptr);
+    e.host_buf = VK_NULL_HANDLE;
+  }
+  if (e.host_mem) {
+    vkFreeMemory(g_dev.device, e.host_mem, nullptr);
+    e.host_mem = VK_NULL_HANDLE;
+  }
+  e.device_local = false;
   e.imported = false;
   if (!e.imported)
     g_cs_range_bytes -= e.cap;
@@ -917,6 +1128,8 @@ bool CsRangeEnsureBuffer(CsRange& e, VkDeviceSize size) {
   // queue (StageCsRangeFromRt) instead of a CPU memcpy from guest memory.
   bi.usage =
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  if (kCsVram)
+    bi.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;  // readback of results
   if (vkCreateBuffer(g_dev.device, &bi, nullptr, &e.buf) != VK_SUCCESS) {
     e.buf = VK_NULL_HANDLE;
     return false;
@@ -925,7 +1138,11 @@ bool CsRangeEnsureBuffer(CsRange& e, VkDeviceSize size) {
   vkGetBufferMemoryRequirements(g_dev.device, e.buf, &mr);
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = mr.size;
-  ai.memoryTypeIndex = FindComputeMemoryType(mr.memoryTypeBits);
+  const uint32_t device_type =
+      kCsVram ? FindDeviceMemoryType(mr.memoryTypeBits) : UINT32_MAX;
+  ai.memoryTypeIndex = device_type != UINT32_MAX
+                           ? device_type
+                           : FindComputeMemoryType(mr.memoryTypeBits);
   if (vkAllocateMemory(g_dev.device, &ai, nullptr, &e.mem) != VK_SUCCESS) {
     vkDestroyBuffer(g_dev.device, e.buf, nullptr);
     e.buf = VK_NULL_HANDLE;
@@ -933,7 +1150,35 @@ bool CsRangeEnsureBuffer(CsRange& e, VkDeviceSize size) {
     return false;
   }
   vkBindBufferMemory(g_dev.device, e.buf, e.mem, 0);
-  vkMapMemory(g_dev.device, e.mem, 0, cap, 0, &e.map);
+  // VRAM cannot be mapped usefully (uncached reads are ~100 MB/s), so the CPU
+  // side gets its own host-cached buffer and the two are joined by DMA.
+  if (device_type != UINT32_MAX) {
+    VkBufferCreateInfo hi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    hi.size = cap;
+    hi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+               VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VkMemoryRequirements hmr;
+    if (vkCreateBuffer(g_dev.device, &hi, nullptr, &e.host_buf) != VK_SUCCESS) {
+      e.host_buf = VK_NULL_HANDLE;
+      return false;
+    }
+    vkGetBufferMemoryRequirements(g_dev.device, e.host_buf, &hmr);
+    VkMemoryAllocateInfo hai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    hai.allocationSize = hmr.size;
+    hai.memoryTypeIndex = FindComputeMemoryType(hmr.memoryTypeBits);
+    if (vkAllocateMemory(g_dev.device, &hai, nullptr, &e.host_mem) !=
+        VK_SUCCESS) {
+      vkDestroyBuffer(g_dev.device, e.host_buf, nullptr);
+      e.host_buf = VK_NULL_HANDLE;
+      e.host_mem = VK_NULL_HANDLE;
+      return false;
+    }
+    vkBindBufferMemory(g_dev.device, e.host_buf, e.host_mem, 0);
+    vkMapMemory(g_dev.device, e.host_mem, 0, cap, 0, &e.map);
+    e.device_local = true;
+  } else {
+    vkMapMemory(g_dev.device, e.mem, 0, cap, 0, &e.map);
+  }
   e.cap = cap;
   g_cs_range_bytes += cap;
   return true;
@@ -955,25 +1200,34 @@ std::vector<std::pair<VkBuffer, VkDeviceMemory>> g_cs_retired;
 // renders through the compute path could be used to gate the change.
 bool CsRangeRename(CsRange& e, VkDeviceSize size) {
   if (e.map) {
-    vkUnmapMemory(g_dev.device, e.mem);
+    vkUnmapMemory(g_dev.device, e.device_local ? e.host_mem : e.mem);
     e.map = nullptr;
   }
   if (e.buf || e.mem)
     g_cs_retired.emplace_back(e.buf, e.mem);
+  if (e.host_buf || e.host_mem)
+    g_cs_retired.emplace_back(e.host_buf, e.host_mem);
   g_cs_range_bytes -= e.cap;
   e.buf = VK_NULL_HANDLE;
   e.mem = VK_NULL_HANDLE;
+  e.host_buf = VK_NULL_HANDLE;
+  e.host_mem = VK_NULL_HANDLE;
+  e.device_local = false;
   e.cap = 0;
   return CsRangeEnsureBuffer(e, size);
 }
 
 void CsRangeDestroy(CsRange& e) {
   if (e.map && !e.imported)
-    vkUnmapMemory(g_dev.device, e.mem);
+    vkUnmapMemory(g_dev.device, e.device_local ? e.host_mem : e.mem);
   if (e.buf)
     vkDestroyBuffer(g_dev.device, e.buf, nullptr);
   if (e.mem)
     vkFreeMemory(g_dev.device, e.mem, nullptr);
+  if (e.host_buf)
+    vkDestroyBuffer(g_dev.device, e.host_buf, nullptr);
+  if (e.host_mem)
+    vkFreeMemory(g_dev.device, e.host_mem, nullptr);
   g_cs_range_bytes -= e.cap;
   e = CsRange{};
 }
@@ -989,7 +1243,55 @@ VkFence g_cs_batch_fence = VK_NULL_HANDLE;
 bool g_cs_stage_pending[ComputeInfo::kMaxResources] = {};
 std::unordered_map<VkBuffer, ComputeBufferAccess> g_cs_batch_access;
 
-bool CsBatchFlush() {
+// DELTA_GPU_CSSYNC=1: how many submit+wait round trips a frame, and what asked
+// for each. The wait itself is the single biggest term in a SotC frame, so the
+// question that matters is which call site is forcing it.
+enum CsSyncWhy {
+  kSyncImported,
+  kSyncWriteback,
+  kSyncScratchGrow,
+  kSyncRangeGrow,
+  kSyncStageHazard,
+  kSyncDescPool,
+  kSyncBatchCap,
+  kSyncCount
+};
+const char* const kCsSyncName[kSyncCount] = {
+    "imported", "writeback", "scratch-grow", "range-grow",
+    "stage-hazard", "desc-pool", "batch-cap"};
+uint64_t g_cs_sync_n[kSyncCount] = {};
+uint64_t g_cs_sync_ns[kSyncCount] = {};
+
+// Open the batch command buffer. Staging copies are recorded into the same
+// buffer as the dispatches, so this has to be callable before the first one.
+void CsBatchBeginImpl() {
+  if (g_cs_batch_open)
+    return;
+  vkResetCommandBuffer(g_cs_cmd, 0);
+  VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(g_cs_cmd, &cbi);
+  CmdBeginLabel(g_cs_cmd, "cs batch (frame %llu)",
+                (unsigned long long)g_frame.num);
+  g_cs_batch_open = true;
+}
+
+// Record the staging move into the batch, and mark the range as referenced by
+// it so a later grow/rename does not pull the buffer out from under the copy.
+void CsCopyStaging(CsRange& e, VkDeviceSize bytes, bool to_device) {
+  if (!e.device_local || !e.host_buf || !e.buf || !bytes)
+    return;
+  CsBatchBeginImpl();
+  RecordStagingCopy(g_cs_cmd, e, bytes, to_device);
+  g_cs_batch_access.erase(e.buf);
+  e.pending_batch = true;
+  if (to_device)
+    e.mirror_current = true;  // both sides now hold what the CPU just wrote
+  else
+    e.readback_pending = true;
+}
+
+bool CsBatchFlush(CsSyncWhy why = kSyncWriteback) {
   if (!g_cs_batch_open)
     return !g_cs_failed;
   const uint64_t t0 = NowNs();
@@ -1033,38 +1335,115 @@ bool CsBatchFlush() {
       vkFreeMemory(g_dev.device, mem, nullptr);
   }
   g_cs_retired.clear();
-  for (auto& kv : g_cs_ranges)
+  for (auto& kv : g_cs_ranges) {
     kv.second.pending_batch = false;
+    // The wait covers every readback recorded into this batch, so their host
+    // mirrors are now readable.
+    if (kv.second.readback_pending) {
+      kv.second.readback_pending = false;
+      kv.second.mirror_current = true;
+    }
+  }
   std::memset(g_cs_stage_pending, 0, sizeof g_cs_stage_pending);
   g_cs_batch_access.clear();
+  // Imported ranges are written by the dispatches this submit just executed,
+  // straight into guest memory -- no writeback step will announce them, so the
+  // batch itself is the visibility point for the staging caches.
+  g_cs_writeback_gen++;
   g_ns_cs_gpu += NowNs() - t0;
+  g_cs_sync_n[why]++;
+  g_cs_sync_ns[why] += NowNs() - t0;
   return true;
+}
+
+// Record the VRAM->host readback for every dirty range in [first, last), so
+// the single flush that follows covers all of them.
+template <typename It>
+void CsStageReadbacks(It first, It last) {
+  for (It it = first; it != last; ++it) {
+    CsRange& e = it->second;
+    if (e.gpu_dirty && e.device_local && !e.mirror_current && !e.imported)
+      CsCopyStaging(e, e.size ? e.size : e.cap, /*to_device=*/false);
+  }
 }
 
 // Write one dirty range back to guest memory (retile for images) and re-stamp
 // its hash so the next validation sees guest == buffer.
 bool CsRangeFlushOne(uint64_t base, CsRange& e) {
+  if (kCsWbAudit) {
+    // Counters, not a sample: the first N flushes are all startup, and the
+    // question ("does a tiled-image range ever reach the retile?") is about
+    // the steady state.
+    static uint64_t n = 0, dirty_n = 0, img_n = 0, img_dirty_n = 0;
+    n++;
+    dirty_n += e.gpu_dirty;
+    img_n += e.image_staging;
+    img_dirty_n += e.gpu_dirty && e.image_staging;
+    if ((n % 20000) == 0)
+      std::fprintf(stderr,
+                   "[cswb] flushes=%llu dirty=%llu image=%llu image+dirty=%llu "
+                   "staged_as_image=%llu\n",
+                   (unsigned long long)n, (unsigned long long)dirty_n,
+                   (unsigned long long)img_n,
+                   (unsigned long long)img_dirty_n,
+                   (unsigned long long)g_cs_image_staged);
+  }
   if (!e.gpu_dirty)
     return true;
   if (e.imported) {  // the dispatch wrote straight into guest memory
-    if (e.pending_batch && !CsBatchFlush())
+    if (e.pending_batch && !CsBatchFlush(kSyncImported))
       return false;
     e.gpu_dirty = false;
     return true;
   }
-  if (e.pending_batch && !CsBatchFlush())
+  // Results live in VRAM: pull them into the host mirror on the same batch that
+  // produced them, so the one fence wait covers the dispatch and the copy.
+  // Already-recorded readbacks (CsStageReadbacks) skip this.
+  if (e.device_local && !e.mirror_current)
+    CsCopyStaging(e, e.size ? e.size : e.cap, /*to_device=*/false);
+  if (e.pending_batch && !CsBatchFlush(kSyncWriteback))
     return false;  // results must exist before readback
   if (g_cs_failed)
     return false;
   g_cs_flush_n++;
+  if (e.image_staging && kCsWbAudit) {
+    // An image range always retiles, with no write-coverage test to report, so
+    // "the writeback ran" says nothing about whether the dispatch produced
+    // anything. Count what the staging actually holds: all-zero here means the
+    // shader stored nothing, which is a different bug from a failed retile.
+    const auto* p = static_cast<const uint8_t*>(e.map);
+    uint64_t nz = 0;
+    for (uint64_t i = 0; i < e.res.size; i++)
+      if (p[i])
+        nz++;
+    // Once per destination, not the first 24 overall: a title that uploads
+    // hundreds of surfaces spends a flat cap entirely on the first few, and
+    // the one surface that stays empty is never among them.
+    static std::unordered_set<uint64_t> seen;
+    if (seen.size() < 4096 && seen.insert(base).second)
+      std::fprintf(stderr,
+                   "[cswb] image base=%#llx %ux%u layers=%u tiling=%u staged "
+                   "%llu/%llu non-zero\n",
+                   (unsigned long long)base, e.res.width, e.res.height,
+                   e.res.layers, e.res.tiling_idx, (unsigned long long)nz,
+                   (unsigned long long)e.res.size);
+  }
+  const uint64_t _t_wb = NowNs();
   if (e.image_staging) {
     if (!WritebackCsImage(e.res, e.map)) {
-      static int logged = 0;
-      if (logged++ < 8)
+      // Count as well as sample: a flat cap of 8 lines cannot tell one
+      // recurring bad descriptor apart from every upload in the title failing,
+      // and those need opposite responses.
+      static uint64_t failed = 0;
+      if (failed++ < 8 || (failed % 4096) == 0)
         std::fprintf(stderr,
-                     "[gpuvk] cs image writeback failed base=%#llx "
+                     "[gpuvk] cs image writeback #%llu failed base=%#llx "
+                     "%ux%u mips=%u layers=%u tiling=%u elem=%u/%u "
                      "(range stays stale)\n",
-                     (unsigned long long)base);
+                     (unsigned long long)failed, (unsigned long long)base,
+                     e.res.width, e.res.height, e.res.mip_levels, e.res.layers,
+                     e.res.tiling_idx, e.res.elem_bytes,
+                     e.res.stage_elem_bytes);
       return false;
     }
   } else {
@@ -1084,14 +1463,112 @@ bool CsRangeFlushOne(uint64_t base, CsRange& e) {
                      (unsigned long long)base, (unsigned long long)n);
       return false;
     }
-    std::memcpy(reinterpret_cast<void*>(base), e.map, n);
+    // Write back only what the DISPATCH changed. A staged range is the shader's
+    // whole view of a resource, but a shader writes a part of it -- and this
+    // title puts its CPU heap in the same direct memory as the buffers it hands
+    // to compute, so the bytes in between belong to the allocator. Copying the
+    // full range back therefore reverts every CPU write made since stage-in,
+    // and a word the CPU was writing WHILE we snapshotted comes back half
+    // updated: that is the 5-valid-bytes-plus-3-stale-bytes free-tree pointer
+    // SotC dies on at eboot+0x48ac5 when New Game is confirmed.
+    // The shadow copy taken at stage-in says which words the shader touched;
+    // untouched words are left alone. (A shader that rewrites a word with the
+    // value it already had is skipped too, which is a no-op by definition.)
+    // The merge is symmetric, so that staging, shadow and guest all agree again
+    // when it returns -- the bookkeeping below this point promises exactly that:
+    //   the shader wrote the block  -> guest   <- staging  (publish the result)
+    //   the shader left it alone    -> staging <- guest    (adopt the CPU's word)
+    // Skipping the second half would leave a dispatch reading stale values for
+    // whatever the CPU changed, which is the same defect pointed the other way.
+    // Guest-sourced linear ranges only. A range staged from a live render
+    // target exists precisely so the writeback can publish that image into
+    // guest memory, so "the dispatch did not write it" must not stop it there.
+    if (!kCsWbFull && !e.rt_sourced && e.shadow_valid && e.shadow.size() >= n) {
+      auto* src = static_cast<uint8_t*>(e.map);
+      uint8_t* shd = e.shadow.data();
+      auto* dst = reinterpret_cast<uint8_t*>(base);
+      uint64_t off = 0, wrote = 0;
+      // 64-byte blocks: a block the shader left alone costs one compare, which
+      // keeps "the shader wrote a little of a big range" -- the common case --
+      // no more expensive than the unconditional copy this replaces.
+      for (; off + 64 <= n; off += 64) {
+        if (std::memcmp(src + off, shd + off, 64) != 0) {
+          std::memcpy(dst + off, src + off, 64);
+          std::memcpy(shd + off, src + off, 64);
+          wrote += 64;
+        } else {
+          std::memcpy(src + off, dst + off, 64);
+          std::memcpy(shd + off, dst + off, 64);
+        }
+      }
+      for (; off < n; off++) {
+        if (src[off] != shd[off]) {
+          dst[off] = src[off];
+          shd[off] = src[off];
+          wrote++;
+        } else {
+          src[off] = dst[off];
+          shd[off] = dst[off];
+        }
+      }
+      g_cs_wb_bytes_written += wrote;
+      g_cs_wb_bytes_total += n;
+      if (kCsWbAudit && wrote != n) {
+        static int logged = 0;
+        if (logged++ < 32)
+          std::fprintf(stderr,
+                       "[cswb] base=%#llx +%#llx: shader wrote %llu of %llu "
+                       "bytes; the other %llu would have been reverted\n",
+                       (unsigned long long)base, (unsigned long long)n,
+                       (unsigned long long)wrote, (unsigned long long)n,
+                       (unsigned long long)(n - wrote));
+      }
+    } else {
+      // Full-range writeback (the pre-merge behaviour, kept for A/B). Still
+      // measure how much of it the dispatch actually wrote when a shadow is
+      // available, so the two modes report the same number and the A/B is a
+      // comparison rather than a guess.
+      uint64_t wrote = n;
+      if (e.shadow_valid && e.shadow.size() >= n) {
+        wrote = 0;
+        const auto* src = static_cast<const uint8_t*>(e.map);
+        const uint8_t* shd = e.shadow.data();
+        for (uint64_t off = 0; off < n; off += 64) {
+          const uint64_t blk = std::min<uint64_t>(64, n - off);
+          if (std::memcmp(src + off, shd + off, blk) != 0)
+            wrote += blk;
+        }
+        if (kCsWbAudit && wrote != n) {
+          static int logged = 0;
+          if (logged++ < 32)
+            std::fprintf(stderr,
+                         "[cswb] base=%#llx +%#llx: shader wrote %llu of %llu "
+                         "bytes; the other %llu ARE being reverted\n",
+                         (unsigned long long)base, (unsigned long long)n,
+                         (unsigned long long)wrote, (unsigned long long)n,
+                         (unsigned long long)(n - wrote));
+        }
+      }
+      std::memcpy(reinterpret_cast<void*>(base), e.map, n);
+      g_cs_wb_bytes_written += wrote;
+      g_cs_wb_bytes_total += n;
+    }
   }
+  const uint64_t _t_rt = NowNs();
+  g_out_retile_ns += _t_rt - _t_wb;
+  g_out_retile_n += e.image_staging;
   UploadCsRangeToRt(base, e);  // refresh a live RT image aliasing the range
+  const uint64_t _t_inv = NowNs();
+  g_out_rt_ns += _t_inv - _t_rt;
   InvalidateTexRange(base, e.guest_bytes);
   UnindexDirtyRange(base, e.guest_bytes);
+  // Guest memory just changed under any staged copy of it: retire the draw
+  // path's per-frame staging cache entries (they validate against this).
+  g_cs_writeback_gen++;
   e.gpu_dirty = false;
   e.hash = RangeHash(base, e.guest_bytes);
   e.last_validated_frame = g_frame.num;
+  g_out_tail_ns += NowNs() - _t_inv;
   return true;
 }
 
@@ -1128,7 +1605,13 @@ bool CsEnsureStage(uint32_t i, VkDeviceSize size) {
   vkGetBufferMemoryRequirements(g_dev.device, s.buf, &mr);
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = mr.size;
-  ai.memoryTypeIndex = FindComputeMemoryType(mr.memoryTypeBits);
+  // Scratch is zeroed by vkCmdFillBuffer and only ever touched by shaders, so
+  // it wants VRAM and no mapping at all.
+  const uint32_t scratch_device =
+      kCsVram ? FindDeviceMemoryType(mr.memoryTypeBits) : UINT32_MAX;
+  ai.memoryTypeIndex = scratch_device != UINT32_MAX
+                           ? scratch_device
+                           : FindComputeMemoryType(mr.memoryTypeBits);
   if (vkAllocateMemory(g_dev.device, &ai, nullptr, &s.mem) != VK_SUCCESS) {
     vkDestroyBuffer(g_dev.device, s.buf, nullptr);
     s.buf = VK_NULL_HANDLE;
@@ -1136,7 +1619,8 @@ bool CsEnsureStage(uint32_t i, VkDeviceSize size) {
     return false;
   }
   vkBindBufferMemory(g_dev.device, s.buf, s.mem, 0);
-  vkMapMemory(g_dev.device, s.mem, 0, cap, 0, &s.map);
+  if (scratch_device == UINT32_MAX)
+    vkMapMemory(g_dev.device, s.mem, 0, cap, 0, &s.map);
   s.cap = cap;
   return true;
 }
@@ -1150,7 +1634,158 @@ struct ScopeCs {
 };
 
 }  // namespace
+
+void CsSyncReport(double frames) {
+  uint64_t total = 0;
+  for (int i = 0; i < kSyncCount; i++)
+    total += g_cs_sync_n[i];
+  if (!kCsSyncReport || !total) {
+    for (int i = 0; i < kSyncCount; i++)
+      g_cs_sync_n[i] = g_cs_sync_ns[i] = 0;
+    return;
+  }
+  std::fprintf(stderr,
+               "[csin] hash=%.1fms x%.1f detile=%.1fms rt-bridge=%.1fms x%.1f "
+               "copy=%.1fms\n",
+               g_in_hash_ns / frames / 1e6, g_in_hash_n / frames,
+               g_in_detile_ns / frames / 1e6, g_in_rt_ns / frames / 1e6,
+               g_in_rt_n / frames, g_in_copy_ns / frames / 1e6);
+  g_in_hash_ns = g_in_detile_ns = g_in_rt_ns = g_in_copy_ns = 0;
+  g_in_hash_n = g_in_rt_n = 0;
+  std::fprintf(stderr,
+               "[csstage] per frame ro=%.1fMB rw=%.1fMB img=%.1fMB "
+               "(cpu-detile %.1fMB x%.1f)\n",
+               g_stage_ro_bytes / frames / 1e6, g_stage_rw_bytes / frames / 1e6,
+               g_stage_img_bytes / frames / 1e6,
+               g_stage_cpu_detile_bytes / frames / 1e6,
+               g_stage_cpu_detile_n / frames);
+  g_stage_ro_bytes = g_stage_rw_bytes = g_stage_img_bytes = 0;
+  g_stage_cpu_detile_bytes = g_stage_cpu_detile_n = 0;
+  std::fprintf(stderr,
+               "[csout] retile=%.1fms x%.1f rt-upload=%.1fms x%.1f "
+               "tail=%.1fms\n",
+               g_out_retile_ns / frames / 1e6, g_out_retile_n / frames,
+               g_out_rt_ns / frames / 1e6, g_out_rt_submits / frames,
+               g_out_tail_ns / frames / 1e6);
+  g_out_retile_ns = g_out_rt_ns = g_out_tail_ns = 0;
+  g_out_retile_n = g_out_rt_submits = 0;
+  std::fprintf(stderr, "[cssync] %.1f syncs/frame:", total / frames);
+  for (int i = 0; i < kSyncCount; i++) {
+    if (!g_cs_sync_n[i])
+      continue;
+    std::fprintf(stderr, " %s=%.1f(%.1fms)", kCsSyncName[i],
+                 g_cs_sync_n[i] / frames, g_cs_sync_ns[i] / frames / 1e6);
+    g_cs_sync_n[i] = 0;
+    g_cs_sync_ns[i] = 0;
+  }
+  std::fprintf(stderr, "\n");
+}
+
+bool PreserveCsDepthBeforeClear(uint64_t base) {
+  auto depth_it = g_depths.find(base);
+  auto range_it = g_cs_ranges.find(base);
+  if (!g_frame.recording || depth_it == g_depths.end() ||
+      range_it == g_cs_ranges.end())
+    return false;
+
+  DepthTarget& depth = depth_it->second;
+  CsRange& range = range_it->second;
+  if (!depth.image || depth.layout == VK_IMAGE_LAYOUT_UNDEFINED || !range.buf ||
+      range.pending_batch || range.gpu_dirty || !range.image_staging)
+    return false;
+
+  CsAliasedImage image{depth.image,
+                       depth.w,
+                       depth.h,
+                       4,
+                       VK_IMAGE_ASPECT_DEPTH_BIT,
+                       depth.layout,
+                       true};
+  if (!AliasedShapeMatches(image, range.res, "preserves"))
+    return false;
+
+  gcn::TextureLayout32 tiled, linear;
+  if (!BuildCsImageLayouts(range.res, tiled, linear))
+    return false;
+  const auto& level = linear.mips[0];
+  const uint64_t copy_bytes = static_cast<uint64_t>(level.pitch) * depth.h *
+                              range.res.stage_elem_bytes;
+  if (level.offset + copy_bytes > range.cap)
+    return false;
+
+  const VkImageLayout old_layout = depth.layout;
+  AliasedImageBarrier(g_frame.cmd, image, old_layout,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      AliasedImageAccess(image, old_layout),
+                      VK_ACCESS_TRANSFER_READ_BIT);
+  VkBufferImageCopy copy{};
+  copy.bufferOffset = level.offset;
+  copy.bufferRowLength = level.pitch;
+  copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+  copy.imageExtent = {depth.w, depth.h, 1};
+  vkCmdCopyImageToBuffer(g_frame.cmd, depth.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, range.buf, 1,
+                         &copy);
+
+  VkBufferMemoryBarrier buffer_barrier{
+      VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+  buffer_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  buffer_barrier.dstAccessMask =
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+  buffer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  buffer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  buffer_barrier.buffer = range.buf;
+  buffer_barrier.offset = 0;
+  buffer_barrier.size = VK_WHOLE_SIZE;
+  vkCmdPipelineBarrier(
+      g_frame.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 0,
+      nullptr, 1, &buffer_barrier, 0, nullptr);
+  AliasedImageBarrier(g_frame.cmd, image,
+                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, old_layout,
+                      VK_ACCESS_TRANSFER_READ_BIT,
+                      AliasedImageAccess(image, old_layout));
+
+  // Compute for frame N runs before graphics N. This graphics-side snapshot
+  // is therefore the input for compute N+1, and must suppress that frame's
+  // usual copy from the now-cleared depth image.
+  range.rt_sourced = true;
+  range.last_rt_frame = static_cast<int>(g_frame.num) + 1;
+  if (kCsRtTrace) {
+    static int logged = 0;
+    if (logged++ < 16)
+      std::fprintf(stderr, "[csrt] f%d preserved depth %#lx before clear\n",
+                   g_frame.num, (unsigned long)base);
+  }
+  return true;
+}
+
 }  // namespace gpu::vk
+
+namespace gpu {
+// Declared in ps4/cmd_processor.h for the kernel's crash handler.
+bool DescribeCsRangeCovering(uint64_t addr, char* out, size_t out_size) {
+  using namespace gpu::vk;
+  for (const auto& kv : g_cs_ranges) {
+    const uint64_t base = kv.first;
+    const CsRange& e = kv.second;
+    const uint64_t n = e.guest_bytes ? e.guest_bytes : e.size;
+    if (!n || addr < base || addr >= base + n)
+      continue;
+    std::snprintf(out, out_size,
+                  "base=%#llx +%#llx (addr is base+%#llx) staged=%#llx "
+                  "gpu_dirty=%d imported=%d rt_sourced=%d image=%d "
+                  "shadow=%d last_used_frame=%d",
+                  (unsigned long long)base, (unsigned long long)n,
+                  (unsigned long long)(addr - base),
+                  (unsigned long long)e.size, (int)e.gpu_dirty,
+                  (int)e.imported, (int)e.rt_sourced, (int)e.image_staging,
+                  (int)e.shadow_valid, e.last_used_frame);
+    return true;
+  }
+  return false;
+}
+}  // namespace gpu
 
 namespace gpu::rhi {
 using namespace gpu::vk;
@@ -1226,6 +1861,32 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
       g_cs_batch_fence = VK_NULL_HANDLE;
       return false;
     }
+    // What an EMPTY submit+wait costs here. SotC spends over half its frame in
+    // fence waits while the GPU sits at 18% utilisation, so the question is
+    // whether a round trip is inherently expensive on this system or whether
+    // the GPU is really doing that work. Measured once, at init.
+    if (kCsSyncReport) {
+      double total = 0;
+      for (int i = 0; i < 100; i++) {
+        vkResetCommandBuffer(g_cs_cmd, 0);
+        VkCommandBufferBeginInfo bi{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(g_cs_cmd, &bi);
+        vkEndCommandBuffer(g_cs_cmd);
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &g_cs_cmd;
+        const uint64_t t0 = NowNs();
+        vkResetFences(g_dev.device, 1, &g_cs_batch_fence);
+        vkQueueSubmit(g_dev.queue, 1, &si, g_cs_batch_fence);
+        vkWaitForFences(g_dev.device, 1, &g_cs_batch_fence, VK_TRUE,
+                        UINT64_MAX);
+        total += (NowNs() - t0) / 1e6;
+      }
+      std::fprintf(stderr, "[csbench] empty submit+wait: %.3f ms\n",
+                   total / 100.0);
+    }
   }
 
   // DELTA_GPU_CSLIST: per-dispatch resource staging list for the first 200
@@ -1283,7 +1944,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
       // Growing the scratch slot recreates its buffer; a pending batched
       // dispatch still references the old handle.
       if (g_cs_stage_pending[i] && g_cs_stage[i].cap < sz[i] &&
-          !CsBatchFlush()) {
+          !CsBatchFlush(kSyncScratchGrow)) {
         renderer.state = nullptr;
         return false;
       }
@@ -1309,7 +1970,8 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
     if (!same_shape && e.gpu_dirty)
       if (!CsRangeFlushOne(base, e))
         return false;  // reshaped: keep its data
-    if (e.pending_batch && (!e.buf || e.cap < sz[i]) && !CsBatchFlush()) {
+    if (e.pending_batch && (!e.buf || e.cap < sz[i]) &&
+        !CsBatchFlush(kSyncRangeGrow)) {
       renderer.state = nullptr;
       return false;  // growth would destroy a buffer the batch references
     }
@@ -1324,8 +1986,10 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
     if (!buffer_reused)
       NameObject(VK_OBJECT_TYPE_BUFFER, (uint64_t)e.buf, "csbuf %#llx",
                  (unsigned long long)base);
-    bool valid =
-        same_shape && (e.gpu_dirty || e.last_validated_frame == g_frame.num);
+    // A buffer that was just rebuilt holds nothing, whatever the shape
+    // bookkeeping says about it.
+    bool valid = buffer_reused && same_shape &&
+                 (e.gpu_dirty || e.last_validated_frame == g_frame.num);
     if (e.imported && same_shape)
       valid = true;  // the buffer IS the guest pages; nothing to copy
     // A read whose base is a live render target must be staged from the
@@ -1341,12 +2005,37 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
     else if (rt_backed && !e.gpu_dirty && e.rt_sourced)
       valid = same_shape;
     if (!valid && same_shape && !rt_attempt) {
+      const uint64_t _th = NowNs();
       const uint64_t h = RangeHash(base, guest_bytes);
+      g_in_hash_ns += NowNs() - _th;
+      g_in_hash_n++;
       if (h == e.hash)
         valid = true;
       else
         e.hash = h;
       e.last_validated_frame = g_frame.num;
+    }
+    // A range the shader only WRITES needs no content from guest memory: it
+    // supplies every byte it will write back. SotC's material fills are whole
+    // 4 MiB arenas of exactly that shape, and staging them in is ~60 ms a
+    // frame of pure waste (`in=` in the fps line). Opt-in because a shader
+    // that writes only PART of such a range would then write back whatever the
+    // buffer happened to hold -- the resource plan says "never read", not
+    // "writes all of it".
+    //
+    // Direct-memory arenas only. A compute range that aliases module .data
+    // (modules sit at 0x2xxxxxxxxxxx, the dmem arena at 0x80xxxxxxxx) gets a
+    // partial write + writeback of stale staging over live globals when the
+    // plan's "written" bit is wrong or the write is partial -- SotC's menu
+    // transition died exactly that way, float garbage across the allocator's
+    // static bin array (SIGSEGV in malloc, Shadow_Shipping+0xfacff0).
+    const bool dmem_arena =
+        base >= 0x8000000000ull && base < 0x9000000000ull;
+    if (kCsSkipUpload && !valid && dmem_arena && !ci.res[i].read &&
+        ci.res[i].written && !ci.res[i].image_staging && !ci.res[i].zero_fill &&
+        same_shape) {
+      valid = true;
+      g_cs_skip_n++;
     }
     if (!valid) {
       // CPU write into a buffer a pending batched dispatch reads/writes.
@@ -1357,13 +2046,16 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
           return false;
         }
         e.pending_batch = false;
-      } else if (e.pending_batch && !CsBatchFlush()) {
+      } else if (e.pending_batch && !CsBatchFlush(kSyncStageHazard)) {
         renderer.state = nullptr;
         return false;
       }
       if (rt_attempt) {
         e.last_rt_frame = static_cast<int>(g_frame.num);
+        const uint64_t _tr = NowNs();
         e.rt_sourced = StageCsRangeFromRt(ci.res[i], e);
+        g_in_rt_ns += NowNs() - _tr;
+        g_in_rt_n++;
         // DELTA_GPU_CSRT: trace every RT-backed staging decision.
         static int rt_trace_logged = 0;
         if (kCsRtTrace && rt_trace_logged < 200) {
@@ -1376,7 +2068,12 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
       }
       if (!rt_attempt || !e.rt_sourced) {
         if (ci.res[i].image_staging) {
-          if (!StageCsImage(ci.res[i], e.map))
+          g_stage_cpu_detile_bytes += sz[i];
+          g_stage_cpu_detile_n++;
+          const uint64_t _td = NowNs();
+          const bool ok = StageCsImage(ci.res[i], e.map);
+          g_in_detile_ns += NowNs() - _td;
+          if (!ok)
             return false;
         } else {
           std::memcpy(e.map, reinterpret_cast<const void*>(base),
@@ -1390,17 +2087,44 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
           e.hash = RangeHash(base, guest_bytes);
           e.last_validated_frame = g_frame.num;
         }
+        // The CPU wrote the host mirror; the shaders bind the VRAM copy.
+        const uint64_t _tc = NowNs();
+        CsCopyStaging(e, sz[i], /*to_device=*/true);
+        g_in_copy_ns += NowNs() - _tc;
       }
       if (!same_shape) {
         e.hash = RangeHash(base, guest_bytes);
         e.last_validated_frame = g_frame.num;
       }
+      // Baseline for the writeback's write-coverage merge: the staging buffer as
+      // it stands BEFORE any dispatch runs. Comparing against it is the only way
+      // the writeback can tell a shader's output from a byte it merely staged in
+      // and would otherwise copy back over the CPU's newer value. Imported
+      // ranges never write back, and images retile through WritebackCsImage.
+      if (!ci.res[i].image_staging && !e.imported) {
+        e.shadow.resize(sz[i]);
+        std::memcpy(e.shadow.data(), e.map, sz[i]);
+        e.shadow_valid = true;
+      } else {
+        e.shadow_valid = false;
+      }
       e.gpu_dirty = false;
       g_cs_stage_n++;
       g_cs_stage_bytes += sz[i];
+      // Which staged bytes the CPU only ever WRITES: those could live straight
+      // in host-visible VRAM (ReBAR) with no mirror and no copy, because
+      // nothing ever reads them back across the bus.
+      if (ci.res[i].image_staging)
+        g_stage_img_bytes += sz[i];
+      else if (ci.res[i].shader_writes || ci.res[i].written)
+        g_stage_rw_bytes += sz[i];
+      else
+        g_stage_ro_bytes += sz[i];
     }
     e.size = sz[i];
     e.guest_bytes = guest_bytes;
+    if (ci.res[i].image_staging)
+      g_cs_image_staged++;
     e.image_staging = ci.res[i].image_staging;
     e.res = ci.res[i];
     e.last_used_frame = g_frame.num;
@@ -1424,7 +2148,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
   da.descriptorSetCount = 1;
   da.pSetLayouts = &cp->set_layout;
   if (vkAllocateDescriptorSets(g_dev.device, &da, &set) != VK_SUCCESS) {
-    if (!CsBatchFlush()) {
+    if (!CsBatchFlush(kSyncDescPool)) {
       renderer.state = nullptr;
       return false;
     }
@@ -1450,15 +2174,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
 
   // Record the dispatch into the open batch. Submission + the fence wait
   // happen at the next flush point, not here.
-  if (!g_cs_batch_open) {
-    vkResetCommandBuffer(g_cs_cmd, 0);
-    VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(g_cs_cmd, &cbi);
-    CmdBeginLabel(g_cs_cmd, "cs batch (frame %llu)",
-                  (unsigned long long)g_frame.num);
-    g_cs_batch_open = true;
-  }
+  CsBatchBeginImpl();
   VkBufferMemoryBarrier zero_before[ComputeInfo::kMaxResources];
   VkBufferMemoryBarrier zero_after[ComputeInfo::kMaxResources];
   uint32_t zero_count = 0;
@@ -1545,6 +2261,8 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
                  (unsigned long long)ci.cs_addr, ci.groups[0], ci.groups[1],
                  ci.groups[2], ci.num_res);
   vkCmdDispatch(g_cs_cmd, ci.groups[0], ci.groups[1], ci.groups[2]);
+  if (trace::Recording())
+    trace::RecordDispatch(ci);
   for (uint32_t i = 0; i < ci.num_res; i++) {
     if (ci.res[i].zero_fill) {
       g_cs_stage_pending[i] = true;
@@ -1554,7 +2272,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
         it->second.pending_batch = true;
     }
   }
-  if ((++g_cs_batch_count >= 128 || kGpuCsgpuVerbose) && !CsBatchFlush()) {
+  if ((++g_cs_batch_count >= 128 || kGpuCsgpuVerbose) && !CsBatchFlush(kSyncBatchCap)) {
     renderer.state = nullptr;
     return false;
   }
@@ -1572,6 +2290,7 @@ bool Dispatch(Renderer& renderer, const ComputeInfo& ci) {
     if (!it->second.gpu_dirty)
       IndexDirtyRange(ci.res[i].base, it->second.guest_bytes);
     it->second.gpu_dirty = true;
+    it->second.mirror_current = false;  // the dispatch outran the host mirror
     if (kGpuCsgpuVerbose) {
       const uint8_t* b = static_cast<const uint8_t*>(it->second.map);
       uint64_t nz = 0,
@@ -1600,6 +2319,9 @@ bool FlushCsWrites(Renderer& renderer) {
   }
   const uint64_t _t0 = NowNs();
   bool all_current = true;
+  // Record every readback first: one fence wait then covers all of them,
+  // instead of one submit+wait per dirty range.
+  CsStageReadbacks(g_cs_ranges.begin(), g_cs_ranges.end());
   for (auto it = g_cs_ranges.begin(); it != g_cs_ranges.end();) {
     if (!CsRangeFlushOne(it->first, it->second)) {
       if (g_cs_failed) {
@@ -1628,6 +2350,15 @@ bool FlushCsWrites(Renderer& renderer) {
 // this instead of the full flush — flushing every dirty range at every draw
 // re-tiled the whole post chain ~19x/frame.
 bool FlushCsWritesRange(Renderer& renderer, uint64_t base, uint64_t bytes) {
+  // Nothing dirty anywhere: answer without touching the page index, which
+  // otherwise allocates a vector, hashes a lookup per page, then sorts and
+  // dedups it. That is called once per guest read -- and SotC issues 1.2M
+  // DRAW_INDEX_INDIRECT packets a run, each flushing before it reads its
+  // argument struct, which measured 33 seconds of a 150 s run. The index is
+  // maintained on both edges (indexed when a range goes dirty, unindexed when
+  // it is flushed), so empty really does mean "no writeback outstanding".
+  if (g_cs_dirty_pages.empty())
+    return true;
   if (g_cs_failed) {
     renderer.state = nullptr;
     return false;
@@ -1664,7 +2395,16 @@ bool FlushCsWritesRange(Renderer& renderer, uint64_t base, uint64_t bytes) {
       std::fprintf(stderr, "\n");
     }
   }
-  for (uint64_t dirty : DirtyRangesOverlapping(base, bytes)) {
+  const auto overlapping = DirtyRangesOverlapping(base, bytes);
+  // This read is about to cost a fence wait, so pull EVERY dirty range's
+  // results across on it rather than only the ones it asked for. The waits are
+  // the expensive part and one covers them all; the ranges this draw does not
+  // want stay dirty, but their mirrors are now current, so the flush that
+  // eventually wants them needs no wait at all. Draw-at-a-time flushing was
+  // ~25 waits a frame where a frame needs 2 or 3.
+  if (!overlapping.empty())
+    CsStageReadbacks(g_cs_ranges.begin(), g_cs_ranges.end());
+  for (uint64_t dirty : overlapping) {
     auto found = g_cs_ranges.find(dirty);
     if (found != g_cs_ranges.end() && !CsRangeFlushOne(dirty, found->second)) {
       if (g_cs_failed) {
@@ -1676,6 +2416,32 @@ bool FlushCsWritesRange(Renderer& renderer, uint64_t base, uint64_t bytes) {
   }
   g_ns_cs_out += NowNs() - _t0;
   return all_current;
+}
+
+uint64_t CsWritebackGeneration() {
+  return g_cs_writeback_gen;
+}
+
+bool CsRangeDirtyOverlapping(uint64_t base, uint64_t bytes) {
+  if (g_cs_dirty_pages.empty() || !bytes)
+    return false;
+  // Boolean early-out, not DirtyRangesOverlapping: this runs per staging-cache
+  // lookup on the draw path, and building/sorting the candidate vector there
+  // costs more than the memcpy the cache hit saves for small windows.
+  const uint64_t end = RangeEnd(base, bytes);
+  for (uint64_t page = base >> kCsDirtyPageShift;
+       page <= (end - 1) >> kCsDirtyPageShift; page++) {
+    auto found = g_cs_dirty_pages.find(page);
+    if (found == g_cs_dirty_pages.end())
+      continue;
+    for (uint64_t other : found->second) {
+      auto range = g_cs_ranges.find(other);
+      if (range != g_cs_ranges.end() && range->second.gpu_dirty &&
+          other < end && base < RangeEnd(other, range->second.guest_bytes))
+        return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace gpu::rhi

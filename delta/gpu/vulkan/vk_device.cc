@@ -4,11 +4,20 @@
 
 #include "gpu/vulkan/vk_device.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "gpu/gcn/gcn_translate.h"
 #include "gpu/rhi/renderer.h"
 #include "gpu/vulkan/vk_backend.h"
 #include "gpu/vulkan/vk_debug.h"
 #include "gpu/vulkan/vk_frame.h"
+#include "gpu/vulkan/vk_trace.h"
 #include "gpu/vulkan/vk_upload_ring.h"
 
 #include <algorithm>
@@ -22,6 +31,89 @@ DELTA_OPTION(const char*, kVkGpu, "DELTA_VK_GPU", nullptr);
 }  // namespace
 
 namespace gpu::vk {
+
+namespace {
+DELTA_OPTION(bool, kShaderCacheOn, "DELTA_GPU_SHADER_CACHE", true);
+DELTA_OPTION(const char*,
+             kShaderCacheDirOpt,
+             "DELTA_GPU_SHADER_CACHE_DIR",
+             nullptr);
+
+// Where the driver's pipeline cache blob lives. Same convention as the SPIR-V
+// cache (DELTA_GPU_SHADER_CACHE_DIR, else $XDG_CACHE_HOME/ps4delta, else
+// ~/.cache/ps4delta), and disabled by the same DELTA_GPU_SHADER_CACHE=0.
+std::string PipelineCachePath() {
+  static const std::string path = [] {
+    if (!kShaderCacheOn)
+      return std::string();
+    std::string d;
+    if (kShaderCacheDirOpt && *kShaderCacheDirOpt)
+      d = kShaderCacheDirOpt;
+    else if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+      d = std::string(xdg) + "/ps4delta";
+    else if (const char* home = std::getenv("HOME"); home && *home)
+      d = std::string(home) + "/.cache/ps4delta";
+    else
+      return std::string();
+    for (size_t i = 1; i <= d.size(); i++)
+      if (i == d.size() || d[i] == '/')
+        ::mkdir(d.substr(0, i).c_str(), 0755);
+    return d + "/pipeline.bin";
+  }();
+  return path;
+}
+
+std::vector<uint8_t> ReadPipelineCacheBlob() {
+  std::vector<uint8_t> out;
+  const std::string p = PipelineCachePath();
+  if (p.empty())
+    return out;
+  FILE* f = std::fopen(p.c_str(), "rb");
+  if (!f)
+    return out;
+  std::fseek(f, 0, SEEK_END);
+  const long n = std::ftell(f);
+  std::fseek(f, 0, SEEK_SET);
+  if (n > 0) {
+    out.resize(static_cast<size_t>(n));
+    if (std::fread(out.data(), 1, out.size(), f) != out.size())
+      out.clear();
+  }
+  std::fclose(f);
+  return out;
+}
+}  // namespace
+
+void SavePipelineCache(bool force) {
+  static size_t last_size = 0;
+  const std::string p = PipelineCachePath();
+  if (p.empty() || g_dev.pipeline_cache == VK_NULL_HANDLE)
+    return;
+  size_t size = 0;
+  if (vkGetPipelineCacheData(g_dev.device, g_dev.pipeline_cache, &size,
+                             nullptr) != VK_SUCCESS ||
+      !size)
+    return;
+  // Only write when the driver has actually added something.
+  if (!force && size == last_size)
+    return;
+  std::vector<uint8_t> blob(size);
+  if (vkGetPipelineCacheData(g_dev.device, g_dev.pipeline_cache, &size,
+                             blob.data()) != VK_SUCCESS)
+    return;
+  last_size = size;
+  char tmp[512];
+  std::snprintf(tmp, sizeof(tmp), "%s.%d.tmp", p.c_str(), (int)::getpid());
+  FILE* f = std::fopen(tmp, "wb");
+  if (!f)
+    return;
+  const bool ok = std::fwrite(blob.data(), 1, size, f) == size;
+  std::fclose(f);
+  if (ok)
+    ::rename(tmp, p.c_str());
+  else
+    ::unlink(tmp);
+}
 
 namespace {
 
@@ -147,6 +239,8 @@ void ImageBarrier(VkCommandBuffer c,
   b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mip_levels, 0, layers};
   b.srcAccessMask = src_a;
   b.dstAccessMask = dst_a;
+  if (trace::Recording())
+    trace::RecordBarrier("color", img, from, to, src_a, dst_a);
   vkCmdPipelineBarrier(c, StageForAccess(src_a, true),
                        StageForAccess(dst_a, false), 0, 0, nullptr, 0, nullptr,
                        1, &b);
@@ -167,6 +261,29 @@ void DepthBarrier(VkCommandBuffer c,
   b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
   b.srcAccessMask = src_a;
   b.dstAccessMask = dst_a;
+  if (trace::Recording())
+    trace::RecordBarrier("depth", img, from, to, src_a, dst_a);
+  vkCmdPipelineBarrier(c, StageForAccess(src_a, true),
+                       StageForAccess(dst_a, false), 0, 0, nullptr, 0, nullptr,
+                       1, &b);
+}
+
+void StencilBarrier(VkCommandBuffer c,
+                    VkImage img,
+                    VkImageLayout from,
+                    VkImageLayout to,
+                    VkAccessFlags src_a,
+                    VkAccessFlags dst_a) {
+  VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  b.oldLayout = from;
+  b.newLayout = to;
+  b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.image = img;
+  b.subresourceRange = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+  b.srcAccessMask = src_a;
+  b.dstAccessMask = dst_a;
+  if (trace::Recording())
+    trace::RecordBarrier("stencil", img, from, to, src_a, dst_a);
   vkCmdPipelineBarrier(c, StageForAccess(src_a, true),
                        StageForAccess(dst_a, false), 0, 0, nullptr, 0, nullptr,
                        1, &b);
@@ -182,7 +299,7 @@ bool CreateDevice() {
   // consumer actually listening -- the loader always advertises the extension,
   // but formatting labels for nobody costs real frame time.
   bool debug_utils = false;
-  if (WantDebugUtils()) {
+  if (WantDebugUtils() || trace::WantValidation()) {
     uint32_t ext_n = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &ext_n, nullptr);
     std::vector<VkExtensionProperties> exts(ext_n);
@@ -196,8 +313,40 @@ bool CreateDevice() {
     ic.enabledExtensionCount = 1;
     ic.ppEnabledExtensionNames = instance_exts;
   }
+  // DELTA_GPU_VALIDATE=1: the Khronos validation layers, with their messages
+  // routed into the frame capture next to the draw that provoked them. Off by
+  // default -- the layers cost real frame time and the loader only finds them
+  // when the layer path is on the environment.
+  const char* validation_layer = trace::ValidationLayerName();
+  if (trace::WantValidation()) {
+    uint32_t layer_n = 0;
+    vkEnumerateInstanceLayerProperties(&layer_n, nullptr);
+    std::vector<VkLayerProperties> layers(layer_n);
+    vkEnumerateInstanceLayerProperties(&layer_n, layers.data());
+    bool found = false;
+    for (const auto& l : layers)
+      found |= !std::strcmp(l.layerName, validation_layer);
+    if (found) {
+      ic.enabledLayerCount = 1;
+      ic.ppEnabledLayerNames = &validation_layer;
+      if (trace::WantSyncValidation()) {
+        static const VkValidationFeatureEnableEXT sync_feat[1] = {
+            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT};
+        static VkValidationFeaturesEXT vf{
+            VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+        vf.enabledValidationFeatureCount = 1;
+        vf.pEnabledValidationFeatures = sync_feat;
+        vf.pNext = ic.pNext;
+        ic.pNext = &vf;
+      }
+    } else {
+      std::fprintf(stderr, "[vkval] %s not available on this loader\n",
+                   validation_layer);
+    }
+  }
   VKOK(vkCreateInstance(&ic, nullptr, &g_dev.instance));
   InitDebugUtils(g_dev.instance, debug_utils);
+  trace::InstallValidationMessenger(g_dev.instance);
 
   uint32_t n = 0;
   vkEnumeratePhysicalDevices(g_dev.instance, &n, nullptr);
@@ -291,6 +440,7 @@ bool CreateDevice() {
   VkPhysicalDeviceVulkan12Features f12{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
   f12.samplerMirrorClampToEdge = avail12.samplerMirrorClampToEdge;
+  f12.separateDepthStencilLayouts = avail12.separateDepthStencilLayouts;
   VkPhysicalDeviceVulkan13Features f13{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
   f13.pNext = &f12;
@@ -372,9 +522,24 @@ bool CreateDevice() {
     want_feat.samplerAnisotropy = VK_TRUE;
   if (avail2.features.geometryShader)
     want_feat.geometryShader = VK_TRUE;
+  // Without independentBlend, "all elements of pAttachments must be identical"
+  // -- so a G-buffer pass that blends its targets differently (SotC disables
+  // blending on its integer planes and accumulates additively on the others)
+  // gets undefined behaviour across EVERY attachment, not just the odd one out.
+  if (avail2.features.independentBlend)
+    want_feat.independentBlend = VK_TRUE;
   if (avail2.features.shaderStorageImageWriteWithoutFormat)
     want_feat.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+  // A recompiled VERTEX shader can index a guest buffer by hand, which becomes
+  // a storage buffer SPIR-V considers writable. Declaring one is only legal
+  // with this feature on; without it the module was used anyway and the access
+  // is undefined (VUID-RuntimeSpirv-NonWritable-06341).
+  if (avail2.features.vertexPipelineStoresAndAtomics)
+    want_feat.vertexPipelineStoresAndAtomics = VK_TRUE;
+  if (avail2.features.fragmentStoresAndAtomics)
+    want_feat.fragmentStoresAndAtomics = VK_TRUE;
   g_dev.sampler_anisotropy = want_feat.samplerAnisotropy;
+  g_dev.independent_blend = want_feat.independentBlend;
   g_dev.sampler_mirror_clamp = f12.samplerMirrorClampToEdge;
   g_dev.geometry_shader = want_feat.geometryShader;
   g_dev.storage_image_write_without_format =
@@ -382,8 +547,16 @@ bool CreateDevice() {
   dc.pEnabledFeatures = &want_feat;
   VKOK(vkCreateDevice(g_dev.phys, &dc, nullptr, &g_dev.device));
   vkGetDeviceQueue(g_dev.device, g_dev.qfam, 0, &g_dev.queue);
+  // Seed the driver's pipeline cache from disk. Without this every run
+  // recompiles every pipeline from scratch, which on SotC is several hundred.
+  // A blob from another driver/device is rejected by the driver itself (it
+  // checks its own header), so a stale file costs nothing but the read.
+  std::vector<uint8_t> cache_blob = ReadPipelineCacheBlob();
   VkPipelineCacheCreateInfo pipeline_cache_info{
       VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+  pipeline_cache_info.initialDataSize = cache_blob.size();
+  pipeline_cache_info.pInitialData =
+      cache_blob.empty() ? nullptr : cache_blob.data();
   if (vkCreatePipelineCache(g_dev.device, &pipeline_cache_info, nullptr,
                             &g_dev.pipeline_cache) != VK_SUCCESS)
     g_dev.pipeline_cache = VK_NULL_HANDLE;

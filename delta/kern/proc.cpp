@@ -6,6 +6,7 @@
  * in the root of the source tree.
  */
 
+#include <sys/mman.h>
 #include <thread>
 #include <chrono>
 #include <base.h>
@@ -21,21 +22,23 @@
 #include "ps5/lv2/initial_tcb.h"
 #include "vfs.h"
 #include "cpu/cpu_backend.h"
+#include "gpu/ps4/cmd_processor.h"
 #include "ps4/hardware_mode.h"
 #include "ps4/lv2/sys_dynlib.h"
 #include "ps4/lv2/sys_mem.h"
 #include "runtime/vprx/vprx.h"
 
-#include <cstdlib>
-#include <cstring>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
-#include <string>
-#include <vector>
 #include <set>
-#include <atomic>
+#include <string>
+#include <unordered_set>
 #include <utl/options.h>
+#include <vector>
 
 namespace {
 DELTA_OPTION(const char *, kPs5Modules, "DELTA_PS5_MODULES", nullptr);
@@ -59,6 +62,7 @@ DELTA_OPTION(bool, kFiosAllopen, "DELTA_FIOS_ALLOPEN", false);
 DELTA_OPTION(bool, kFiosTrace, "DELTA_FIOS_TRACE", false);
 DELTA_OPTION(bool, kGfxctxWatch, "DELTA_GFXCTX_WATCH", false);
 DELTA_OPTION(bool, kJobTrace, "DELTA_JOB_TRACE", false);
+DELTA_OPTION(bool, kSotcMatTrace, "DELTA_SOTC_MATTRACE", false);
 DELTA_OPTION(bool, kJobTraceClaim, "DELTA_JOB_TRACE_CLAIM", false);
 DELTA_OPTION(bool, kPs5Dcbwatch, "DELTA_PS5_DCBWATCH", false);
 DELTA_OPTION(const char *, kNullGuard, "DELTA_GUEST_NULLGUARD", nullptr);
@@ -67,6 +71,13 @@ DELTA_OPTION(bool, kPs5Noforce, "DELTA_PS5_NOFORCE", false);
 DELTA_OPTION(bool, kSotcForcePayload, "DELTA_SOTC_FORCE_PAYLOAD", false);
 DELTA_OPTION(bool, kSotcForceWorlddone, "DELTA_SOTC_FORCE_WORLDDONE", false);
 DELTA_OPTION(bool, kSotcJobfix, "DELTA_SOTC_JOBFIX", false);
+DELTA_OPTION(int, kSotcAllocLock, "DELTA_SOTC_ALLOCLOCK", 0);
+DELTA_OPTION(bool, kSotcTreeWatch, "DELTA_SOTC_TREEWATCH", false);
+DELTA_OPTION(uint64_t, kSotcTreeWalk, "DELTA_SOTC_TREEWALK", 0);
+DELTA_OPTION(uint64_t, kSotcUmtxAddr, "DELTA_SOTC_UMTX_ADDR", 0x200003420ull);
+DELTA_OPTION(bool, kSotcHeapRoute, "DELTA_SOTC_HEAPROUTE", false);
+DELTA_OPTION(uint64_t, kSotcTreeNode, "DELTA_SOTC_TREEWATCH_NODE", 0x8052e00020ull);
+DELTA_OPTION(uint64_t, kSotcTreeState, "DELTA_SOTC_TREEWATCH_STATE", 0x8309e0fd20ull);
 DELTA_OPTION(const char *, kGuestPopcnt, "DELTA_GUEST_POPCNT", nullptr);
 DELTA_OPTION(const char *, kGuestWprot, "DELTA_GUEST_WPROT", nullptr);
 DELTA_OPTION(const char *, kGuestRprot, "DELTA_GUEST_RPROT", nullptr);
@@ -82,6 +93,8 @@ DELTA_OPTION(bool, kVoWatch, "DELTA_VO_WATCH", false);
 }  // namespace
 
 namespace krnl {
+const uint32_t *currentGuestTidPtr();  // sys_thread.cpp: this thread's guest tid
+
 static proc *g_activeProc{nullptr};
 
 // The guest fs base (TLS) and how the guest entry is run are backend-specific
@@ -100,8 +113,12 @@ static void applyGuestPatches(smodule &m);
 static void forceSotcPayload(smodule &m);
 static void probeFiosPaths();
 static void installJobTrace(smodule &m);
+static void installMatTrace(smodule &m);
+static void installAllocLock(smodule &m);
 
 bool proc::create(const base::String &path, bool fromVfs) {
+  gpu::SetWriteWatchCallback(&krnl::startWriteWatch);
+
   /*register HLE prx overrides*/
   runtime::vprx_init();
 
@@ -214,6 +231,8 @@ bool proc::create(const base::String &path, bool fromVfs) {
   applyGuestPatches(*first);
   forceSotcPayload(*first);
   installJobTrace(*first);
+  installMatTrace(*first);
+  installAllocLock(*first);
   // Note: DELTA_FIOS_PROBE runs lazily on the first FIOS2 call (see
   // fiosTraceLogger); at proc::create the /app0 PFS provider isn't mounted yet.
 
@@ -372,7 +391,7 @@ static void investigateWriteWatch() {
     if (const char *c2 = std::strchr(colon + 1, ':'))
       ms = (unsigned)std::strtoul(c2 + 1, nullptr, 0);
   }
-  startWriteWatch(at, bytes, ms, reads);
+  startWriteWatch(at, bytes, ms, reads, false);
 }
 
 static void investigateWriteHist() {
@@ -892,6 +911,58 @@ void PS4ABI jobTraceLogger(uint64_t hookId, uint64_t a0, uint64_t a1,
       spawnJobWatcher(a0);
     break;
   }
+  case 13: { // "Material Param Update" fills a block ON THE GPU (0x16eb90).
+    // SotC's material parameter blocks -- the constants AND the texture
+    // descriptors a draw reads through its SRT -- are not written by the CPU.
+    // `Shadow_Shipping+0x117930` (its timing print is "Material Param Update")
+    // allocates a block, memcpys a template into it, and calls this to build
+    // two buffer descriptors over it and dispatch (n+63)/64 threadgroups.
+    // Nothing on the CPU ever touches the blocks the failing draws read, so
+    // the question is which blocks this path actually targets: a3 = rcx = the
+    // block, a2 = rdx = its element count. One line per DISTINCT block, so a
+    // block updated every frame costs one line, not thousands.
+    static std::mutex m;
+    static std::unordered_set<uint64_t> seen;
+    static uint64_t calls = 0;
+    std::lock_guard lk(m);
+    calls++;
+    if (seen.insert(a3).second && seen.size() <= 256)
+      std::fprintf(stderr,
+                   "[mattrace] block=%#llx elems=%llu (distinct=%zu of %llu "
+                   "updates)\n",
+                   (unsigned long long)a3, (unsigned long long)a2, seen.size(),
+                   (unsigned long long)calls);
+    else if ((calls % 2000) == 0)
+      std::fprintf(stderr, "[mattrace] %llu updates over %zu distinct blocks\n",
+                   (unsigned long long)calls, seen.size());
+    std::fflush(stderr);
+    break;
+  }
+  case 14: { // the DISPATCH_DIRECT emitter (0x883870).
+    // The material fills are issued by the guest and never reach our PM4
+    // parser (DELTA_GPU_CSDROPS reports zero drops), so the question is which
+    // command buffer they are written into. a0 = rdi = the buffer object:
+    // [a0+0] .. [a0+8] is its extent and [a0+0x10] its write pointer, which is
+    // where this 9-dword packet lands. a1 = the X threadgroup count, so
+    // 16384 selects exactly the whole-arena (1048576-element) fills.
+    if (a1 != 16384)
+      break;
+    const auto *cb = reinterpret_cast<const uint64_t *>(a0);
+    const uint64_t wp = cb[2], end = cb[1];
+    static std::mutex m;
+    static std::unordered_set<uint64_t> seen;
+    static uint64_t n = 0;
+    std::lock_guard lk(m);
+    n++;
+    if (seen.insert(wp >> 20).second && seen.size() <= 64)
+      std::fprintf(stderr,
+                   "[matcb] fill dispatch -> cmdbuf write=%#llx end=%#llx "
+                   "(obj=%#llx, %zu regions of %llu fills)\n",
+                   (unsigned long long)wp, (unsigned long long)end,
+                   (unsigned long long)a0, seen.size(), (unsigned long long)n);
+    std::fflush(stderr);
+    break;
+  }
   case 11: { // CTOR 0x36210 -> a0 = rdi = the JobSystem object being built.
     // The zero-cost watcher bootstrap: this runs ONCE at init, returns
     // normally, and takes its argument in a register. Verified to be the same
@@ -1222,6 +1293,482 @@ void spawnJobWatcher(uint64_t base) {
   }).detach();
 }
 
+// DELTA_SOTC_ALLOCLOCK: hold ONE host mutex across every call into the title's
+// allocator, and count how often a thread had to wait for it.
+//
+// This is the deterministic form of the question DELTA_RIPRACE could not afford
+// to answer. The free tree ends up holding stale child links; only two
+// explanations survived the census (which showed the corrupted words are written
+// exclusively by the allocator's own nine sites): two guest threads inside at
+// once, or a miscompiled store. Every call is observed here, not one in 40000 --
+// so `contended` is a decisive count, whatever happens to the crash:
+//   contended == 0  -> no two threads were EVER inside together. Concurrency is
+//                      eliminated and the remaining suspect is our codegen.
+//   contended >  0  -> they were, and the title's own exclusion is not doing what
+//                      it does on hardware.
+// The mutex is recursive because these entries nest (the allocator frees while
+// allocating, and the tracker reenters), and because a fiber switch on the same
+// host thread must not deadlock against itself.
+// One lock PER SITE, because a shared lock cannot tell the two cases apart.
+// Several threads inside malloc at once is normal for a shared heap and proves
+// nothing. Several threads inside the FREE-TREE INSERT at once is a violation:
+// that function mutates the tree whose child links come out stale. So each hook
+// gets its own mutex and its own contention count, and the insert's count is the
+// answer.
+struct AllocLockSite {
+  std::recursive_mutex m;
+  std::atomic<uint64_t> calls{0};
+  std::atomic<uint64_t> contended{0};
+  std::atomic<uint64_t> maxWaitNs{0};
+  const char *name = "";
+  bool serialise = false;  // only the tree mutators need the shared lock
+};
+constexpr int kAllocLockSites = 7;
+AllocLockSite g_allocSites[kAllocLockSites];
+
+// DELTA_SOTC_ALLOCLOCK=2 gives every site its own mutex, which is what MEASURES
+// the violation: a failed try_lock at the insert names a second thread inside the
+// insert itself. DELTA_SOTC_ALLOCLOCK=1 makes them share one mutex, which is what
+// MITIGATES it -- per-site locks cannot, because a thread inside 0x12820 and a
+// thread inside 0x12af0 hold different locks and still meet over the same tree.
+// (Learned the hard way: the first mitigation run still crashed, with the per-site
+// counters proving the exclusion it needed was never in place.)
+std::recursive_mutex g_allocSharedM;
+
+// ONE LOCK PER ALLOCATOR STATE, not one lock overall. The contention forensics
+// showed 22 of 24 collisions were between DIFFERENT allocator instances -- this
+// title runs three (two static in module .data, one in direct memory) and they
+// share no tree, so serialising them against each other is pure false sharing. It
+// also made the experiment unrunnable: locking the hot coalescer across all three
+// heaps ran ~20x slower than locking four sites across one, and the repro never
+// reached the crash window.
+//
+// Keyed on arg0, which is the state pointer at the three sites that take one
+// (insert, remove, coalesce all use arg0+0x70). Rebalance and fixup are called
+// from inside those and take node pointers rather than a state, so they are
+// observed and not locked -- their callers already hold the right lock, which is
+// why their contention counts were 0 all along.
+//
+// The payoff is that contention now MEANS something: with per-state locking, a
+// failed try_lock is two threads inside the tree mutators of the SAME tree.
+constexpr int kAllocStates = 16;
+struct StateLock {
+  std::atomic<uint64_t> state{0};
+  std::recursive_mutex m;
+};
+StateLock g_stateLocks[kAllocStates];
+std::atomic<uint64_t> g_stateLockOverflow{0};
+
+static std::recursive_mutex &allocMutexFor(int i, uint64_t a0) {
+  if (kSotcAllocLock == 2)
+    return g_allocSites[i].m;
+  if (!a0)
+    return g_allocSharedM;
+  for (int k = 0; k < kAllocStates; k++) {
+    uint64_t cur = g_stateLocks[k].state.load(std::memory_order_acquire);
+    if (cur == a0)
+      return g_stateLocks[k].m;
+    if (cur == 0) {
+      uint64_t expect = 0;
+      if (g_stateLocks[k].state.compare_exchange_strong(expect, a0))
+        return g_stateLocks[k].m;
+      if (g_stateLocks[k].state.load(std::memory_order_acquire) == a0)
+        return g_stateLocks[k].m;
+    }
+  }
+  g_stateLockOverflow.fetch_add(1, std::memory_order_relaxed);
+  return g_allocSharedM;  // more states than slots: fall back to one lock
+}
+
+// Ring of the most recent allocator calls, so that when the periodic walk trips
+// there is a story for the window it brackets instead of only a verdict: which
+// sites ran, with what argument, on which thread. Read back on the first trip.
+// Who is inside the shared lock right now, so a thread that contends can say what
+// it collided with. Set on acquire, cleared on release.
+// DELTA_SOTC_HEAPROUTE: do the title's three heaps share address space?
+//
+// The corruption on the crashing heap needs no concurrency if a chunk is freed into
+// one state's tree while its backing memory belongs to another state's arena that
+// later gets recycled wholesale -- the tree would keep a link to memory handed out
+// again elsewhere, which is exactly the observed shape (a live record array holding
+// memory the tree still thinks is free), and it would explain why no same-tree
+// collision has ever been seen on that heap.
+//
+// The insert takes the state in rdi and inserts the chunk cached at state+0xc0 (its
+// designated victim), so both sides are readable at the hook with no pointer map:
+// bucket the chunk address by 256 MiB per state and print the table. Disjoint
+// buckets per state means chunks never cross heaps and the idea is dead; a bucket
+// shared by two states is where to look next.
+struct RouteBucket { uint64_t prefix; uint64_t count; };
+struct RouteTab {
+  std::atomic<uint64_t> state{0};
+  uint64_t inserts = 0;
+  uint64_t lo = ~0ull, hi = 0;
+  RouteBucket b[12] {};
+};
+constexpr int kRouteTabs = 8;
+RouteTab g_routeTabs[kRouteTabs];
+std::mutex g_routeM;
+
+static void heapRouteNote(uint64_t state, uint64_t chunk) {
+  if (!state || !chunk || chunk < 0x8000000000ull || chunk >= 0x8700000000ull)
+    return;
+  std::lock_guard<std::mutex> lk(g_routeM);
+  RouteTab *t = nullptr;
+  for (int i = 0; i < kRouteTabs; i++) {
+    const uint64_t cur = g_routeTabs[i].state.load(std::memory_order_relaxed);
+    if (cur == state) { t = &g_routeTabs[i]; break; }
+    if (cur == 0) { g_routeTabs[i].state.store(state); t = &g_routeTabs[i]; break; }
+  }
+  if (!t)
+    return;
+  t->inserts++;
+  if (chunk < t->lo) t->lo = chunk;
+  if (chunk > t->hi) t->hi = chunk;
+  const uint64_t pref = chunk >> 28;
+  for (auto &e : t->b) {
+    if (e.count && e.prefix == pref) { e.count++; return; }
+    if (!e.count) { e.prefix = pref; e.count = 1; return; }
+  }
+}
+
+static void heapRouteReport() {
+  std::lock_guard<std::mutex> lk(g_routeM);
+  for (auto &t : g_routeTabs) {
+    const uint64_t st = t.state.load(std::memory_order_relaxed);
+    if (!st) continue;
+    std::fprintf(stderr, "[heaproute] state %#llx: %llu inserts, chunks %#llx..%#llx, 256MB buckets:",
+                 (unsigned long long)st, (unsigned long long)t.inserts,
+                 (unsigned long long)t.lo, (unsigned long long)t.hi);
+    for (auto &e : t.b)
+      if (e.count)
+        std::fprintf(stderr, " %#llx0000000(x%llu)",
+                     (unsigned long long)e.prefix, (unsigned long long)e.count);
+    std::fprintf(stderr, "\n");
+  }
+  std::fflush(stderr);
+}
+
+struct LockHolder {
+  std::atomic<uint32_t> gtid{0};
+  std::atomic<uint32_t> site{0};
+  std::atomic<uint64_t> a0{0};
+};
+LockHolder g_lockHolder;
+std::atomic<int> g_contendReported{0};
+
+// The guest pthread mutex the allocator's shared heap is locked with -- the one the
+// crashing thread spins on with MUTEX_WAIT/MUTEX_WAKE. FreeBSD's umutex keeps the
+// owner tid in the low bits of its first word with UMUTEX_CONTESTED (0x80000000)
+// on top, which is how sys_umtx_op reads it.
+static uint32_t umtxOwnerWord() {
+  const uint64_t a = kSotcUmtxAddr;
+  if (a < 0x200000000ull || a >= 0x201000000ull)
+    return 0xFFFFFFFFu;
+  return *reinterpret_cast<const volatile uint32_t *>(a);
+}
+
+// The discriminating report. Two threads inside the tree mutators at once is only a
+// race on the SAME tree if they are working on the same allocator state -- this
+// title hands out per-scope allocators, so a0 (the state pointer for insert and
+// remove) has to match before the collision means anything. And if it does match,
+// the owner word says whether the guest's own mutex thought it was excluding them.
+static void reportContention(int site, uint64_t a0) {
+  if (g_contendReported.fetch_add(1) >= 24)
+    return;
+  const uint32_t myGtid = *currentGuestTidPtr();
+  const uint32_t hg = g_lockHolder.gtid.load();
+  const uint32_t hs = g_lockHolder.site.load();
+  const uint64_t ha = g_lockHolder.a0.load();
+  const uint32_t ow = umtxOwnerWord();
+  const uint32_t owner = ow & ~0x80000000u;
+  const char *verdict =
+      (ha && a0 && ha != a0)
+          ? "DIFFERENT allocator states -- not one tree, not a race"
+          : (owner == myGtid || owner == hg)
+                ? "SAME state, and the guest mutex names one of them as owner -- "
+                  "the other entered without it"
+                : (owner == 0)
+                      ? "SAME state, guest mutex UNOWNED -- neither holds it"
+                      : "SAME state, guest mutex owned by a THIRD thread";
+  std::fprintf(stderr,
+               "[contend] me: gtid=%u site=%s a0=%#llx | holder: gtid=%u site=%s "
+               "a0=%#llx | umtx@%#llx word=%#x owner=%u contested=%d -> %s\n",
+               myGtid, g_allocSites[site].name, (unsigned long long)a0, hg,
+               hs < kAllocLockSites ? g_allocSites[hs].name : "?",
+               (unsigned long long)ha, (unsigned long long)kSotcUmtxAddr, ow, owner,
+               (ow & 0x80000000u) ? 1 : 0, verdict);
+  std::fflush(stderr);
+}
+
+struct AllocEvt { uint32_t site; uint32_t tid; uint64_t a0, a1; };
+// Big enough to cover the walk cadence: the walk only looks every N calls, so a
+// 64-entry ring showed nothing but the allocs immediately before the check and
+// none of the mutators in the window that actually did the damage.
+constexpr int kAllocRing = 8192;
+AllocEvt g_allocRing[kAllocRing];
+std::atomic<uint64_t> g_allocRingPos{0};
+std::atomic<uint64_t> g_allocCallSeq{0};
+
+// Which allocator state this thread locked, per nesting level: the leave hook has
+// no argument to re-derive it from.
+static thread_local uint64_t t_lockedState[8];
+static thread_local int t_lockDepth = 0;
+
+static void treeWatchAt(int site, bool onExit);
+static void treeWalkPeriodic();
+
+static void allocLockEnterAt(int i, uint64_t a0, uint64_t a1) {
+  AllocLockSite &s = g_allocSites[i];
+  s.calls.fetch_add(1, std::memory_order_relaxed);
+  g_allocCallSeq.fetch_add(1, std::memory_order_relaxed);
+  if (kSotcTreeWalk) {
+    const uint64_t k = g_allocRingPos.fetch_add(1, std::memory_order_relaxed);
+    AllocEvt &e = g_allocRing[k % kAllocRing];
+    e.site = (uint32_t)i;
+    e.tid = (uint32_t)syscall(SYS_gettid);
+    e.a0 = a0;
+    e.a1 = a1;
+  }
+  if (kSotcHeapRoute && i == 2 && a0 >= 0x200000000ull) {
+    // site 2 is treeInsert: rdi is the state, and the chunk it will insert is the
+    // designated victim cached at state+0xc0.
+    const uint64_t chunk = *reinterpret_cast<const volatile uint64_t *>(a0 + 0xc0);
+    heapRouteNote(a0, chunk);
+  }
+  if (kSotcTreeWatch)
+    treeWatchAt(i, false);
+  if (!kSotcAllocLock || !s.serialise)
+    return;  // observation-only site, or watch-only run: do not serialise
+  std::recursive_mutex &mx = allocMutexFor(i, a0);
+  if (mx.try_lock()) {
+    if (t_lockDepth < 8) t_lockedState[t_lockDepth++] = a0;
+    g_lockHolder.gtid.store(*currentGuestTidPtr());
+    g_lockHolder.site.store((uint32_t)i);
+    g_lockHolder.a0.store(a0);
+    return;
+  }
+  // The try_lock failed, so another thread is inside this very function right
+  // now. That is the measurement; the blocking acquire below is the mitigation.
+  s.contended.fetch_add(1, std::memory_order_relaxed);
+  reportContention(i, a0);
+  const auto t0 = std::chrono::steady_clock::now();
+  mx.lock();
+  if (t_lockDepth < 8) t_lockedState[t_lockDepth++] = a0;
+  g_lockHolder.gtid.store(*currentGuestTidPtr());
+  g_lockHolder.site.store((uint32_t)i);
+  g_lockHolder.a0.store(a0);
+  const uint64_t ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+  uint64_t prev = s.maxWaitNs.load(std::memory_order_relaxed);
+  while (ns > prev &&
+         !s.maxWaitNs.compare_exchange_weak(prev, ns, std::memory_order_relaxed)) {}
+}
+
+// DELTA_SOTC_TREEWATCH: catch the free tree going bad AT ITS BIRTH.
+//
+// Five crashes all corrupt the same field -- node 0x8052e00020's child[0] -- so
+// there is no need to walk the tree: check that one word, on both sides of every
+// allocator call. Entry clean and exit dirty names the call that CONTAINED the
+// corrupting store, which is what a "miscompiled store" claim needs and what the
+// crash-time walk can never give (by then the store is millions of calls old).
+// Two loads and a few compares per call, against ~6M calls a run.
+//
+// A healthy child[0] is either the tree's sentinel or a pointer to a free chunk,
+// whose size word sits at child-8 and is small, non-zero and 16-byte aligned --
+// the same plausibility test the crash-time walker uses. Every bad value observed
+// so far is a mapped pointer into reused live data, so reading it is safe; a value
+// outside guest direct memory is reported without being dereferenced.
+static thread_local bool t_treeOkAtEntry = true;
+std::atomic<uint64_t> g_treeChecks{0};
+std::atomic<uint64_t> g_treeBadAtEntry{0};
+std::atomic<uint64_t> g_treeWentBad{0};
+std::atomic<int> g_treeReported{0};
+
+// The watched node does not exist at boot -- the heap has not grown into it yet --
+// so the check has to stay disarmed until its page is mapped, or the very first
+// allocator call dereferences nothing and takes the process down. (It did.) Poll
+// for the page the way the write census does, then confirm the address really
+// looks like a free-tree node before trusting anything it says.
+std::atomic<bool> g_treeArmed{false};
+
+static void treeWatchArm() {
+  std::thread([] {
+    const long pg = sysconf(_SC_PAGESIZE);
+    void *page = reinterpret_cast<void *>(kSotcTreeNode & ~(uint64_t)(pg - 1));
+    // The walk reads the allocator STATE, the field watch reads the node: both
+    // pages have to exist before either is allowed to dereference anything.
+    void *spage = reinterpret_cast<void *>(kSotcTreeState & ~(uint64_t)(pg - 1));
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      unsigned char vec = 0;
+      if (mincore(page, 1, &vec) != 0 || mincore(spage, 1, &vec) != 0)
+        continue;
+      const uint64_t own = *reinterpret_cast<const uint64_t *>(kSotcTreeNode - 8) & ~7ull;
+      std::fprintf(stderr,
+                   "[treewatch] armed on node %#llx (its own size word reads "
+                   "%#llx) state %#llx sentinel %#llx\n",
+                   (unsigned long long)kSotcTreeNode, (unsigned long long)own,
+                   (unsigned long long)kSotcTreeState,
+                   (unsigned long long)(kSotcTreeState + 0x80));
+      std::fflush(stderr);
+      g_treeArmed.store(true, std::memory_order_release);
+      return;
+    }
+  }).detach();
+}
+
+static bool treeFieldOk(uint64_t &valOut, uint64_t &szOut) {
+  const uint64_t node = kSotcTreeNode;
+  const uint64_t sentinel = kSotcTreeState + 0x80;
+  valOut = szOut = 0;
+  if (node < 0x8000000000ull || node >= 0x8700000000ull)
+    return true;  // not the layout this watch was aimed at; stay quiet
+  // Only judge the field while the node is ITSELF a live free chunk. Before the
+  // tree grows into this address its words are whatever the previous owner left,
+  // and calling that "bad" buries the real signal: the first run of this watch
+  // reported 124 bad-on-entry hits with 0 transitions, which is what pre-
+  // membership noise looks like.
+  const uint64_t own = *reinterpret_cast<const uint64_t *>(node - 8) & ~7ull;
+  if (!own || own >= 0x8000000ull)
+    return true;  // 8-granular sizes: masking with ~7 is the only test available
+  const uint64_t c = *reinterpret_cast<const uint64_t *>(node);
+  valOut = c;
+  if (c == sentinel)
+    return true;
+  if (c < 0x8000000000ull || c >= 0x8700000000ull)
+    return false;  // not a guest pointer at all -- do not dereference it
+  const uint64_t sz = *reinterpret_cast<const uint64_t *>(c - 8) & ~7ull;
+  szOut = sz;
+  return sz && sz < 0x8000000ull;
+}
+
+static void treeWatchAt(int site, bool onExit) {
+  if (!g_treeArmed.load(std::memory_order_acquire))
+    return;
+  uint64_t val = 0, sz = 0;
+  const bool ok = treeFieldOk(val, sz);
+  g_treeChecks.fetch_add(1, std::memory_order_relaxed);
+  if (!onExit) {
+    t_treeOkAtEntry = ok;
+    if (!ok)
+      g_treeBadAtEntry.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (ok || !t_treeOkAtEntry)
+    return;  // already bad on the way in: some earlier call did it
+  g_treeWentBad.fetch_add(1, std::memory_order_relaxed);
+  if (g_treeReported.fetch_add(1) < 8) {
+    std::fprintf(stderr,
+                 "[treewatch] node %#llx child[0] WENT BAD inside %s (tid %ld): "
+                 "now %#llx, its size word reads %#llx -- this call contained the "
+                 "corrupting store\n",
+                 (unsigned long long)kSotcTreeNode, g_allocSites[site].name,
+                 (long)syscall(SYS_gettid), (unsigned long long)val,
+                 (unsigned long long)sz);
+    std::fflush(stderr);
+  }
+}
+
+// DELTA_SOTC_TREEWALK=<N>: every N allocator calls, walk the WHOLE free tree and
+// report the first link pointing at something that is no longer a free chunk.
+// This replaces the single-field watch, which was aimed at node 0x8052e00020 and
+// went silent the run the victim moved elsewhere. Bracketing to N calls turns a
+// 25-minute repro into "the corruption appeared within these N calls", and the
+// ring buffer above says what ran in that window.
+//
+// Depth-first over both children with an explicit stack; a node is judged by its
+// size word at node-8 (8-granular, non-zero, not absurd) exactly as the crash-time
+// walker does. Pointers are range-checked against guest direct memory before any
+// dereference, so a corrupt link cannot fault the walker.
+std::atomic<bool> g_treeWalkTripped{false};
+
+static inline bool inDmem(uint64_t p) {
+  return p >= 0x8000000000ull && p < 0x8700000000ull;
+}
+
+static void treeWalkPeriodic() {
+  const uint64_t n = kSotcTreeWalk;
+  if (!n || g_treeWalkTripped.load(std::memory_order_relaxed))
+    return;
+  if ((g_allocCallSeq.load(std::memory_order_relaxed) % n) != 0)
+    return;
+  if (!g_treeArmed.load(std::memory_order_acquire))
+    return;
+  const uint64_t state = kSotcTreeState;
+  const uint64_t sentinel = state + 0x80;
+  if (!inDmem(sentinel))
+    return;
+  uint64_t stack[256], fields[256];
+  int sp = 0, visited = 0;
+  stack[sp] = *reinterpret_cast<const uint64_t *>(sentinel);
+  fields[sp] = sentinel;
+  sp++;
+  while (sp > 0) {
+    --sp;
+    const uint64_t cur = stack[sp], field = fields[sp];
+    if (cur == sentinel || cur == 0)
+      continue;
+    if (++visited > 4096)
+      return;  // pathological; say nothing rather than guess
+    bool bad = !inDmem(cur);
+    uint64_t sz = 0;
+    if (!bad) {
+      sz = *reinterpret_cast<const uint64_t *>(cur - 8) & ~7ull;
+      bad = !sz || sz >= 0x8000000ull;
+    }
+    if (bad) {
+      if (g_treeWalkTripped.exchange(true))
+        return;
+      std::fprintf(stderr,
+                   "\n[treewalk] TRIPPED after %llu allocator calls, %d nodes "
+                   "visited: the link at %#llx points at %#llx, whose size word "
+                   "reads %#llx -- no longer a free chunk\n",
+                   (unsigned long long)g_allocCallSeq.load(), visited,
+                   (unsigned long long)field, (unsigned long long)cur,
+                   (unsigned long long)sz);
+      const uint64_t pos = g_allocRingPos.load(std::memory_order_relaxed);
+      const int have = (int)(pos < kAllocRing ? pos : kAllocRing);
+      std::fprintf(stderr,
+                   "[treewalk] the last %d allocator calls, oldest first (the "
+                   "corruption happened inside this window):\n", have);
+      for (int k = have; k > 0; k--) {
+        const AllocEvt &e = g_allocRing[(pos - k) % kAllocRing];
+        std::fprintf(stderr, "[treewalk]   %-24s tid=%u a0=%#llx a1=%#llx\n",
+                     e.site < kAllocLockSites ? g_allocSites[e.site].name : "?",
+                     e.tid, (unsigned long long)e.a0, (unsigned long long)e.a1);
+      }
+      std::fflush(stderr);
+      return;
+    }
+    for (int c = 0; c < 2 && sp < 254; c++) {
+      const uint64_t f = cur + (uint64_t)c * 8;
+      stack[sp] = *reinterpret_cast<const uint64_t *>(f);
+      fields[sp] = f;
+      sp++;
+    }
+  }
+}
+
+static void allocLockLeaveAt(int i) {
+  if (kSotcAllocLock && g_allocSites[i].serialise) {
+    // Unlock the same mutex the entry took: arg0 is not available here, so the
+    // entry records which state it locked on a small per-thread stack.
+    const uint64_t a0 = t_lockDepth > 0 ? t_lockedState[--t_lockDepth] : 0;
+    allocMutexFor(i, a0).unlock();
+  }
+  if (kSotcTreeWatch)
+    treeWatchAt(i, true);
+  if (kSotcTreeWalk)
+    treeWalkPeriodic();
+}
+
+template <int N>
+static void PS4ABI allocLockEnterT(uint64_t a0, uint64_t a1) {
+  allocLockEnterAt(N, a0, a1);
+}
+template <int N> static void PS4ABI allocLockLeaveT() { allocLockLeaveAt(N); }
+
 // Install an entry detour on an eboot-internal function. prologueLen must be the
 // smallest instruction boundary >= 14 in the prologue (position-independent).
 void installInternalHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
@@ -1243,7 +1790,139 @@ void installInternalHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
   LOG_INFO("jobtrace: hooked {} eboot+{:#x} tramp={:#x} wrapper={:#x}", name, off,
            (unsigned long)tramp, (unsigned long)wrap);
 }
+
+// Same detour, but the wrapper takes the host allocator mutex across the call.
+static void installAllocLockHook(uint8_t *base, uint32_t off, uint32_t prologueLen,
+                                 const char *name, void *enterFn, void *leaveFn) {
+  uint8_t *target = base + off;
+  utl::protectMem(reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(target) & ~0xFFFull),
+                  0x2000, utl::pageProtection::rwx);
+  uintptr_t tramp = cpu::makeGuestTrampoline(target, prologueLen, target + prologueLen);
+  if (!tramp) { LOG_WARNING("alloclock: trampoline failed for {}", name); return; }
+  uintptr_t wrap = cpu::makeGuestLockWrapper(reinterpret_cast<void *>(tramp),
+                                             enterFn, leaveFn, name);
+  if (!wrap) { LOG_WARNING("alloclock: wrapper failed for {}", name); return; }
+  uint8_t patch[32];
+  patch[0] = 0xFF; patch[1] = 0x25;
+  patch[2] = patch[3] = patch[4] = patch[5] = 0x00;   // jmp qword [rip+0]
+  uint64_t w = wrap; std::memcpy(patch + 6, &w, 8);
+  for (uint32_t i = 14; i < prologueLen; i++) patch[i] = 0x90;
+  std::memcpy(target, patch, prologueLen);
+  LOG_INFO("alloclock: serialising {} eboot+{:#x} tramp={:#x} wrapper={:#x}", name,
+           off, (unsigned long)tramp, (unsigned long)wrap);
+}
+
 } // namespace
+
+// Prologue cut points are the smallest instruction boundary >= 14 that stays
+// position-independent; each stops before the function's first rip-relative load:
+//   0x12820 alloc: pushes + `sub rsp,0x28` end at 17, then `mov r14,[rip+..]`
+//   0x12af0 free : pushes + `sub rsp,0x30` end at 15, then `mov r15,[rip+..]`
+//   0x48a70 free-tree insert: pushes + `mov r15,rdi` + `mov r14,rsi` end at 16
+static void installAllocLock(smodule &m) {
+  if (!kSotcAllocLock && !kSotcTreeWatch && !kSotcTreeWalk && !kSotcHeapRoute)
+    return;
+  uint8_t *base = m.getInfo().base;
+  struct Site { uint32_t off; uint32_t cut; const char *name; bool lock; };
+  // Prologue cuts are the smallest position-independent instruction boundary >= 14,
+  // each stopping before the function's first rip-relative load; every one was
+  // checked for positive-rbp stack-argument reads, which an entry detour breaks.
+  // 0x4a040 uses rbp as a NODE pointer (it loads it from rdx at 0x4a075) rather
+  // than as a frame pointer, so its [rbp+0x20] accesses are node fields and safe.
+  //
+  // The four TREE MUTATORS carry the shared lock; the two API entries are observed
+  // only. Locking the API was the earlier mistake: the allocator core has 22
+  // external direct entry points scattered across the eboot, so serialising
+  // 0x12820 and 0x12af0 left most doors open. All 11 call sites of the mutators
+  // are inside the core, so locking THEM covers every door at once.
+  static const Site kSites[kAllocLockSites] = {
+      {0x12820, 17, "alloc(0x12820)",          false},
+      {0x12af0, 15, "free(0x12af0)",           false},
+      {0x48a70, 16, "treeInsert(0x48a70)",     true},
+      {0x497f0, 16, "treeRemove(0x497f0)",     true},
+      {0x4a040, 14, "treeRebalance(0x4a040)",  false},
+      {0x4a210, 15, "treeFixup(0x4a210)",      false},
+      // The census site 0x48dfb lives here. An earlier pass mis-attributed it to
+      // 0x48c70 because that address is a 9-byte leaf whose `ret` is followed by
+      // seven nops, one short of the eight the function-boundary scan wanted --
+      // so this mutator went unserialised through the whole first experiment.
+      // Observed, NOT locked. Serialising this one stalls the title outright:
+      // hooked-but-unlocked runs 174093 inserts and 3.3 fps in five minutes, and
+      // hooked-and-locked manages 129 inserts and never renders a frame -- with
+      // per-state locks too, so it is not false sharing across heaps. The
+      // coalescer evidently must not be held across by a foreign lock (it is
+      // reached with guest locks already held, and the title's sched_yield spin
+      // convoys behind it). Left in the table because its contention count is the
+      // measurement; flipping this to true is how the stall reproduces.
+      {0x48c80, 17, "treeCoalesce(0x48c80)",   false},
+  };
+  static void *const kEnter[kAllocLockSites] = {
+      reinterpret_cast<void *>(&allocLockEnterT<0>),
+      reinterpret_cast<void *>(&allocLockEnterT<1>),
+      reinterpret_cast<void *>(&allocLockEnterT<2>),
+      reinterpret_cast<void *>(&allocLockEnterT<3>),
+      reinterpret_cast<void *>(&allocLockEnterT<4>),
+      reinterpret_cast<void *>(&allocLockEnterT<5>),
+      reinterpret_cast<void *>(&allocLockEnterT<6>)};
+  static void *const kLeave[kAllocLockSites] = {
+      reinterpret_cast<void *>(&allocLockLeaveT<0>),
+      reinterpret_cast<void *>(&allocLockLeaveT<1>),
+      reinterpret_cast<void *>(&allocLockLeaveT<2>),
+      reinterpret_cast<void *>(&allocLockLeaveT<3>),
+      reinterpret_cast<void *>(&allocLockLeaveT<4>),
+      reinterpret_cast<void *>(&allocLockLeaveT<5>),
+      reinterpret_cast<void *>(&allocLockLeaveT<6>)};
+  for (int i = 0; i < kAllocLockSites; i++) {
+    g_allocSites[i].name = kSites[i].name;
+    g_allocSites[i].serialise = kSites[i].lock;
+    installAllocLockHook(base, kSites[i].off, kSites[i].cut, kSites[i].name,
+                         kEnter[i], kLeave[i]);
+  }
+  if (kSotcTreeWatch || kSotcTreeWalk)
+    treeWatchArm();
+  std::thread([] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(10));
+      if (kSotcHeapRoute)
+        heapRouteReport();
+      if (kSotcTreeWatch)
+        std::fprintf(stderr,
+                     "[treewatch] %llu checks, %llu found it already bad on "
+                     "entry, %llu caught it GOING bad\n",
+                     (unsigned long long)g_treeChecks.load(),
+                     (unsigned long long)g_treeBadAtEntry.load(),
+                     (unsigned long long)g_treeWentBad.load());
+      for (int i = 0; i < kAllocLockSites; i++)
+        std::fprintf(stderr,
+                     "[alloclock] %-24s %llu calls, %llu CONTENDED (another "
+                     "thread was inside), max wait %llu ns\n",
+                     g_allocSites[i].name,
+                     (unsigned long long)g_allocSites[i].calls.load(),
+                     (unsigned long long)g_allocSites[i].contended.load(),
+                     (unsigned long long)g_allocSites[i].maxWaitNs.load());
+      std::fflush(stderr);
+    }
+  }).detach();
+}
+
+// DELTA_SOTC_MATTRACE: name the blocks SotC's "Material Param Update" fills.
+// Hooks the dispatch builder rather than the update routine itself, because the
+// block is that call's 4th argument (rcx) and only a local inside the caller.
+// Prologue cut point 17 (push rbp / mov rbp,rsp / 5 pushes / sub rsp,0x58); the
+// function takes all five arguments in registers and reads nothing at a
+// positive rbp offset, which is the thing an entry detour would break.
+static void installMatTrace(smodule &m) {
+  if (!kSotcMatTrace)
+    return;
+  installInternalHook(m.getInfo().base, 0x16eb90, 17, 13,
+                      "MaterialParamDispatch(0x16eb90)");
+  // ...and the packet emitter it ends in, to name the command buffer the
+  // dispatch is written into. Prologue is exactly 14 (7 pushes after
+  // `mov rbp,rsp`) and position-independent; all five arguments are in
+  // registers.
+  installInternalHook(m.getInfo().base, 0x883870, 14, 14,
+                      "DispatchDirectEmit(0x883870)");
+}
 
 static void installJobTrace(smodule &m) {
   if (!kJobTrace)
