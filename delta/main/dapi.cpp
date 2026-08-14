@@ -128,6 +128,7 @@ static void win32PostInit() {
 
 EXPORT int dcoreMain(int argc, char **argv) {
   utl::createLogger(true);
+  utl::routeBaseLogging();
   // Before anything else: every subsystem below reads its knobs from here, and
   // most latch the value the first time they run.
   utl::initOptions(argc, argv);

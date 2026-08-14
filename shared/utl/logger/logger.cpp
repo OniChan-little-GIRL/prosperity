@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <atomic>
+#include <iterator>
 #include <mutex>
 #include <thread>
 
 #include <base/containers/vector.h>
+#include <base/logging.h>
 #include <base/memory/unique_pointer.h>
 #include <base/strings/xstring.h>
 
@@ -164,6 +166,21 @@ void formatLogMsg(logLevel lvl, uint32_t line, const char *func,
 
 logBase *getLogSink(base::StringRef name) {
   return LogRegistry::Instance().GetSink(name);
+}
+
+void routeBaseLogging() {
+  base::SetLogHandler(
+      [](void *, const char *channel, base::LogLevel level, const char *msg) {
+        static constexpr logLevel kLevels[] = {
+            logLevel::Trace, logLevel::Debug, logLevel::Info,
+            logLevel::Warning, logLevel::Error, logLevel::Critical};
+        const auto i = static_cast<size_t>(level);
+        // The channel goes in the message as [channel], which is the form
+        // these lines are grepped by; the function column names the bridge.
+        fmtLogMsg(i < std::size(kLevels) ? kLevels[i] : logLevel::Info, 0,
+                  "base", "[{}] {}", channel ? channel : "?", msg ? msg : "");
+      },
+      nullptr);
 }
 
 }  // namespace utl

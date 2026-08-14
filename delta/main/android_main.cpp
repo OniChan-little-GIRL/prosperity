@@ -163,6 +163,7 @@ extern "C" void android_main(android_app *app) {
   krnl::reserveGuestVaSpace();  // claim guest-fixed ranges first (no-op on Android)
   cpu::earlyInit();  // reserve the FEX heap before any large guest mapping
   utl::createLogger(true);
+  utl::routeBaseLogging();
 
   AppState state;
   const char *ext = app->activity->externalDataPath;

@@ -57,6 +57,12 @@ void formatLogMsg(logLevel lvl, uint32_t line, const char *func,
 
 void createLogger(bool withConsole = false);
 
+// Route base::PrintLogMessage (BASE_LOGI and friends) into this logger, so a
+// module that logs on a base channel reaches the same sinks asynchronously
+// instead of writing to stderr on the calling thread. Call once, after
+// createLogger.
+void routeBaseLogging();
+
 // Drop all further log entries. Called from the crash handler so the async log
 // backend thread stops writing to stderr and corrupting the fault dump.
 void silenceLogging();
