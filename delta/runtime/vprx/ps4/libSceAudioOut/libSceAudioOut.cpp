@@ -65,7 +65,7 @@
  * peaks in the same range as this shim's (see that file's header).
  *
  * Verified end to end against Isaac with the research harness in
- * kern/ps4/lv2/sys_mem.cpp (DELTA_SHM_AUDIO_PROBE, plus DELTA_AUDIOMIX_ACK in
+ * kern/lv2/sys_mem.cpp (DELTA_SHM_AUDIO_PROBE, plus DELTA_AUDIOMIX_ACK in
  * sys_event_flag.cpp): performing exactly the above makes Isaac stream
  * continuously on port 7 (bpf=4, type=0, 2ch, 48000, grain 512) with a live
  * signal whose peak climbs like the HLE reference. Decoding the block as

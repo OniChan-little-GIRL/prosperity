@@ -22,7 +22,7 @@
 #include <unistd.h>
 
 #include "dma_dev.h"
-#include "kern/ps4/lv2/sys_mem.h"
+#include "kern/lv2/sys_mem.h"
 #include "kern/proc.h"
 #include <utl/options.h>
 

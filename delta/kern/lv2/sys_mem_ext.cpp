@@ -20,10 +20,10 @@
 #include <cstring>
 #include <sys/mman.h>
 
-#include "../../proc.h"
-#include "../dev/dma_dev.h"  // dmemBackingFd/Size (shared physical dmem store)
+#include "kern/proc.h"
+#include "kern/ps4/dev/dma_dev.h"  // dmemBackingFd/Size (shared physical dmem store)
 #include "error_table.h"
-#include "../../ps5/dev/dma_dev.h"
+#include "kern/ps5/dev/dma_dev.h"
 #include "sys_mem.h"      // shared enums + sys_mmap (dmem maps delegate to it)
 #include "sys_mem_ext.h"
 #include <utl/options.h>

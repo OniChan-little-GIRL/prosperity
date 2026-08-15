@@ -9,7 +9,7 @@
 #include <utl/mem.h>
 
 #include "kern/proc.h"
-#include "kern/ps4/lv2/sys_mem.h"
+#include "kern/lv2/sys_mem.h"
 #include <utl/options.h>
 
 namespace {

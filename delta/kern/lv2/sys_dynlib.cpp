@@ -20,8 +20,8 @@
 
 #include <utl/mem.h>
 #include "cpu/cpu_backend.h"
-#include "../../module.h"
-#include "../../proc.h"
+#include "kern/module.h"
+#include "kern/proc.h"
 
 #include "error_table.h"
 #include "sys_dynlib.h"

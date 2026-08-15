@@ -7,7 +7,7 @@
 #include <thread>
 #include <vector>
 
-#include "kern/ps4/lv2/sys_thread.h"
+#include "kern/lv2/sys_thread.h"
 
 namespace {
 using namespace std::chrono_literals;

@@ -6,7 +6,7 @@
 #include "kern/proc.h"
 #include "kern/ps4/dev/console_dev.h"
 #include "kern/ps4/dev/file_dev.h"
-#include "kern/ps4/lv2/error_table.h"
+#include "kern/lv2/error_table.h"
 
 // No title exercises /dev/console beyond opening it, so its behaviour has to be
 // pinned here rather than by a boot: every guest that does start using it will

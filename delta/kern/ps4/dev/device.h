@@ -13,7 +13,7 @@
  * in the root of the source tree.
  */
 
-#include "kern/ps4/lv2/error_table.h"
+#include "kern/lv2/error_table.h"
 #include "kern/object.h"
 
 namespace krnl {

@@ -83,7 +83,7 @@
 #include <vector>
 
 #include "gfx/gfx_audio.h"
-#include "kern/ps4/lv2/sys_event_flag.h"
+#include "kern/lv2/sys_event_flag.h"
 #include <utl/options.h>
 
 namespace {

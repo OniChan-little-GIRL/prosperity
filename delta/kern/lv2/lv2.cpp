@@ -27,7 +27,7 @@
 #include <xbyak.h>
 #endif
 
-#include "../../crash.h"
+#include "kern/crash.h"
 #include "error_table.h"
 #include "sys_debug.h"
 #include "sys_dynlib.h"
@@ -1039,7 +1039,7 @@ uintptr_t lv2_get(u32 sid) {
 #endif
 }
 
-// Exposed so the PS5 syscall layer (kern/ps5/lv2) can wrap its own handlers in
+// Exposed so the PS5 syscall layer (kern/lv2/ps5) can wrap its own handlers in
 // the same BSD carry/errno trampoline without duplicating the codegen.
 uintptr_t lv2_trampoline(const void *handler, u32 sid) {
 #if defined(DELTA_BACKEND_NATIVE)

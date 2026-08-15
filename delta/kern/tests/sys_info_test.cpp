@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "kern/ps4/hardware_mode.h"
-#include "kern/ps4/lv2/sys_info.h"
+#include "kern/lv2/sys_info.h"
 
 namespace {
 

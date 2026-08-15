@@ -22,14 +22,14 @@
 #include "module.h"
 #include "proc.h"
 
-#include "ps5/lv2/ctor_probe.h"
-#include "ps5/lv2/initial_tcb.h"
+#include "lv2/ps5/ctor_probe.h"
+#include "lv2/ps5/initial_tcb.h"
 #include "vfs.h"
 #include "cpu/cpu_backend.h"
 #include "gpu/ps4/cmd_processor.h"
 #include "ps4/hardware_mode.h"
-#include "ps4/lv2/sys_dynlib.h"
-#include "ps4/lv2/sys_mem.h"
+#include "lv2/sys_dynlib.h"
+#include "lv2/sys_mem.h"
 #include "runtime/vprx/vprx.h"
 
 #include <atomic>

@@ -18,8 +18,8 @@
 #include <pthread.h>
 #endif
 
-#include "../../crash.h"
-#include "../../proc.h"
+#include "kern/crash.h"
+#include "kern/proc.h"
 #include "cpu/cpu_backend.h"
 #include "error_table.h"
 #include "sys_thread_ext.h"

@@ -14,7 +14,7 @@
 #include <base/strings/xstring.h>
 
 #include "wait_probe.h"
-#include "../../thread_names.h"
+#include "kern/thread_names.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,9 +35,9 @@
 
 #include <utl/mem.h>
 
-#include "../../crash.h"
-#include "../../module.h"
-#include "../../proc.h"
+#include "kern/crash.h"
+#include "kern/module.h"
+#include "kern/proc.h"
 #include "cpu/cpu_backend.h"
 #include "sys_thread.h"
 #include <utl/options.h>

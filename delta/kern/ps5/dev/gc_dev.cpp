@@ -27,7 +27,7 @@
 #include "gc_dev.h"
 #include "kern/ps4/dev/dma_dev.h"  // dmemBackingFd/Size (shared physical dmem store)
 #include "kern/proc.h"
-#include "kern/ps4/lv2/sys_mem.h"  // allocLowGuest, mFlags
+#include "kern/lv2/sys_mem.h"  // allocLowGuest, mFlags
 #include <utl/options.h>
 
 namespace {

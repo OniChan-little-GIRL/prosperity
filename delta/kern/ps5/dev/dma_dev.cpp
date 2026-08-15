@@ -22,7 +22,7 @@
 
 #include "dma_dev.h"
 #include "kern/proc.h"
-#include "kern/ps4/lv2/sys_mem.h"  // allocLowGuest, mFlags
+#include "kern/lv2/sys_mem.h"  // allocLowGuest, mFlags
 #include <utl/options.h>
 
 namespace {

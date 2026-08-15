@@ -22,7 +22,7 @@
 #include <cstdlib>
 #include <set>
 
-#include "kern/ps4/lv2/error_table.h"
+#include "kern/lv2/error_table.h"
 #include "lv2.h"
 #include <utl/options.h>
 

@@ -18,7 +18,7 @@
 #include "error_table.h"
 #include "sys_mem.h"
 #include "sys_sce_misc.h"
-#include "../../proc.h"
+#include "kern/proc.h"
 #include <utl/options.h>
 
 namespace {

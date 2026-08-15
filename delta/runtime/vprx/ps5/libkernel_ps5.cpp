@@ -17,8 +17,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "kern/ps4/lv2/error_table.h"
-#include "kern/ps4/lv2/sys_mem.h"
+#include "kern/lv2/error_table.h"
+#include "kern/lv2/sys_mem.h"
 
 namespace {
 // int f(void **addrOut, size_t len, int prot, size_t align, const char *name)

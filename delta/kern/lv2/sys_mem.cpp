@@ -29,11 +29,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../../proc.h"
-#include "../../crash.h"
-#include "../audio_daemon.h"
-#include "../../guest_vaspace.h"
-#include "../../thread_names.h"
+#include "kern/proc.h"
+#include "kern/crash.h"
+#include "kern/ps4/audio_daemon.h"
+#include "kern/guest_vaspace.h"
+#include "kern/thread_names.h"
 #include "error_table.h"
 #include "sys_mem.h"
 #include <utl/options.h>

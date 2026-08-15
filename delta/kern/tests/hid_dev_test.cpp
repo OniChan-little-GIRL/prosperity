@@ -6,7 +6,7 @@
 #include "kern/proc.h"
 #include "kern/ps4/dev/file_dev.h"
 #include "kern/ps4/dev/hid_dev.h"
-#include "kern/ps4/lv2/error_table.h"
+#include "kern/lv2/error_table.h"
 
 // Without DELTA_HID_PASSTHROUGH the device has no host input behind it, so it
 // has to soft-succeed exactly like the real device does for non-system

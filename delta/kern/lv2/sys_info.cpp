@@ -18,8 +18,8 @@
 #include <intrin.h>
 #endif
 
-#include "../../proc.h"
-#include "../hardware_mode.h"
+#include "kern/proc.h"
+#include "kern/ps4/hardware_mode.h"
 #include "error_table.h"
 #include "kern/crash.h"
 #include <sys/random.h>
