@@ -33,6 +33,7 @@
 #include <base/strings/xstring.h>
 
 #include "crash.h"
+#include "lv2/dispatch.h"
 
 #include <utl/mem.h>
 #include "module.h"
@@ -60,8 +61,6 @@ DELTA_OPTION(bool, kRdoffTrace, "DELTA_RDOFF_TRACE", false);
 }  // namespace
 
 namespace krnl {
-const char *syscall_getname(u32 idx); // name_table.cpp
-
 // Resolve a host address to "<module>+0x<off> (<seg>)" by scanning loaded module
 // images, so a guest fault points straight at a guest module offset.
 void symbolize(uintptr_t addr, char *out, size_t n) {
@@ -353,9 +352,6 @@ bool sotcWalkTracker(u64 tracker, u64 key, const char *tag) {
   return covered;
 }
 }  // namespace
-
-// Per-syscall call counter, filled by the lv2 trampoline under DELTA_SCHIST.
-extern "C" u64 g_sysHist[1024];
 
 // DELTA_HEAP_PROF: dump the top allocation sites (defined below).
 extern uintptr_t g_heapProfAddr;

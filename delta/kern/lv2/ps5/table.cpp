@@ -6,7 +6,7 @@
  * in the root of the source tree.
  */
 
-// PS5 (Prospero) syscall dispatch. A PS5 process routes here (never the PS4
+// The Prospero syscall table. A PS5 process routes here (never the Orbis
 // table). Prospero shares syscall numbers 0x000..0x2a4 with Orbis (both are
 // Sony-customized FreeBSD), so those reuse the shared, proven handlers via
 // lv2_get(). Prospero then diverges: 0x2a5 is sys_wait6 (Orbis had
@@ -17,13 +17,10 @@
 #include <base.h>
 #include "base/arch.h"
 #include <base/logging.h>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <set>
 
+#include "kern/lv2/dispatch.h"
 #include "kern/lv2/error_table.h"
-#include "lv2.h"
 #include <utl/options.h>
 
 namespace {
@@ -31,9 +28,6 @@ DELTA_OPTION(bool, kPs5SysTrace, "DELTA_PS5_SYSTRACE", false);
 }  // namespace
 
 namespace krnl {
-const char *syscall_getname(u32 idx);
-uintptr_t lv2_get(u32 sid);                        // shared base handlers
-uintptr_t lv2_trampoline(const void *handler, u32 sid);
 
 // stub handlers (BSD convention applied by the trampoline)
 static int PS4ABI ps5_ok() { return 0; }

@@ -21,17 +21,13 @@
 #include "code_lift.h"
 #include <logger/logger.h>
 
+#include "kern/lv2/dispatch.h"
 #include "kern/proc.h"
 #include <utl/options.h>
 
 namespace {
 DELTA_OPTION(bool, kSysliftTrace, "DELTA_SYSLIFT_TRACE", false);
 }  // namespace
-
-namespace krnl {
-uintptr_t lv2_get(u32 sysIndex);
-uintptr_t lv2_get_ps5(u32 sysIndex);
-}
 
 namespace runtime {
 static Xbyak::Operand::Code capstone_to_xbyak(x86_reg reg) {
@@ -177,11 +173,7 @@ bool codeLift::transform(u8 *data, size_t size, u64 base) {
 }
 
 void codeLift::emit_syscall(u8 *base, u32 idx) {
-  // PS5 titles route to the separate Prospero syscall layer (FreeBSD 11 ABI);
-  // never the PS4 table.
-  auto *proc = krnl::proc::getActive();
-  const bool ps5 = proc && proc->getPlatform() == krnl::proc::platform::ps5;
-  auto address = ps5 ? krnl::lv2_get_ps5(idx) : krnl::lv2_get(idx);
+  auto address = krnl::lv2_lookup(idx);
   if (kSysliftTrace)
     BASE_LOGI("syslift", "site={:p} idx={} -> trampoline={:#x}", (void *)base,
               idx, (unsigned long)address);

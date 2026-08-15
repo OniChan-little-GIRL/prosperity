@@ -51,6 +51,7 @@
 
 #include "cpu_backend.h"
 #include "kern/crash.h"
+#include "kern/lv2/dispatch.h"
 #include "kern/module.h"
 #include "kern/proc.h"
 #include <utl/options.h>
@@ -69,18 +70,10 @@ DELTA_OPTION(bool, kWatchdog, "DELTA_WATCHDOG", false);
 }  // namespace
 
 namespace krnl {
-uintptr_t lv2_get(u32 sysIndex);
-const char *syscall_getname(u32 idx);
-extern "C" u32 krnl_syscall_errno(u64 raw);
 struct tls_index;
 void *PS4ABI guest_tls_get_addr(tls_index *ti); // HLE dynamic-TLS resolver
 const u32 *currentGuestTidPtr();           // this thread's guest tid TLS addr
-extern const bool g_scHist;                     // DELTA_SCHIST enabled
 }
-
-// Per-syscall call counter (lv2.cpp). Only the native x86 bsd trampoline
-// increments it, so this backend must do so itself or DELTA_SCHIST is all zeros.
-extern "C" u64 g_sysHist[1024];
 
 namespace cpu {
 
@@ -678,7 +671,7 @@ public:
       return ret;
     }
 
-    const uintptr_t handler = krnl::lv2_get(num);
+    const uintptr_t handler = krnl::lv2_lookup(num);
     if (!handler)
       return 0;
 
