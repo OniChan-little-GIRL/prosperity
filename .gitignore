@@ -335,3 +335,8 @@ ps5run.sh
 /.claude_
 /.cache
 /scratchpad
+
+# Android CI helper downloads/build output
+/.android-sdk/
+/.gradle-dist/
+/build_android/
