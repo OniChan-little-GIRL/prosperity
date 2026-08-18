@@ -15,7 +15,7 @@ jobs:
       with:
         submodules: recursive
 
-    # flake.nix pins Vulkan + SDL3 + shaderc (none packaged on ubuntu-latest), so
+    #. flake.nix pins Vulkan + SDL3 + shaderc (none packaged on ubuntu-latest), so
     # build inside the dev shell. keep-outputs/keep-env-derivations stop the GC
     # from dropping the dev-shell closure before it gets cached.
     - uses: DeterminateSystems/nix-installer-action@main
