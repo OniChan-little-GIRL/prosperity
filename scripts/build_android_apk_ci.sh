@@ -9,25 +9,33 @@ ANDROID_PLATFORM="${ANDROID_PLATFORM:-android-29}"
 ANDROID_BUILD_TOOLS="${ANDROID_BUILD_TOOLS:-35.0.0}"
 ANDROID_NDK_VERSION="${ANDROID_NDK_VERSION:-26.1.10909125}"
 GRADLE_VERSION="${GRADLE_VERSION:-8.10.2}"
+CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 ANDROID_HOME="${ANDROID_HOME:-$ROOT_DIR/.android-sdk}"
 ANDROID_SDK_ROOT="$ANDROID_HOME"
 GRADLE_HOME="$ROOT_DIR/.gradle-dist/gradle-$GRADLE_VERSION"
-export ANDROID_HOME ANDROID_SDK_ROOT PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$GRADLE_HOME/bin:$PATH"
+export ANDROID_HOME ANDROID_SDK_ROOT CMAKE_BUILD_PARALLEL_LEVEL PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$GRADLE_HOME/bin:$PATH"
 
 install_host_packages() {
   if command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates \
+      binutils \
+      build-essential \
       clang \
       cmake \
       curl \
+      file \
       git \
       jq \
+      lld \
+      make \
+      nasm \
       ninja-build \
       openjdk-17-jdk \
       pkg-config \
       python3 \
+      python3-pip \
       unzip \
       zip
   fi
@@ -98,7 +106,7 @@ build_native_library() {
     -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
     -DDELTA_ANDROID_APP=ON \
     -DDELTA_BUILD_TESTS=OFF
-  cmake --build build_android --target ps4delta_app
+  cmake --build build_android --target ps4delta_app -- -v
 }
 
 sanitize_manifest() {
