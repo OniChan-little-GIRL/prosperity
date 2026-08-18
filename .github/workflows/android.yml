@@ -12,18 +12,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository recursively
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 0
 
-      # Используем официальный проверенный инсталлятор Nix
+      - name: Fix and Init Submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force || true
+
       - name: Install Nix
-        uses: Cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
-      # Настраиваем Android NDK штатными средствами Runner'а
       - name: Setup Android NDK
         uses: nvim-treesitter/setup-ndk-action@v1
         with:
@@ -31,6 +36,11 @@ jobs:
 
       - name: Build Android APK using Nix Shell
         run: |
+          # Явно подгружаем окружение Nix в текущий bash-сеанс
+          if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+            . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+          fi
+
           nix develop --command bash -c "
             cmake -G Ninja -B build_android \
               -DCMAKE_BUILD_TYPE=Release \
